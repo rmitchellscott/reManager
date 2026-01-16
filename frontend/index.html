@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>reManager</title>
+    <script>
+      // Apply dark class before page renders to prevent flash
+      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.documentElement.classList.add('dark');
+      }
+    </script>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+      }
+      html:not(.dark) body { background: #ffffff; }
+      html.dark body { background: #1a1a1a; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

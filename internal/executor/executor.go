@@ -1,0 +1,33 @@
+package executor
+
+import "reManager/internal/component"
+
+type ProgressStatus string
+
+const (
+	StatusPending    ProgressStatus = "pending"
+	StatusInstalling ProgressStatus = "installing"
+	StatusCompleted  ProgressStatus = "completed"
+	StatusError      ProgressStatus = "error"
+)
+
+type ProgressInfo struct {
+	CurrentComponent string
+	TotalComponents  int
+	CurrentIndex     int
+	Status           ProgressStatus
+	Message          string
+}
+
+type ProgressCallback func(progress ProgressInfo)
+
+type HookHandler interface {
+	HandleDialog(config *component.DialogConfig) (confirmed bool, err error)
+	HandleConfirmation(message string) (confirmed bool, err error)
+}
+
+type CommandExecutor interface {
+	Execute(commands []component.CommandResult) error
+	ExecuteWithOutput(cmd string) (string, error)
+	ExecuteStreaming(cmd string, onOutput func(line string)) error
+}

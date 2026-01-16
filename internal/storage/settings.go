@@ -1,0 +1,87 @@
+package storage
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sync"
+)
+
+type TabVisibility struct {
+	Mods        bool `json:"mods"`
+	Maintenance bool `json:"maintenance"`
+}
+
+type Settings struct {
+	TabVisibility TabVisibility `json:"tabVisibility"`
+	ProxyMode     bool          `json:"proxyMode"`
+}
+
+type SettingsStore struct {
+	configPath string
+	mu         sync.RWMutex
+}
+
+func NewSettingsStore() (*SettingsStore, error) {
+	configDir, err := getConfigDir()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return nil, err
+	}
+
+	return &SettingsStore{
+		configPath: filepath.Join(configDir, "settings.json"),
+	}, nil
+}
+
+func (s *SettingsStore) Load() (*Settings, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	data, err := os.ReadFile(s.configPath)
+	if os.IsNotExist(err) {
+		return s.defaultSettings(), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var settings Settings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return s.defaultSettings(), nil
+	}
+
+	// Check if proxyMode was present in JSON (default to true if missing)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err == nil {
+		if _, exists := raw["proxyMode"]; !exists {
+			settings.ProxyMode = true
+		}
+	}
+
+	return &settings, nil
+}
+
+func (s *SettingsStore) Save(settings *Settings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.configPath, data, 0600)
+}
+
+func (s *SettingsStore) defaultSettings() *Settings {
+	return &Settings{
+		TabVisibility: TabVisibility{
+			Mods:        true,
+			Maintenance: true,
+		},
+		ProxyMode: true,
+	}
+}

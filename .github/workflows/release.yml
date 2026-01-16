@@ -1,0 +1,270 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
+
+      - name: Build universal binary
+        run: |
+          wails build -platform darwin/universal \
+            -ldflags "-X main.version=${{ steps.version.outputs.VERSION }}"
+
+      - name: Import certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Code sign
+        run: |
+          codesign --deep --force --verify --verbose \
+            --sign "Developer ID Application: Robert Scott (${{ secrets.APPLE_TEAM_ID }})" \
+            --options runtime \
+            --entitlements build/darwin/entitlements.plist \
+            build/bin/reManager.app
+
+      - name: Create ZIP for notarization
+        run: |
+          cd build/bin
+          ditto -c -k --keepParent reManager.app reManager-macos-universal.zip
+
+      - name: Store API key
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          mkdir -p ~/private_keys
+          echo -n "${{ secrets.APPLE_API_KEY_BASE64 }}" | base64 --decode -o ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
+
+      - name: Notarize
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          xcrun notarytool submit build/bin/reManager-macos-universal.zip \
+            --key ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8 \
+            --key-id ${{ secrets.APPLE_API_KEY_ID }} \
+            --issuer ${{ secrets.APPLE_API_ISSUER_ID }} \
+            --wait \
+            --timeout 2h
+
+      - name: Staple
+        if: startsWith(github.ref, 'refs/tags/')
+        run: xcrun stapler staple build/bin/reManager.app
+
+      - name: Re-create ZIP with stapled app
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cd build/bin
+          rm reManager-macos-universal.zip
+          ditto -c -k --keepParent reManager.app reManager-macos-universal.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reManager-macos-universal
+          path: build/bin/reManager-macos-universal.zip
+
+  build-linux-amd64:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: |
+          wails build -platform linux/amd64 \
+            -ldflags "-X main.version=${{ steps.version.outputs.VERSION }}"
+
+      - name: Compress
+        run: |
+          cd build/bin
+          tar -czvf reManager-linux-amd64.tar.gz reManager
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reManager-linux-amd64
+          path: build/bin/reManager-linux-amd64.tar.gz
+
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: |
+          wails build -platform linux/arm64 \
+            -tags webkit2_41 \
+            -ldflags "-X main.version=${{ steps.version.outputs.VERSION }}"
+
+      - name: Compress
+        run: |
+          cd build/bin
+          tar -czvf reManager-linux-arm64.tar.gz reManager
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reManager-linux-arm64
+          path: build/bin/reManager-linux-arm64.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: |
+          wails build -platform windows/amd64 `
+            -ldflags "-X main.version=${{ steps.version.outputs.VERSION }}"
+
+      - name: Compress
+        run: Compress-Archive -Path build\bin\reManager.exe -DestinationPath build\bin\reManager-windows-amd64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reManager-windows-amd64
+          path: build/bin/reManager-windows-amd64.zip
+
+  build-windows-arm64:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: |
+          wails build -platform windows/arm64 `
+            -ldflags "-X main.version=${{ steps.version.outputs.VERSION }}"
+
+      - name: Compress
+        run: Compress-Archive -Path build\bin\reManager.exe -DestinationPath build\bin\reManager-windows-arm64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reManager-windows-arm64
+          path: build/bin/reManager-windows-arm64.zip
+
+  release:
+    needs: [build-macos, build-linux-amd64, build-linux-arm64, build-windows, build-windows-arm64]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/reManager-macos-universal/reManager-macos-universal.zip
+            artifacts/reManager-linux-amd64/reManager-linux-amd64.tar.gz
+            artifacts/reManager-linux-arm64/reManager-linux-arm64.tar.gz
+            artifacts/reManager-windows-amd64/reManager-windows-amd64.zip
+            artifacts/reManager-windows-arm64/reManager-windows-arm64.zip
+          generate_release_notes: true
