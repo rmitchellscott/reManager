@@ -144,11 +144,11 @@ func WrapWithWriteableRoot(commands []component.CommandResult, device component.
 	if device == component.DeviceRMPP || device == component.DeviceRMPPM {
 		before := []component.CommandResult{
 			{
-				Script:      `echo "[DEBUG] Current root mount state:" && grep ' / ' /proc/mounts && echo "[DEBUG] Checking if root is rw..." && if grep -q ' / .*\brw\b' /proc/mounts; then echo "[DEBUG] Root is already rw"; else echo "[DEBUG] Remounting root as rw..." && mount -o remount,rw / && echo "[DEBUG] Root remounted as rw"; fi`,
+				Script:      `echo "[DEBUG] Current root mount state:" && grep ' / ' /proc/mounts && echo "[DEBUG] Checking if root is rw..." && if grep -q ' / .*\brw\b' /proc/mounts; then echo "[DEBUG] Root is already rw"; else echo "[DEBUG] Remounting root as rw..." && mount -o remount,rw / && echo "[DEBUG] Root remounted as rw"; fi && sleep 1`,
 				Description: "Ensure root filesystem is writeable",
 			},
 			{
-				Script:      `echo "[DEBUG] Current /etc mount state:" && grep '/etc' /proc/mounts || echo "[DEBUG] No /etc in mounts" && echo "[DEBUG] Checking for overlay on /etc..." && if grep -q '^overlay.*/etc' /proc/mounts; then echo "[DEBUG] Overlay found, unmounting..." && umount -R /etc && echo "[DEBUG] /etc overlay unmounted"; else echo "[DEBUG] No overlay on /etc"; fi`,
+				Script:      `echo "[DEBUG] Current /etc mount state:" && grep '/etc' /proc/mounts || echo "[DEBUG] No /etc in mounts" && echo "[DEBUG] Checking for overlay on /etc..." && if grep -q '^overlay.*/etc' /proc/mounts; then echo "[DEBUG] Overlay found, lazy unmounting..." && umount -l /etc && echo "[DEBUG] /etc overlay lazy unmounted"; else echo "[DEBUG] No overlay on /etc"; fi && sleep 1`,
 				Description: "Unmount /etc overlay if mounted",
 			},
 		}

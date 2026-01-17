@@ -18,9 +18,11 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:  "reManager",
-		Width:  900,
-		Height: 800,
+		Title:     "reManager",
+		Width:     900,
+		Height:    800,
+		MinWidth:  640,
+		MinHeight: 600,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

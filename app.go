@@ -127,6 +127,7 @@ type SavedDeviceInfo struct {
 	AuthType      string `json:"authType"`
 	KeyPath       string `json:"keyPath,omitempty"`
 	LastConnected int64  `json:"lastConnected,omitempty"`
+	Timezone      string `json:"timezone,omitempty"`
 }
 
 func (a *App) GetSavedDevices() []SavedDeviceInfo {
@@ -149,6 +150,7 @@ func (a *App) GetSavedDevices() []SavedDeviceInfo {
 			AuthType:      d.AuthType,
 			KeyPath:       d.KeyPath,
 			LastConnected: d.LastConnected,
+			Timezone:      d.Timezone,
 		}
 	}
 	return result
@@ -598,6 +600,30 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			fmt.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
 			if updateStatus.Enabled || updateStatus.Running {
 				runtime.EventsEmit(a.ctx, "autoupdate:enabled", updateStatus)
+			}
+
+			timezoneStatus := a.GetTimezoneStatus()
+			fmt.Printf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
+				timezoneStatus.DeviceTimezone, timezoneStatus.SavedTimezone, timezoneStatus.NeedsUpdate)
+
+			// Auto-save device timezone if no preference saved yet
+			if timezoneStatus.DeviceTimezone != "" && timezoneStatus.SavedTimezone == "" {
+				a.mu.Lock()
+				deviceID := a.connectedDeviceID
+				a.mu.Unlock()
+				if deviceID != "" && a.deviceStore != nil {
+					if err := a.deviceStore.UpdateTimezone(deviceID, timezoneStatus.DeviceTimezone); err == nil {
+						fmt.Printf("[DEBUG] Auto-saved device timezone: %s\n", timezoneStatus.DeviceTimezone)
+						timezoneStatus.SavedTimezone = timezoneStatus.DeviceTimezone
+					}
+				}
+			}
+
+			if timezoneStatus.DeviceTimezone != "" {
+				runtime.EventsEmit(a.ctx, "timezone:status", timezoneStatus)
+			}
+			if timezoneStatus.NeedsUpdate {
+				runtime.EventsEmit(a.ctx, "timezone:mismatch", timezoneStatus)
 			}
 		}
 	}()
@@ -1138,6 +1164,124 @@ func (a *App) CheckHashtabVersion() HashtabVersionStatus {
 		status.FirmwareVersion != status.HashtabVersion
 
 	return status
+}
+
+type TimezoneStatus struct {
+	DeviceTimezone string `json:"deviceTimezone"`
+	SavedTimezone  string `json:"savedTimezone"`
+	NeedsUpdate    bool   `json:"needsUpdate"`
+}
+
+func (a *App) GetDeviceTimezone() (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.client == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	output, err := a.runCommand("timedatectl show --property=Timezone --value")
+	if err != nil {
+		return "", fmt.Errorf("failed to get timezone: %w", err)
+	}
+
+	return strings.TrimSpace(output), nil
+}
+
+func (a *App) GetTimezoneStatus() TimezoneStatus {
+	status := TimezoneStatus{}
+
+	a.mu.Lock()
+	if a.client == nil {
+		a.mu.Unlock()
+		return status
+	}
+
+	output, err := a.runCommand("timedatectl show --property=Timezone --value")
+	if err != nil {
+		a.mu.Unlock()
+		return status
+	}
+	status.DeviceTimezone = strings.TrimSpace(output)
+
+	deviceID := a.connectedDeviceID
+	a.mu.Unlock()
+
+	if deviceID != "" && a.deviceStore != nil {
+		device, err := a.deviceStore.Get(deviceID)
+		if err == nil && device.Timezone != "" {
+			status.SavedTimezone = device.Timezone
+			status.NeedsUpdate = device.Timezone != status.DeviceTimezone
+		}
+	}
+
+	return status
+}
+
+func (a *App) SaveDeviceTimezone(timezone string) error {
+	a.mu.Lock()
+	deviceID := a.connectedDeviceID
+	a.mu.Unlock()
+
+	if deviceID == "" {
+		return fmt.Errorf("no device connected")
+	}
+	if a.deviceStore == nil {
+		return fmt.Errorf("device store not initialized")
+	}
+
+	return a.deviceStore.UpdateTimezone(deviceID, timezone)
+}
+
+func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
+	go func() {
+		a.mu.Lock()
+		if a.client == nil {
+			a.mu.Unlock()
+			runtime.EventsEmit(a.ctx, "timezone:error", "Not connected")
+			runtime.EventsEmit(a.ctx, "command:done", false)
+			return
+		}
+		a.mu.Unlock()
+
+		cmdResults := []component.CommandResult{
+			{
+				Script:      fmt.Sprintf("systemctl restart systemd-timedated && timedatectl set-timezone %s", timezone),
+				Description: "Set device timezone",
+			},
+		}
+
+		dev := component.DeviceType(deviceType)
+		if dev == component.DeviceRMPP || dev == component.DeviceRMPPM {
+			cmdResults = commands.WrapWithWriteableRoot(cmdResults, dev)
+		}
+
+		for _, cmd := range cmdResults {
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", cmd.Script))
+
+			done := make(chan bool, 1)
+			unsub := runtime.EventsOn(a.ctx, "command:done", func(optionalData ...interface{}) {
+				if len(optionalData) > 0 {
+					if success, ok := optionalData[0].(bool); ok {
+						done <- success
+						return
+					}
+				}
+				done <- false
+			})
+
+			a.RunCommandWithOutput(cmd.Script, cmd.RequiresPTY)
+			success := <-done
+			unsub()
+
+			if !success {
+				runtime.EventsEmit(a.ctx, "timezone:error", "Failed to set timezone")
+				return
+			}
+		}
+
+		runtime.EventsEmit(a.ctx, "timezone:complete", timezone)
+	}()
 }
 
 type PackageInfo struct {
@@ -1775,6 +1919,10 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 						return fmt.Errorf("user cancelled")
 					}
 
+					runtime.EventsEmit(a.ctx, "hook:started", map[string]string{
+						"title": hookResult.DialogConfig.Title,
+					})
+
 					if hookResult.Command != nil {
 						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
 						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
@@ -2044,6 +2192,7 @@ func (a *App) RunSystemTask(taskID, deviceType string) {
 				return
 			}
 		}
+		runtime.EventsEmit(a.ctx, "systemtask:complete", true)
 	}()
 }
 

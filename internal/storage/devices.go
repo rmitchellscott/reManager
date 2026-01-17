@@ -23,6 +23,7 @@ type SavedDevice struct {
 	AuthType      string `json:"authType"`
 	KeyPath       string `json:"keyPath,omitempty"`
 	LastConnected int64  `json:"lastConnected,omitempty"`
+	Timezone      string `json:"timezone,omitempty"`
 }
 
 type DeviceStore struct {
@@ -262,6 +263,24 @@ func (ds *DeviceStore) UpdateName(id string, name string) error {
 	for i, d := range devices {
 		if d.ID == id {
 			devices[i].Name = name
+			return ds.writeDevices(devices)
+		}
+	}
+	return fmt.Errorf("device not found: %s", id)
+}
+
+func (ds *DeviceStore) UpdateTimezone(id string, timezone string) error {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
+	devices, err := ds.getAllUnsafe()
+	if err != nil {
+		return err
+	}
+
+	for i, d := range devices {
+		if d.ID == id {
+			devices[i].Timezone = timezone
 			return ds.writeDevices(devices)
 		}
 	}

@@ -16,6 +16,7 @@ import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
+import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, Settings, WifiOff } from 'lucide-react'
@@ -118,6 +119,12 @@ interface HashtabVersionStatus {
   needsRebuild: boolean
 }
 
+interface TimezoneStatus {
+  deviceTimezone: string
+  savedTimezone: string
+  needsUpdate: boolean
+}
+
 declare global {
   interface Window {
     go: {
@@ -175,6 +182,10 @@ declare global {
           GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean }>
           SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean): Promise<void>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
+          GetDeviceTimezone(): Promise<string>
+          GetTimezoneStatus(): Promise<TimezoneStatus>
+          SaveDeviceTimezone(timezone: string): Promise<void>
+          SetDeviceTimezone(timezone: string, deviceType: string): Promise<void>
         }
       }
     }
@@ -211,6 +222,7 @@ export default function App() {
   const [progressStatus, setProgressStatus] = useState('')
   const [showRebuildDialog, setShowRebuildDialog] = useState(false)
   const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
+  const [runningHookTitle, setRunningHookTitle] = useState<string | null>(null)
   const connectAttemptRef = useRef(0)
 
   const [activeTab, setActiveTab] = useState<'mods' | 'maintenance'>('mods')
@@ -239,6 +251,8 @@ export default function App() {
   const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
+  const runningSystemTaskRef = useRef<string | null>(null)
+  const settingTimezoneRef = useRef(false)
   const manuallyStoppedRef = useRef(false)
 
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
@@ -313,6 +327,12 @@ export default function App() {
   } | null>(null)
 
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
+
+  const [timezoneMismatch, setTimezoneMismatch] = useState<TimezoneStatus | null>(null)
+  const [selectedTimezone, setSelectedTimezone] = useState('')
+  const [deviceTimezone, setDeviceTimezone] = useState('')
+  const [settingTimezone, setSettingTimezone] = useState(false)
+  const [runningSystemTask, setRunningSystemTask] = useState<string | null>(null)
 
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'lost' | 'reconnecting' | 'failed'>('connected')
   const [reconnectAttempt, setReconnectAttempt] = useState(0)
@@ -600,10 +620,24 @@ export default function App() {
     const unsubscribeDone = window.runtime.EventsOn('command:done', async (...args: unknown[]) => {
       const success = args[0] as boolean
       console.log('Received command:done:', success)
-      setCommandRunning(false)
+
+      if (runningSystemTaskRef.current || settingTimezoneRef.current) {
+        if (!success && !manuallyStoppedRef.current) {
+          setMaintenanceOutput((prev) => prev + '\n[Command failed]\n')
+          setShowProgressModal(true)
+          runningSystemTaskRef.current = null
+          settingTimezoneRef.current = false
+          setCommandRunning(false)
+          setRunningSystemTask(null)
+          setSettingTimezone(false)
+        }
+        return
+      }
+
       if (!success && !manuallyStoppedRef.current) {
         if (commandContextRef.current === 'maintenance') {
           setMaintenanceOutput((prev) => prev + '\n[Command failed]\n')
+          setShowProgressModal(true)
         } else {
           setOutput((prev) => prev + '\n[Command failed]\n')
         }
@@ -611,16 +645,40 @@ export default function App() {
       manuallyStoppedRef.current = false
       // Refresh status after maintenance commands
       if (commandContextRef.current === 'maintenance') {
-        const [updateStatus, hashtabStatus] = await Promise.all([
-          window.go.main.App.GetUpdateServiceStatus(),
+        const [hashtabStatus, tzStatus] = await Promise.all([
           window.go.main.App.CheckHashtabVersion(),
+          window.go.main.App.GetTimezoneStatus(),
         ])
+        let updateStatus = await window.go.main.App.GetUpdateServiceStatus()
+        const maxAttempts = 6
+        for (let i = 0; i < maxAttempts && updateStatus.enabled !== updateStatus.running; i++) {
+          await new Promise(r => setTimeout(r, 500))
+          updateStatus = await window.go.main.App.GetUpdateServiceStatus()
+        }
         setUpdateServiceStatus(updateStatus)
         if (hashtabStatus.needsRebuild) {
           setHashtabMismatch(hashtabStatus)
         } else {
           setHashtabMismatch(null)
         }
+        if (tzStatus.needsUpdate) {
+          setTimezoneMismatch(tzStatus)
+        } else {
+          setTimezoneMismatch(null)
+        }
+        if (tzStatus.deviceTimezone) {
+          setDeviceTimezone(tzStatus.deviceTimezone)
+          if (!selectedTimezone) {
+            setSelectedTimezone(tzStatus.savedTimezone || tzStatus.deviceTimezone)
+          }
+        }
+        setCommandRunning(false)
+        setRunningSystemTask(null)
+        setSettingTimezone(false)
+      } else {
+        setCommandRunning(false)
+        setRunningSystemTask(null)
+        setSettingTimezone(false)
       }
     })
 
@@ -691,6 +749,7 @@ export default function App() {
       setProgressStatus('')
       setCommandContext(null)
       setDialogRequest(null)
+      setRunningHookTitle(null)
       setInstallQueue(new Set())
     })
 
@@ -699,6 +758,11 @@ export default function App() {
       console.log('Received hook:dialog:', dialog)
       setDialogRequest(dialog)
       setShowRebuildDialog(true)
+    })
+
+    const unsubscribeHookStarted = window.runtime.EventsOn('hook:started', (...args: unknown[]) => {
+      const data = args[0] as { title: string }
+      setRunningHookTitle(data.title)
     })
 
     const unsubscribeBootstrapPrompt = window.runtime.EventsOn('vellum:bootstrap-prompt', () => {
@@ -767,6 +831,45 @@ export default function App() {
       setHashtabMismatch(status)
     })
 
+    const unsubscribeTimezoneStatus = window.runtime.EventsOn('timezone:status', (...args: unknown[]) => {
+      const status = args[0] as TimezoneStatus
+      console.log('Received timezone:status:', status)
+      if (status.deviceTimezone) {
+        setDeviceTimezone(status.deviceTimezone)
+        setSelectedTimezone(status.savedTimezone || status.deviceTimezone)
+      }
+    })
+
+    const unsubscribeTimezoneMismatch = window.runtime.EventsOn('timezone:mismatch', (...args: unknown[]) => {
+      const status = args[0] as TimezoneStatus
+      console.log('Received timezone:mismatch:', status)
+      setTimezoneMismatch(status)
+      setDeviceTimezone(status.deviceTimezone)
+      setSelectedTimezone(status.savedTimezone || status.deviceTimezone)
+    })
+
+    const unsubscribeTimezoneComplete = window.runtime.EventsOn('timezone:complete', (...args: unknown[]) => {
+      const timezone = args[0] as string
+      console.log('Timezone set complete:', timezone)
+      settingTimezoneRef.current = false
+      setSettingTimezone(false)
+      setCommandRunning(false)
+      setTimezoneMismatch(null)
+      setDeviceTimezone(timezone)
+      window.go.main.App.GetTimezoneStatus().then(status => {
+        if (status.needsUpdate) {
+          setTimezoneMismatch(status)
+        }
+      }).catch(() => {})
+    })
+
+    const unsubscribeTimezoneError = window.runtime.EventsOn('timezone:error', (...args: unknown[]) => {
+      console.error('Timezone error:', args[0])
+      settingTimezoneRef.current = false
+      setSettingTimezone(false)
+      setCommandRunning(false)
+    })
+
     const unsubscribeOsMismatch = window.runtime.EventsOn('os:mismatch', (...args: unknown[]) => {
       const data = args[0] as { prevVersion: string; newVersion: string }
       console.log('Received os:mismatch:', data)
@@ -812,6 +915,42 @@ export default function App() {
       }
     })
 
+    const unsubscribeSystemTaskComplete = window.runtime.EventsOn('systemtask:complete', async (...args: unknown[]) => {
+      const success = args[0] as boolean
+      console.log('Received systemtask:complete:', success)
+
+      const [hashtabStatus, tzStatus] = await Promise.all([
+        window.go.main.App.CheckHashtabVersion(),
+        window.go.main.App.GetTimezoneStatus(),
+      ])
+      let updateStatus = await window.go.main.App.GetUpdateServiceStatus()
+      const maxAttempts = 6
+      for (let i = 0; i < maxAttempts && updateStatus.enabled !== updateStatus.running; i++) {
+        await new Promise(r => setTimeout(r, 500))
+        updateStatus = await window.go.main.App.GetUpdateServiceStatus()
+      }
+      setUpdateServiceStatus(updateStatus)
+      if (hashtabStatus.needsRebuild) {
+        setHashtabMismatch(hashtabStatus)
+      } else {
+        setHashtabMismatch(null)
+      }
+      if (tzStatus.needsUpdate) {
+        setTimezoneMismatch(tzStatus)
+      } else {
+        setTimezoneMismatch(null)
+      }
+      if (tzStatus.deviceTimezone) {
+        setDeviceTimezone(tzStatus.deviceTimezone)
+        if (!selectedTimezone) {
+          setSelectedTimezone(tzStatus.savedTimezone || tzStatus.deviceTimezone)
+        }
+      }
+      runningSystemTaskRef.current = null
+      setCommandRunning(false)
+      setRunningSystemTask(null)
+    })
+
     const unsubscribeAutoUpdate = window.runtime.EventsOn('autoupdate:enabled', () => {
       console.log('Received autoupdate:enabled')
       setTimeout(() => setShowAutoUpdateBanner(true), 1000)
@@ -854,6 +993,7 @@ export default function App() {
       unsubscribeProgress()
       unsubscribeComplete()
       unsubscribeDialog()
+      unsubscribeHookStarted()
       unsubscribeBootstrapPrompt()
       unsubscribeBootstrapStart()
       unsubscribeBootstrapOutput()
@@ -865,11 +1005,16 @@ export default function App() {
       unsubscribeVellumUninstallComplete()
       unsubscribeVellumUninstallError()
       unsubscribeHashtabMismatch()
+      unsubscribeTimezoneStatus()
+      unsubscribeTimezoneMismatch()
+      unsubscribeTimezoneComplete()
+      unsubscribeTimezoneError()
       unsubscribeOsMismatch()
       unsubscribeUpgradeBlocked()
       unsubscribeUpgradeError()
       unsubscribeUpgradeComplete()
       unsubscribePackageUpgradeComplete()
+      unsubscribeSystemTaskComplete()
       unsubscribeAutoUpdate()
       unsubscribeConnectionLost()
       unsubscribeConnectionReconnecting()
@@ -1027,6 +1172,8 @@ export default function App() {
   }
 
   const getDisplayName = (machine: string) => {
+    if (machine.includes('reMarkable 1')) return 'reMarkable 1'
+    if (machine.includes('reMarkable 2')) return 'reMarkable 2'
     if (machine.includes('Ferrari')) return 'Paper Pro'
     if (machine.includes('Chiappa')) return 'Paper Pro Move'
     return machine
@@ -1235,6 +1382,32 @@ export default function App() {
     await window.go.main.App.RunMaintenanceCommand('qt-resource-rebuilder', 'rebuild_hashtable', device)
   }
 
+  const handleTimezoneChange = async (timezone: string) => {
+    setSelectedTimezone(timezone)
+    try {
+      await window.go.main.App.SaveDeviceTimezone(timezone)
+      const status = await window.go.main.App.GetTimezoneStatus()
+      if (status.needsUpdate) {
+        setTimezoneMismatch(status)
+      } else {
+        setTimezoneMismatch(null)
+      }
+    } catch (err) {
+      console.error('Failed to save timezone:', err)
+    }
+  }
+
+  const handleSetTimezone = () => {
+    if (!selectedTimezone) return
+    settingTimezoneRef.current = true
+    setSettingTimezone(true)
+    setProgressModalType('maintenance')
+    setMaintenanceOutput('')
+    setCommandRunning(true)
+    setCommandContext('maintenance')
+    window.go.main.App.SetDeviceTimezone(selectedTimezone, device)
+  }
+
   const handleChecklistUpgrade = async () => {
     setChecklistLoading(true)
     setShowProgressModal(true)
@@ -1261,7 +1434,8 @@ export default function App() {
   }
 
   const handleSystemTask = async (taskId: string) => {
-    setShowProgressModal(true)
+    runningSystemTaskRef.current = taskId
+    setRunningSystemTask(taskId)
     setProgressModalType('maintenance')
     setProgressPercentage(0)
     setCommandRunning(true)
@@ -1316,6 +1490,9 @@ export default function App() {
 
   const getProgressText = () => {
     if (progressModalType === 'install') {
+      if (runningHookTitle) {
+        return `${runningHookTitle}...`
+      }
       if (installing || uninstalling) {
         let action: string
         if (uninstalling) {
@@ -1645,6 +1822,19 @@ export default function App() {
           </div>
         )}
 
+        {step !== 'connect' && timezoneMismatch && !osMismatchDetected && (
+          <div className="mb-4">
+            <NotificationBanner
+              message={`Device timezone (${timezoneMismatch.deviceTimezone}) differs from your preference (${timezoneMismatch.savedTimezone}).`}
+              actionLabel="Set Timezone"
+              onAction={handleSetTimezone}
+              onDismiss={() => setTimezoneMismatch(null)}
+              loading={settingTimezone}
+              loadingLabel="Setting..."
+            />
+          </div>
+        )}
+
         {step !== 'connect' && showAutoUpdateBanner && !osMismatchDetected && (
           <div className="mb-4">
             <NotificationBanner
@@ -1690,6 +1880,7 @@ export default function App() {
                     onRunUpgrade={handleChecklistUpgrade}
                     autoUpdatesEnabled={updateServiceStatus.enabled}
                     hashtabMismatch={!!hashtabMismatch}
+                    timezoneMismatch={!!timezoneMismatch}
                     onGoToMaintenance={() => setActiveTab('maintenance')}
                   />
                 </div>
@@ -2107,6 +2298,7 @@ export default function App() {
                           const isEnableDisabled = task.id === 'enable-updates' && updateServiceStatus.enabled && updateServiceStatus.running
                           const isDisableDisabled = task.id === 'disable-updates' && !updateServiceStatus.enabled && !updateServiceStatus.running
                           const shouldHighlight = task.id === 'disable-updates' && updateServiceStatus.enabled
+                          const isRunning = runningSystemTask === task.id
                           return (
                             <Button
                               key={task.id}
@@ -2114,10 +2306,43 @@ export default function App() {
                               disabled={commandRunning || isEnableDisabled || isDisableDisabled || connectionStatus !== 'connected'}
                               variant={shouldHighlight ? 'default' : 'outline'}
                             >
-                              {task.label}
+                              {isRunning ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  {task.label}
+                                </>
+                              ) : (
+                                task.label
+                              )}
                             </Button>
                           )
                         })}
+                      </div>
+
+                      {/* Timezone */}
+                      <div className="grid grid-cols-2 gap-4 pt-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium whitespace-nowrap">Timezone:</span>
+                          <TimezoneCombobox
+                            value={selectedTimezone || timezoneMismatch?.deviceTimezone || ''}
+                            onChange={handleTimezoneChange}
+                            disabled={connectionStatus !== 'connected'}
+                          />
+                        </div>
+                        <Button
+                          onClick={handleSetTimezone}
+                          disabled={settingTimezone || connectionStatus !== 'connected' || !selectedTimezone || selectedTimezone === deviceTimezone}
+                          variant={timezoneMismatch?.needsUpdate ? 'default' : 'outline'}
+                        >
+                          {settingTimezone ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              Set Timezone
+                            </>
+                          ) : (
+                            'Set Timezone'
+                          )}
+                        </Button>
                       </div>
                     </div>
                   </CardContent>

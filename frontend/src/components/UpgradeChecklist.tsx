@@ -16,6 +16,7 @@ interface UpgradeChecklistProps {
   onRunUpgrade: () => void
   autoUpdatesEnabled?: boolean
   hashtabMismatch?: boolean
+  timezoneMismatch?: boolean
   onGoToMaintenance: () => void
 }
 
@@ -32,6 +33,7 @@ export function UpgradeChecklist({
   onRunUpgrade,
   autoUpdatesEnabled = false,
   hashtabMismatch = false,
+  timezoneMismatch = false,
   onGoToMaintenance,
 }: UpgradeChecklistProps) {
   const canUpgrade = incompatiblePackages.length === 0
@@ -58,6 +60,9 @@ export function UpgradeChecklist({
             <li>• Run Vellum Reenable to restore system modifications</li>
             {hashtabMismatch && (
               <li>• Rebuild hashtable after OS upgrade</li>
+            )}
+            {timezoneMismatch && (
+              <li>• Set timezone after OS upgrade</li>
             )}
           </ul>
           <Button variant="link" size="sm" className="h-auto p-0" onClick={onGoToMaintenance}>
