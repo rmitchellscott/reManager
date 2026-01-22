@@ -1,7 +1,7 @@
 import { DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
-import { Terminal } from '@/components/Terminal'
+import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 import { Loader2 } from 'lucide-react'
 
 interface ProgressModalProps {
@@ -37,7 +37,7 @@ export function ProgressModal({
         </p>
         <Progress value={percentage} />
         <div className="h-[400px] rounded-lg overflow-hidden overscroll-y-contain">
-          <Terminal output={terminalOutput} />
+          <TerminalWithCopy output={terminalOutput} />
         </div>
       </div>
       <DialogFooter>

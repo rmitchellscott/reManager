@@ -1,5 +1,6 @@
 import { AlertTriangle, X, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription, AlertAction } from '@/components/ui/alert'
 
 interface NotificationBannerProps {
   message: string
@@ -19,16 +20,14 @@ export function NotificationBanner({
   loadingLabel = 'Running...'
 }: NotificationBannerProps) {
   return (
-    <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3">
-        <AlertTriangle className="h-5 w-5 text-yellow-500 flex-shrink-0" />
-        <span className="text-sm">{message}</span>
-      </div>
-      <div className="flex items-center gap-2 flex-shrink-0">
-        <Button size="sm" onClick={onAction} disabled={loading}>
+    <Alert className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400">
+      <AlertTriangle className="h-4 w-4" />
+      <AlertDescription>{message}</AlertDescription>
+      <AlertAction>
+        <Button size="xs" onClick={onAction} disabled={loading}>
           {loading ? (
             <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
               {loadingLabel}
             </>
           ) : (
@@ -36,11 +35,11 @@ export function NotificationBanner({
           )}
         </Button>
         {onDismiss && (
-          <Button variant="ghost" size="sm" onClick={onDismiss}>
-            <X className="h-4 w-4" />
+          <Button variant="ghost" size="xs" onClick={onDismiss}>
+            <X className="h-3 w-3" />
           </Button>
         )}
-      </div>
-    </div>
+      </AlertAction>
+    </Alert>
   )
 }

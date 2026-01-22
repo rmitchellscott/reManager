@@ -51,6 +51,21 @@ var SystemTasks = []SystemTask{
 		RequiresTerminal:   true,
 		NeedsWriteableRoot: true,
 	},
+	{
+		ID:          "restart-xochitl",
+		Label:       "Restart Xochitl",
+		Description: "Restart the Xochitl UI service",
+		Command: func(ctx component.CommandContext) []component.CommandResult {
+			return []component.CommandResult{
+				{
+					Script:      "systemctl restart xochitl",
+					Description: "Restart Xochitl service",
+				},
+			}
+		},
+		RequiresTerminal:   true,
+		NeedsWriteableRoot: false,
+	},
 }
 
 func GetSystemTask(id string) *SystemTask {

@@ -7,14 +7,13 @@ import (
 	"sync"
 )
 
-type TabVisibility struct {
-	Mods        bool `json:"mods"`
-	Maintenance bool `json:"maintenance"`
-}
+type TabVisibility map[string]bool
 
 type Settings struct {
-	TabVisibility TabVisibility `json:"tabVisibility"`
-	ProxyMode     bool          `json:"proxyMode"`
+	TabVisibility              TabVisibility `json:"tabVisibility"`
+	ProxyMode                  bool          `json:"proxyMode"`
+	SuppressSystemFileWarnings bool          `json:"suppressSystemFileWarnings"`
+	Theme                      string        `json:"theme"`
 }
 
 type SettingsStore struct {
@@ -60,6 +59,21 @@ func (s *SettingsStore) Load() (*Settings, error) {
 		if _, exists := raw["proxyMode"]; !exists {
 			settings.ProxyMode = true
 		}
+		if _, exists := raw["theme"]; !exists {
+			settings.Theme = "system"
+		}
+	}
+
+	// Merge with defaults so new tabs get their default values
+	defaults := s.defaultSettings()
+	if settings.TabVisibility == nil {
+		settings.TabVisibility = defaults.TabVisibility
+	} else {
+		for key, val := range defaults.TabVisibility {
+			if _, exists := settings.TabVisibility[key]; !exists {
+				settings.TabVisibility[key] = val
+			}
+		}
 	}
 
 	return &settings, nil
@@ -79,9 +93,12 @@ func (s *SettingsStore) Save(settings *Settings) error {
 func (s *SettingsStore) defaultSettings() *Settings {
 	return &Settings{
 		TabVisibility: TabVisibility{
-			Mods:        true,
-			Maintenance: true,
+			"mods":        true,
+			"maintenance": true,
+			"utilities":   true,
 		},
-		ProxyMode: true,
+		ProxyMode:                  true,
+		SuppressSystemFileWarnings: false,
+		Theme:                      "system",
 	}
 }

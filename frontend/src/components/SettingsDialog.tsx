@@ -4,8 +4,9 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, AlertTriangle } from 'lucide-react'
-import { Terminal } from '@/components/Terminal'
+import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 
 interface SettingsDialogProps {
   open: boolean
@@ -14,7 +15,9 @@ interface SettingsDialogProps {
   vellumInstalled: boolean | null
   tabVisibility: Record<string, boolean>
   proxyMode: boolean
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean) => void
+  suppressSystemFileWarnings: boolean
+  theme: string
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -28,41 +31,59 @@ export function SettingsDialog({
   vellumInstalled,
   tabVisibility,
   proxyMode,
+  suppressSystemFileWarnings,
+  theme,
   onSaveSettings,
   onUninstallVellum,
   uninstalling,
   uninstallOutput,
   appVersion,
 }: SettingsDialogProps) {
-  const [localTabVisibility, setLocalTabVisibility] = useState(tabVisibility)
+  const defaultTabVisibility = { mods: true, maintenance: true, utilities: true }
+
+  const [localTabVisibility, setLocalTabVisibility] = useState({ ...defaultTabVisibility, ...tabVisibility })
   const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
+  const [localSuppressSystemFileWarnings, setLocalSuppressSystemFileWarnings] = useState(suppressSystemFileWarnings)
+  const [localTheme, setLocalTheme] = useState(theme)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
 
+  const hasChanges =
+    localProxyMode !== proxyMode ||
+    localSuppressSystemFileWarnings !== suppressSystemFileWarnings ||
+    localTheme !== theme ||
+    JSON.stringify(localTabVisibility) !== JSON.stringify({ ...defaultTabVisibility, ...tabVisibility })
+
   useEffect(() => {
     if (open) {
-      setLocalTabVisibility(tabVisibility)
+      setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
+      setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+      setLocalTheme(theme)
     }
-  }, [open, tabVisibility, proxyMode])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, theme])
 
   const handleCancel = () => {
-    setLocalTabVisibility(tabVisibility)
+    setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
     setLocalProxyMode(proxyMode)
+    setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+    setLocalTheme(theme)
     setShowUninstallConfirm(false)
     onOpenChange(false)
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode)
+    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localTheme)
     onOpenChange(false)
   }
 
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
       setShowUninstallConfirm(false)
-      setLocalTabVisibility(tabVisibility)
+      setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
+      setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+      setLocalTheme(theme)
     }
     onOpenChange(newOpen)
   }
@@ -80,18 +101,39 @@ export function SettingsDialog({
         <div className="space-y-6 flex-1 overflow-y-auto">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Tab Visibility</CardTitle>
+              <CardTitle className="text-base">Appearance</CardTitle>
               <CardDescription className="text-xs">
-                Choose which tabs to show in the app
+                Customize the look of reManager
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="theme-select" className="font-normal">Theme</Label>
+                <Select value={localTheme} onValueChange={setLocalTheme}>
+                  <SelectTrigger id="theme-select" className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="light">Light</SelectItem>
+                    <SelectItem value="dark">Dark</SelectItem>
+                    <SelectItem value="system">System</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="flex items-center justify-between">
-                <Label htmlFor="tab-mods" className="font-normal">Mods</Label>
+                <Label htmlFor="tab-mods" className="font-normal">Show Mods Tab</Label>
                 <Switch
                   id="tab-mods"
                   checked={localTabVisibility.mods}
                   onCheckedChange={(v) => setLocalTabVisibility({ ...localTabVisibility, mods: v })}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="tab-utilities" className="font-normal">Show Utilities Tab</Label>
+                <Switch
+                  id="tab-utilities"
+                  checked={localTabVisibility.utilities}
+                  onCheckedChange={(v) => setLocalTabVisibility({ ...localTabVisibility, utilities: v })}
                 />
               </div>
             </CardContent>
@@ -99,28 +141,47 @@ export function SettingsDialog({
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Proxy Mode</CardTitle>
+              <CardTitle className="text-base">Behavior</CardTitle>
               <CardDescription className="text-xs">
-                Download packages through reManager before installing on the tablet.
-                This allows installing packages even if the tablet is not connected to the internet or has connectivity issues.
+                Configure how reManager operates
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="proxy-mode" className="font-normal">Enable Proxy Mode</Label>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="proxy-mode" className="font-normal">Proxy Mode</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Download packages through reManager before installing on the tablet.
+                    Useful if the tablet has limited internet connectivity.
+                  </p>
+                </div>
                 <Switch
                   id="proxy-mode"
                   checked={localProxyMode}
                   onCheckedChange={setLocalProxyMode}
                 />
               </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="suppress-sys-warnings" className="font-normal">Suppress Filesystem Warnings</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Skip confirmation dialogs when modifying system partition files.
+                    Only disable if you are experienced with Linux systems.
+                  </p>
+                </div>
+                <Switch
+                  id="suppress-sys-warnings"
+                  checked={localSuppressSystemFileWarnings}
+                  onCheckedChange={setLocalSuppressSystemFileWarnings}
+                />
+              </div>
             </CardContent>
           </Card>
 
           {isConnected && vellumInstalled && (
-            <Card>
+            <Card className="border-destructive/50">
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Uninstall</CardTitle>
+                <CardTitle className="text-base">Uninstall</CardTitle>
                 <CardDescription className="text-xs">
                   Remove the Vellum package manager from your reMarkable.
                   <br />
@@ -136,7 +197,7 @@ export function SettingsDialog({
                     </div>
                     {uninstallOutput && (
                       <div className="h-[200px] rounded-lg overflow-hidden">
-                        <Terminal output={uninstallOutput} />
+                        <TerminalWithCopy output={uninstallOutput} />
                       </div>
                     )}
                   </div>
@@ -191,12 +252,12 @@ export function SettingsDialog({
           <Button variant="outline" onClick={handleCancel}>
             Cancel
           </Button>
-          <Button onClick={handleSave}>
+          <Button onClick={handleSave} disabled={!hasChanges}>
             Save
           </Button>
         </DialogFooter>
 
-        <div className="absolute bottom-4 left-0 right-0 text-sm text-muted-foreground text-center">
+        <div className="flex-shrink-0 text-sm text-muted-foreground text-center pt-2">
           <span>reManager {appVersion}</span>
           <span className="mx-2">·</span>
           <button

@@ -290,6 +290,9 @@ func (c *Client) SimulateAdd(packages ...string) ([]string, error) {
 	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, strings.Join(packages, " "))
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
+		if output != "" {
+			return nil, fmt.Errorf("%s", strings.TrimSpace(output))
+		}
 		return nil, err
 	}
 	return parseSimulationOutput(output), nil
@@ -309,6 +312,9 @@ func (c *Client) SimulateDel(packages ...string) (*SimulateDelResult, error) {
 	cmd := fmt.Sprintf("%s del -s %s", VellumBin, strings.Join(packages, " "))
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
+		if output != "" {
+			return nil, fmt.Errorf("%s", strings.TrimSpace(output))
+		}
 		return nil, err
 	}
 

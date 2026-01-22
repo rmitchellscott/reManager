@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { applyTheme } from './main'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -11,15 +12,19 @@ import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { ProgressModal } from '@/components/ProgressModal'
 import { PackageDetailPanel } from '@/components/PackageDetailPanel'
-import { NotificationBanner } from '@/components/NotificationBanner'
+import { ConsolidatedWarningBanner } from '@/components/ConsolidatedWarningBanner'
 import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { SettingsDialog } from '@/components/SettingsDialog'
+import { InteractiveTerminal } from '@/components/InteractiveTerminal'
+import { FileBrowser } from '@/components/FileBrowser'
+import { ConfigEditor } from '@/components/ConfigEditor'
+import { BackupRestoreDialog } from '@/components/BackupRestore'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, Settings, WifiOff } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -138,6 +143,11 @@ declare global {
           RunCommand(cmd: string): Promise<string>
           RunCommandWithOutput(cmd: string, requiresPTY: boolean): Promise<void>
           StopCommand(): Promise<void>
+          StartShell(rows: number, cols: number): Promise<void>
+          WriteToShell(data: string): Promise<void>
+          ResizeShell(rows: number, cols: number): Promise<void>
+          StopShell(): Promise<void>
+          IsShellActive(): Promise<boolean>
           GetDeviceInfo(): Promise<Record<string, string>>
           GetUpdateServiceStatus(): Promise<UpdateServiceStatus>
           GetDefaultSSHKeys(): Promise<SSHKey[]>
@@ -179,13 +189,29 @@ declare global {
           RespondToDialog(confirmed: boolean): Promise<void>
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean): Promise<void>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; theme: string }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string): Promise<void>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           GetDeviceTimezone(): Promise<string>
           GetTimezoneStatus(): Promise<TimezoneStatus>
           SaveDeviceTimezone(timezone: string): Promise<void>
           SetDeviceTimezone(timezone: string, deviceType: string): Promise<void>
+          ListDirectory(path: string): Promise<{ name: string; path: string; size: number; isDir: boolean; modTime: number; mode: string }[]>
+          DownloadFile(remotePath: string): void
+          UploadFile(remotePath: string): void
+          DeletePath(path: string): Promise<void>
+          RenamePath(oldPath: string, newPath: string): Promise<void>
+          CreateDirectory(path: string): Promise<void>
+          ReadConfigFile(): Promise<string>
+          WriteConfigFile(content: string): Promise<void>
+          BackupConfigFile(): Promise<string>
+          ListConfigBackups(): Promise<Array<{name: string; timestamp: number; size: number}>>
+          RestoreConfigBackup(backupName: string): Promise<void>
+          CreateDeviceBackup(): void
+          SelectRestoreFile(): Promise<string>
+          RestoreDeviceBackup(archivePath: string): void
+          CancelBackup(): void
+          RevealInFileManager(path: string): void
         }
       }
     }
@@ -203,6 +229,8 @@ export default function App() {
   const [host, setHost] = useState('10.11.99.1')
   const [authType, setAuthType] = useState<'password' | 'key'>('password')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showKeyPassphrase, setShowKeyPassphrase] = useState(false)
   const [availableKeys, setAvailableKeys] = useState<SSHKey[]>([])
   const [selectedKey, setSelectedKey] = useState<string>('')
   const [customKeyName, setCustomKeyName] = useState<string>('')
@@ -225,7 +253,7 @@ export default function App() {
   const [runningHookTitle, setRunningHookTitle] = useState<string | null>(null)
   const connectAttemptRef = useRef(0)
 
-  const [activeTab, setActiveTab] = useState<'mods' | 'maintenance'>('mods')
+  const [activeTab, setActiveTab] = useState<'mods' | 'maintenance' | 'utilities'>('mods')
   const [installQueue, setInstallQueue] = useState<Set<string>>(new Set())
   const [uninstallQueue, setUninstallQueue] = useState<Set<string>>(new Set())
   const [pendingUninstall, setPendingUninstall] = useState<{
@@ -256,12 +284,19 @@ export default function App() {
   const manuallyStoppedRef = useRef(false)
 
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
+  const [showFileBrowser, setShowFileBrowser] = useState(false)
+  const [showConfigEditor, setShowConfigEditor] = useState(false)
+  const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
+  const [isTerminalRunning, setIsTerminalRunning] = useState(false)
   const [appVersion, setAppVersion] = useState('dev')
   const [tabVisibility, setTabVisibility] = useState<Record<string, boolean>>({
     mods: true,
     maintenance: true,
+    utilities: true,
   })
   const [proxyMode, setProxyMode] = useState(true)
+  const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
+  const [theme, setTheme] = useState('system')
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
   const [vellumUninstalling, setVellumUninstalling] = useState(false)
@@ -284,6 +319,7 @@ export default function App() {
   })
   const [showAddForm, setShowAddForm] = useState(false)
   const [showSaveDeviceDialog, setShowSaveDeviceDialog] = useState(false)
+  const [saveDeviceError, setSaveDeviceError] = useState('')
   const [deviceName, setDeviceName] = useState('')
   const [deviceToDelete, setDeviceToDelete] = useState<string | null>(null)
   const [editingDevice, setEditingDevice] = useState<SavedDevice | null>(null)
@@ -446,8 +482,12 @@ export default function App() {
         setSystemTasks(tasks || [])
         setSavedDevices(devices || [])
         setAppVersion(version || 'dev')
-        setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true })
+        setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true, utilities: true })
         setProxyMode(settings?.proxyMode ?? true)
+        setSuppressSystemFileWarnings(settings?.suppressSystemFileWarnings ?? false)
+        const loadedTheme = settings?.theme || 'system'
+        setTheme(loadedTheme)
+        localStorage.setItem('theme', loadedTheme)
       } catch (err) {
         console.log('Could not load initial data:', err)
         setSelectedKey('__other__')
@@ -466,7 +506,10 @@ export default function App() {
     if (activeTab === 'mods' && !tabVisibility.mods) {
       setActiveTab('maintenance')
     }
-  }, [tabVisibility.mods, activeTab])
+    if (activeTab === 'utilities' && !tabVisibility.utilities) {
+      setActiveTab('maintenance')
+    }
+  }, [tabVisibility.mods, tabVisibility.utilities, activeTab])
 
   const handleKeySelect = async (value: string) => {
     if (value === '__other__') {
@@ -1104,6 +1147,7 @@ export default function App() {
   }
 
   const handleSaveDevice = async () => {
+    setSaveDeviceError('')
     try {
       const pw = authType === 'password' ? password : ''
       const kp = authType === 'key' ? selectedKey : ''
@@ -1116,7 +1160,14 @@ export default function App() {
 
       setShowSaveDeviceDialog(false)
     } catch (err) {
-      console.error('Failed to save device:', err)
+      const errorMsg = String(err)
+      if (errorMsg.includes('failed to store password') || errorMsg.includes('failed to store key passphrase')) {
+        setSaveDeviceError('Device saved, but password could not be stored in system keyring. You may need to re-enter it on next connection.')
+        const devices = await window.go.main.App.GetSavedDevices()
+        setSavedDevices(devices || [])
+      } else {
+        setSaveDeviceError(`Failed to save device: ${errorMsg}`)
+      }
     }
   }
 
@@ -1153,17 +1204,24 @@ export default function App() {
     setConnectionStatus('connected')
     setConnectionError(null)
     setReconnectAttempt(0)
+
+    const devices = await window.go.main.App.GetSavedDevices()
+    setSavedDevices(devices || [])
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string) => {
     setTabVisibility(newTabVisibility)
     setProxyMode(newProxyMode)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode)
+    setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
+    setTheme(newTheme)
+    localStorage.setItem('theme', newTheme)
+    applyTheme(newTheme)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newTheme)
   }
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true)
+    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, theme)
     setShowDnsErrorModal(false)
   }
 
@@ -1369,17 +1427,6 @@ export default function App() {
     setCommandRunning(true)
     setCommandContext('maintenance')
     await window.go.main.App.RunPackageUpgrade()
-  }
-
-  const handleHashtabRebuild = async () => {
-    setShowProgressModal(true)
-    setProgressModalType('maintenance')
-    setProgressPercentage(0)
-    setCommandRunning(true)
-    setMaintenanceOutput('')
-    setCommandContext('maintenance')
-
-    await window.go.main.App.RunMaintenanceCommand('qt-resource-rebuilder', 'rebuild_hashtable', device)
   }
 
   const handleTimezoneChange = async (timezone: string) => {
@@ -1656,6 +1703,12 @@ export default function App() {
                       id="host"
                       value={host}
                       onChange={(e) => setHost(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !connecting) {
+                          const canConnect = authType === 'password' ? !!password : (!!selectedKey && selectedKey !== '__other__')
+                          if (canConnect) handleConnect(true)
+                        }
+                      }}
                       placeholder="10.11.99.1"
                     />
                   </div>
@@ -1683,13 +1736,28 @@ export default function App() {
                   {authType === 'password' ? (
                     <div className="space-y-2">
                       <Label htmlFor="password">SSH Password</Label>
-                      <Input
-                        id="password"
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Enter SSH password"
-                      />
+                      <div className="relative">
+                        <Input
+                          id="password"
+                          type={showPassword ? "text" : "password"}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !connecting && password) {
+                              handleConnect(true)
+                            }
+                          }}
+                          placeholder="Enter SSH password"
+                          className="pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <>
@@ -1713,13 +1781,28 @@ export default function App() {
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="keyPassphrase">Key Passphrase (if encrypted)</Label>
-                        <Input
-                          id="keyPassphrase"
-                          type="password"
-                          value={keyPassphrase}
-                          onChange={(e) => setKeyPassphrase(e.target.value)}
-                          placeholder="Leave empty if not encrypted"
-                        />
+                        <div className="relative">
+                          <Input
+                            id="keyPassphrase"
+                            type={showKeyPassphrase ? "text" : "password"}
+                            value={keyPassphrase}
+                            onChange={(e) => setKeyPassphrase(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !connecting) {
+                                handleConnect(true)
+                              }
+                            }}
+                            placeholder="Leave empty if not encrypted"
+                            className="pr-10"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowKeyPassphrase(!showKeyPassphrase)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            {showKeyPassphrase ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
                       </div>
                     </>
                   )}
@@ -1798,62 +1881,33 @@ export default function App() {
           </div>
         )}
 
-        {/* Notification Banners */}
-        {step !== 'connect' && osUpgradeDetected && (
+        {/* Warning Banner */}
+        {step !== 'connect' && !osMismatchDetected && (
           <div className="mb-4">
-            <NotificationBanner
-              message={`OS change detected (${prevOsVersion} → ${newOsVersion}). Run reenable to restore system files changed by your mods.`}
-              actionLabel="Run Reenable"
-              onAction={handleRunReenable}
-              onDismiss={() => setOsUpgradeDetected(false)}
-              loading={runningReenable}
-            />
-          </div>
-        )}
-
-        {step !== 'connect' && hashtabMismatch && !osMismatchDetected && (
-          <div className="mb-4">
-            <NotificationBanner
-              message={`Hashtable built for OS ${hashtabMismatch.hashtabVersion}, but device is running ${hashtabMismatch.firmwareVersion}. Mods may not work correctly.`}
-              actionLabel="Rebuild Hashtable"
-              onAction={handleHashtabRebuild}
-              onDismiss={() => setHashtabMismatch(null)}
-            />
-          </div>
-        )}
-
-        {step !== 'connect' && timezoneMismatch && !osMismatchDetected && (
-          <div className="mb-4">
-            <NotificationBanner
-              message={`Device timezone (${timezoneMismatch.deviceTimezone}) differs from your preference (${timezoneMismatch.savedTimezone}).`}
-              actionLabel="Set Timezone"
-              onAction={handleSetTimezone}
-              onDismiss={() => setTimezoneMismatch(null)}
-              loading={settingTimezone}
-              loadingLabel="Setting..."
-            />
-          </div>
-        )}
-
-        {step !== 'connect' && showAutoUpdateBanner && !osMismatchDetected && (
-          <div className="mb-4">
-            <NotificationBanner
-              message="Auto-updates are enabled. This may interfere with your mods after a system update."
-              actionLabel="Go to Maintenance"
-              onAction={() => {
-                setActiveTab('maintenance')
+            <ConsolidatedWarningBanner
+              warnings={{
+                osUpgrade: osUpgradeDetected ? { prevVersion: prevOsVersion, newVersion: newOsVersion } : undefined,
+                hashtabMismatch: hashtabMismatch ? { hashtabVersion: hashtabMismatch.hashtabVersion, firmwareVersion: hashtabMismatch.firmwareVersion } : undefined,
+                timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
+                autoUpdatesEnabled: showAutoUpdateBanner,
+              }}
+              onGoToMaintenance={() => setActiveTab('maintenance')}
+              onDismiss={() => {
+                setOsUpgradeDetected(false)
+                setHashtabMismatch(null)
+                setTimezoneMismatch(null)
                 setShowAutoUpdateBanner(false)
               }}
-              onDismiss={() => setShowAutoUpdateBanner(false)}
             />
           </div>
         )}
 
         {step !== 'connect' && (
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'mods' | 'maintenance')}>
-            <TabsList className={`grid w-full mb-4 ${tabVisibility.mods ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'mods' | 'maintenance' | 'utilities')}>
+            <TabsList className={`grid w-full mb-4 grid-cols-${[tabVisibility.mods, true, tabVisibility.utilities].filter(Boolean).length}`}>
               {tabVisibility.mods && <TabsTrigger value="mods">Mods</TabsTrigger>}
               <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
+              {tabVisibility.utilities && <TabsTrigger value="utilities">Utilities</TabsTrigger>}
             </TabsList>
 
             {tabVisibility.mods && (
@@ -2440,6 +2494,82 @@ export default function App() {
                 )}
               </div>
             </TabsContent>
+
+            {tabVisibility.utilities && (
+              <TabsContent value="utilities" forceMount className={activeTab === 'utilities' ? '' : 'hidden'}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Card className={isTerminalRunning ? 'md:col-span-2' : ''}>
+                    <CardHeader>
+                      <CardTitle>Terminal</CardTitle>
+                      <CardDescription>Interactive SSH shell</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <InteractiveTerminal
+                        isConnected={connectionStatus === 'connected'}
+                        visible={activeTab === 'utilities'}
+                        onRunningChange={setIsTerminalRunning}
+                      />
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>File Browser</CardTitle>
+                      <CardDescription>Browse and transfer files</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => setShowFileBrowser(true)}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Open File Browser
+                      </Button>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Configuration Editor</CardTitle>
+                      <CardDescription>Edit settings</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => setShowConfigEditor(true)}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        xochitl.conf
+                      </Button>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Backup & Restore</CardTitle>
+                      <CardDescription>Manage device backups</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex gap-2">
+                      <Button
+                        className="flex-1"
+                        variant="outline"
+                        onClick={() => setBackupDialogMode('backup')}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Backup
+                      </Button>
+                      <Button
+                        className="flex-1"
+                        variant="outline"
+                        onClick={() => setBackupDialogMode('restore')}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Restore
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </div>
+              </TabsContent>
+            )}
           </Tabs>
         )}
       </div>
@@ -2522,6 +2652,12 @@ export default function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Backup & Restore Dialog */}
+      <BackupRestoreDialog
+        mode={backupDialogMode}
+        onClose={() => setBackupDialogMode(null)}
+      />
 
       {/* Orphan Dependency Removal Dialog */}
       <Dialog open={pendingOrphanRemoval !== null} onOpenChange={(open) => !open && setPendingOrphanRemoval(null)}>
@@ -2790,7 +2926,10 @@ export default function App() {
       </Dialog>
 
       {/* Save Device Dialog */}
-      <Dialog open={showSaveDeviceDialog} onOpenChange={setShowSaveDeviceDialog}>
+      <Dialog open={showSaveDeviceDialog} onOpenChange={(open) => {
+        setShowSaveDeviceDialog(open)
+        if (!open) setSaveDeviceError('')
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Save Device</DialogTitle>
@@ -2808,17 +2947,22 @@ export default function App() {
                 placeholder={getDisplayName(deviceInfo.machine || '') || 'My reMarkable'}
               />
             </div>
+            {saveDeviceError && (
+              <p className="text-sm text-destructive">{saveDeviceError}</p>
+            )}
           </div>
           <DialogFooter>
             <Button
               variant="outline"
               onClick={() => setShowSaveDeviceDialog(false)}
             >
-              Skip
+              {saveDeviceError ? 'Close' : 'Skip'}
             </Button>
-            <Button onClick={handleSaveDevice} disabled={!deviceName.trim()}>
-              Save Device
-            </Button>
+            {!saveDeviceError && (
+              <Button onClick={handleSaveDevice} disabled={!deviceName.trim()}>
+                Save Device
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2862,6 +3006,8 @@ export default function App() {
         vellumInstalled={vellumInstalled}
         tabVisibility={tabVisibility}
         proxyMode={proxyMode}
+        suppressSystemFileWarnings={suppressSystemFileWarnings}
+        theme={theme}
         onSaveSettings={handleSaveSettings}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
@@ -2874,6 +3020,110 @@ export default function App() {
         onClose={() => setShowDnsErrorModal(false)}
         onEnableProxyMode={handleEnableProxyModeFromModal}
       />
+
+      {showFileBrowser && (
+        <div className="fixed inset-0 z-50 bg-background overflow-auto">
+          <div className="min-h-screen p-6">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-3xl font-bold text-foreground">reManager</h1>
+                  <p className="text-muted-foreground">Manage packages on your reMarkable</p>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  {device && (
+                    <span className="text-muted-foreground">
+                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                    </span>
+                  )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="sm" onClick={() => setShowSettingsDialog(true)}>
+                        <Settings className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Settings</TooltipContent>
+                  </Tooltip>
+                  {device && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+                          <Unplug className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Disconnect</TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+              </div>
+              <hr className="border-border" />
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold">File Browser</h2>
+                <Button variant="ghost" size="sm" onClick={() => setShowFileBrowser(false)}>
+                  <X className="h-4 w-4 mr-2" />
+                  Close
+                </Button>
+              </div>
+              <FileBrowser
+                isConnected={connectionStatus === 'connected'}
+                suppressSystemFileWarnings={suppressSystemFileWarnings}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showConfigEditor && (
+        <div className="fixed inset-0 z-50 bg-background overflow-auto">
+          <div className="min-h-screen p-6">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-3xl font-bold text-foreground">reManager</h1>
+                  <p className="text-muted-foreground">Manage packages on your reMarkable</p>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  {device && (
+                    <span className="text-muted-foreground">
+                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                    </span>
+                  )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="sm" onClick={() => setShowSettingsDialog(true)}>
+                        <Settings className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Settings</TooltipContent>
+                  </Tooltip>
+                  {device && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+                          <Unplug className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Disconnect</TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+              </div>
+
+              <hr className="border-border" />
+
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold">xochitl.conf Editor</h2>
+                <Button variant="ghost" size="sm" onClick={() => setShowConfigEditor(false)}>
+                  <X className="h-4 w-4 mr-2" />
+                  Close
+                </Button>
+              </div>
+
+              <ConfigEditor isConnected={connectionStatus === 'connected'} />
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )

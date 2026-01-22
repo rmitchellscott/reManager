@@ -8,14 +8,22 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/pkg/sftp"
+	"github.com/rymdport/portal/filechooser"
+	"github.com/skratchdot/open-golang/open"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
+	"gopkg.in/ini.v1"
 
+	"reManager/internal/backup"
 	"reManager/internal/commands"
 	"reManager/internal/component"
 	"reManager/internal/device"
@@ -24,6 +32,72 @@ import (
 	"reManager/internal/storage"
 	"reManager/internal/vellum"
 )
+
+func debugf(format string, args ...interface{}) {
+	if debugMode {
+		fmt.Printf(format, args...)
+	}
+}
+
+func debugln(args ...interface{}) {
+	if debugMode {
+		fmt.Println(args...)
+	}
+}
+
+func isRunningInFlatpak() bool {
+	_, err := os.Stat("/.flatpak-info")
+	return err == nil
+}
+
+func openFileDialog(ctx context.Context, title string) (string, error) {
+	if isRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
+			CurrentFolder: home,
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(files) == 0 {
+			return "", nil
+		}
+		return strings.TrimPrefix(files[0], "file://"), nil
+	}
+	home, _ := os.UserHomeDir()
+	return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: home,
+	})
+}
+
+func saveFileDialog(ctx context.Context, title, defaultFilename string) (string, error) {
+	if isRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.SaveFile("", title, &filechooser.SaveFileOptions{
+			CurrentFolder: home,
+			CurrentName:   defaultFilename,
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(files) == 0 {
+			return "", nil
+		}
+		return strings.TrimPrefix(files[0], "file://"), nil
+	}
+	home, _ := os.UserHomeDir()
+	return runtime.SaveFileDialog(ctx, runtime.SaveDialogOptions{
+		Title:            title,
+		DefaultFilename:  defaultFilename,
+		DefaultDirectory: home,
+	})
+}
+
+func sanitizeFilename(name string) string {
+	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "-", "<", "_", ">", "_", "\"", "_", "|", "_", "?", "_", "*", "_")
+	return replacer.Replace(name)
+}
 
 type App struct {
 	ctx            context.Context
@@ -46,6 +120,13 @@ type App struct {
 	reconnectMu       sync.Mutex
 	fastDialMode      bool
 	installCancelCh   chan struct{}
+	backupCancelCh    chan struct{}
+	backupMu          sync.Mutex
+
+	shellSession *ssh.Session
+	shellStdin   io.WriteCloser
+	shellMu      sync.Mutex
+	shellActive  bool
 }
 
 func NewApp() *App {
@@ -111,9 +192,7 @@ func (a *App) GetDefaultSSHKeys() []SSHKey {
 }
 
 func (a *App) SelectKeyFile() string {
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select SSH Private Key",
-	})
+	path, err := openFileDialog(a.ctx, "Select SSH Private Key")
 	if err != nil {
 		return ""
 	}
@@ -401,14 +480,14 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 		default:
 		}
 
-		fmt.Printf("[%s] dialWithContextWithRetry attempt %d/%d to %s\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, addr)
+		debugf("[%s] dialWithContextWithRetry attempt %d/%d to %s\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, addr)
 		client, err := a.dialWithContext(ctx, addr, config)
 		if err == nil {
-			fmt.Printf("[%s] dialWithContextWithRetry attempt %d/%d succeeded\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1)
+			debugf("[%s] dialWithContextWithRetry attempt %d/%d succeeded\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1)
 			return client, nil
 		}
 
-		fmt.Printf("[%s] dialWithContextWithRetry attempt %d/%d failed: %v\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, err)
+		debugf("[%s] dialWithContextWithRetry attempt %d/%d failed: %v\n", time.Now().Format("15:04:05.000"), attempt+1, maxRetries+1, err)
 		lastErr = err
 
 		if ctx.Err() == context.Canceled {
@@ -416,7 +495,7 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 		}
 
 		if !isRetryableError(err) {
-			fmt.Printf("[%s] Error not retryable, giving up\n", time.Now().Format("15:04:05.000"))
+			debugf("[%s] Error not retryable, giving up\n", time.Now().Format("15:04:05.000"))
 			return nil, err
 		}
 
@@ -425,7 +504,7 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 		}
 
 		backoffDuration := backoffDurations[attempt]
-		fmt.Printf("[%s] dialWithContextWithRetry waiting %v before retry\n", time.Now().Format("15:04:05.000"), backoffDuration)
+		debugf("[%s] dialWithContextWithRetry waiting %v before retry\n", time.Now().Format("15:04:05.000"), backoffDuration)
 
 		select {
 		case <-time.After(backoffDuration):
@@ -551,13 +630,13 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	a.mu.Lock()
 	a.client = client
 	a.connectCancel = nil
-	fmt.Println("[DEBUG] SSH connected, creating vellum client")
+	debugln("[DEBUG] SSH connected, creating vellum client")
 	a.vellumClient = vellum.NewClient(&wailsExecutor{app: a})
 	a.mu.Unlock()
 
-	fmt.Println("[DEBUG] Detecting device...")
+	debugln("[DEBUG] Detecting device...")
 	deviceType, err := a.detectDevice()
-	fmt.Printf("[DEBUG] Device detected: %s, err: %v\n", deviceType, err)
+	debugf("[DEBUG] Device detected: %s, err: %v\n", deviceType, err)
 	if err != nil {
 		return ConnectionResult{
 			Success: true,
@@ -568,12 +647,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 	go func() {
 		if err := a.metadata.Refresh(); err != nil {
-			fmt.Printf("[DEBUG] Metadata refresh failed: %v\n", err)
+			debugf("[DEBUG] Metadata refresh failed: %v\n", err)
 		}
 
-		fmt.Println("[DEBUG] Checking if vellum is installed...")
+		debugln("[DEBUG] Checking if vellum is installed...")
 		installed, err := a.vellumClient.IsInstalled()
-		fmt.Printf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
+		debugf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
 		if err == nil && !installed {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
 		} else if err == nil && installed {
@@ -581,7 +660,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 			osState, err := a.vellumClient.GetOSVersionState()
 			if err == nil && osState.Mismatch {
-				fmt.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
+				debugf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
 					osState.StoredVersion, osState.CurrentVersion)
 				runtime.EventsEmit(a.ctx, "os:mismatch", map[string]string{
 					"prevVersion": osState.StoredVersion,
@@ -590,20 +669,20 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			}
 
 			status := a.CheckHashtabVersion()
-			fmt.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
+			debugf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
 				status.Installed, status.HashtabVersion, status.FirmwareVersion, status.NeedsRebuild)
 			if status.NeedsRebuild {
 				runtime.EventsEmit(a.ctx, "hashtab:version-mismatch", status)
 			}
 
 			updateStatus := a.GetUpdateServiceStatus()
-			fmt.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
+			debugf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
 			if updateStatus.Enabled || updateStatus.Running {
 				runtime.EventsEmit(a.ctx, "autoupdate:enabled", updateStatus)
 			}
 
 			timezoneStatus := a.GetTimezoneStatus()
-			fmt.Printf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
+			debugf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
 				timezoneStatus.DeviceTimezone, timezoneStatus.SavedTimezone, timezoneStatus.NeedsUpdate)
 
 			// Auto-save device timezone if no preference saved yet
@@ -613,7 +692,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 				a.mu.Unlock()
 				if deviceID != "" && a.deviceStore != nil {
 					if err := a.deviceStore.UpdateTimezone(deviceID, timezoneStatus.DeviceTimezone); err == nil {
-						fmt.Printf("[DEBUG] Auto-saved device timezone: %s\n", timezoneStatus.DeviceTimezone)
+						debugf("[DEBUG] Auto-saved device timezone: %s\n", timezoneStatus.DeviceTimezone)
 						timezoneStatus.SavedTimezone = timezoneStatus.DeviceTimezone
 					}
 				}
@@ -662,6 +741,8 @@ func (a *App) Disconnect() {
 	a.reconnectMu.Lock()
 	a.reconnecting = false
 	a.reconnectMu.Unlock()
+
+	a.StopShell()
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -795,12 +876,12 @@ func (a *App) handleConnectionLost(err error) {
 }
 
 func (a *App) attemptReconnect(deviceID string) {
-	fmt.Printf("[%s] attemptReconnect started for device %s\n", time.Now().Format("15:04:05.000"), deviceID)
+	debugf("[%s] attemptReconnect started for device %s\n", time.Now().Format("15:04:05.000"), deviceID)
 
 	a.reconnectMu.Lock()
 	if a.reconnecting {
 		a.reconnectMu.Unlock()
-		fmt.Printf("[%s] Already reconnecting, skipping\n", time.Now().Format("15:04:05.000"))
+		debugf("[%s] Already reconnecting, skipping\n", time.Now().Format("15:04:05.000"))
 		return
 	}
 	a.reconnecting = true
@@ -812,7 +893,7 @@ func (a *App) attemptReconnect(deviceID string) {
 		a.reconnecting = false
 		a.fastDialMode = false
 		a.reconnectMu.Unlock()
-		fmt.Printf("[%s] attemptReconnect finished\n", time.Now().Format("15:04:05.000"))
+		debugf("[%s] attemptReconnect finished\n", time.Now().Format("15:04:05.000"))
 	}()
 
 	for attempt := 0; attempt < maxReconnectAttempts; attempt++ {
@@ -821,11 +902,11 @@ func (a *App) attemptReconnect(deviceID string) {
 		a.reconnectMu.Unlock()
 
 		if !stillReconnecting {
-			fmt.Printf("[%s] Reconnect cancelled\n", time.Now().Format("15:04:05.000"))
+			debugf("[%s] Reconnect cancelled\n", time.Now().Format("15:04:05.000"))
 			return
 		}
 
-		fmt.Printf("[%s] Reconnect attempt %d/%d starting\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts)
+		debugf("[%s] Reconnect attempt %d/%d starting\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts)
 
 		runtime.EventsEmit(a.ctx, "connection:reconnecting", map[string]interface{}{
 			"attempt":     attempt + 1,
@@ -834,7 +915,7 @@ func (a *App) attemptReconnect(deviceID string) {
 		})
 
 		result := a.ConnectToSavedDevice(deviceID)
-		fmt.Printf("[%s] Reconnect attempt %d/%d result: success=%v, message=%s\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts, result.Success, result.Message)
+		debugf("[%s] Reconnect attempt %d/%d result: success=%v, message=%s\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts, result.Success, result.Message)
 
 		if result.Success {
 			runtime.EventsEmit(a.ctx, "connection:restored", map[string]interface{}{
@@ -857,13 +938,13 @@ func (a *App) attemptReconnect(deviceID string) {
 			if backoffIdx >= len(reconnectBackoff) {
 				backoffIdx = len(reconnectBackoff) - 1
 			}
-			fmt.Printf("[%s] Waiting %v before next attempt\n", time.Now().Format("15:04:05.000"), reconnectBackoff[backoffIdx])
+			debugf("[%s] Waiting %v before next attempt\n", time.Now().Format("15:04:05.000"), reconnectBackoff[backoffIdx])
 			time.Sleep(reconnectBackoff[backoffIdx])
-			fmt.Printf("[%s] Backoff complete\n", time.Now().Format("15:04:05.000"))
+			debugf("[%s] Backoff complete\n", time.Now().Format("15:04:05.000"))
 		}
 	}
 
-	fmt.Printf("[%s] All reconnect attempts exhausted\n", time.Now().Format("15:04:05.000"))
+	debugf("[%s] All reconnect attempts exhausted\n", time.Now().Format("15:04:05.000"))
 	runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
 		"reason":   "Maximum reconnection attempts exceeded",
 		"deviceId": deviceID,
@@ -875,17 +956,17 @@ func (a *App) runCommand(cmd string) (string, error) {
 		return "", fmt.Errorf("not connected")
 	}
 
-	fmt.Printf("[DEBUG] runCommand creating session: %s\n", cmd[:min(50, len(cmd))])
+	debugf("[DEBUG] runCommand creating session: %s\n", cmd[:min(50, len(cmd))])
 	session, err := a.client.NewSession()
 	if err != nil {
-		fmt.Printf("[DEBUG] runCommand session error: %v\n", err)
+		debugf("[DEBUG] runCommand session error: %v\n", err)
 		return "", err
 	}
 	defer session.Close()
 
-	fmt.Printf("[DEBUG] runCommand executing: %s\n", cmd[:min(50, len(cmd))])
+	debugf("[DEBUG] runCommand executing: %s\n", cmd[:min(50, len(cmd))])
 	output, err := session.CombinedOutput(cmd)
-	fmt.Printf("[DEBUG] runCommand done: %s, err: %v\n", cmd[:min(50, len(cmd))], err)
+	debugf("[DEBUG] runCommand done: %s, err: %v\n", cmd[:min(50, len(cmd))], err)
 	return string(output), err
 }
 
@@ -901,13 +982,13 @@ func (a *App) RunCommand(cmd string) string {
 }
 
 func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
-	fmt.Println("[DEBUG] RunCommandWithOutput called:", cmd[:min(50, len(cmd))], "requiresPTY:", requiresPTY)
+	debugln("[DEBUG] RunCommandWithOutput called:", cmd[:min(50, len(cmd))], "requiresPTY:", requiresPTY)
 	go func() {
 		a.mu.Lock()
 
 		if a.client == nil {
 			a.mu.Unlock()
-			fmt.Println("[DEBUG] Not connected, emitting error")
+			debugln("[DEBUG] Not connected, emitting error")
 			runtime.EventsEmit(a.ctx, "command:output", "Error: not connected\n")
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
@@ -916,7 +997,7 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		session, err := a.client.NewSession()
 		if err != nil {
 			a.mu.Unlock()
-			fmt.Println("[DEBUG] Session error:", err)
+			debugln("[DEBUG] Session error:", err)
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
@@ -930,12 +1011,12 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			})
 			if err != nil {
 				a.mu.Unlock()
-				fmt.Println("[DEBUG] PTY request error:", err)
+				debugln("[DEBUG] PTY request error:", err)
 				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error requesting PTY: %v\n", err))
 				runtime.EventsEmit(a.ctx, "command:done", false)
 				return
 			}
-			fmt.Println("[DEBUG] PTY allocated successfully")
+			debugln("[DEBUG] PTY allocated successfully")
 		}
 
 		a.commandSession = session
@@ -974,9 +1055,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		a.commandStdin = stdin
 		a.mu.Unlock()
 
-		fmt.Println("[DEBUG] Starting command")
+		debugln("[DEBUG] Starting command")
 		if err := session.Start(cmd); err != nil {
-			fmt.Println("[DEBUG] Start error:", err)
+			debugln("[DEBUG] Start error:", err)
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return
@@ -991,7 +1072,7 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			for {
 				n, err := stdout.Read(buf)
 				if n > 0 {
-					fmt.Printf("[DEBUG] stdout: %d bytes\n", n)
+					debugf("[DEBUG] stdout: %d bytes\n", n)
 					runtime.EventsEmit(a.ctx, "command:output", string(buf[:n]))
 				}
 				if err == io.EOF {
@@ -1008,7 +1089,7 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			for {
 				n, err := stderr.Read(buf)
 				if n > 0 {
-					fmt.Printf("[DEBUG] stderr: %d bytes\n", n)
+					debugf("[DEBUG] stderr: %d bytes\n", n)
 					runtime.EventsEmit(a.ctx, "command:output", string(buf[:n]))
 				}
 				if err == io.EOF {
@@ -1021,7 +1102,7 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		}()
 
 		err = session.Wait()
-		fmt.Println("[DEBUG] Command done, success:", err == nil)
+		debugln("[DEBUG] Command done, success:", err == nil)
 		runtime.EventsEmit(a.ctx, "command:done", err == nil)
 	}()
 }
@@ -1032,16 +1113,146 @@ func (a *App) StopCommand() {
 	a.mu.Unlock()
 
 	if stdin != nil {
-		fmt.Println("[DEBUG] Sending Ctrl+C (0x03) to stdin")
+		debugln("[DEBUG] Sending Ctrl+C (0x03) to stdin")
 		_, err := stdin.Write([]byte{0x03})
 		if err != nil {
-			fmt.Printf("[DEBUG] Error writing Ctrl+C to stdin: %v\n", err)
+			debugf("[DEBUG] Error writing Ctrl+C to stdin: %v\n", err)
 		} else {
-			fmt.Println("[DEBUG] Ctrl+C sent successfully")
+			debugln("[DEBUG] Ctrl+C sent successfully")
 		}
 	} else {
-		fmt.Println("[DEBUG] No stdin available to send Ctrl+C")
+		debugln("[DEBUG] No stdin available to send Ctrl+C")
 	}
+}
+
+func (a *App) StartShell(rows, cols int) error {
+	a.shellMu.Lock()
+	defer a.shellMu.Unlock()
+
+	if a.shellActive {
+		return fmt.Errorf("shell already running")
+	}
+
+	a.mu.Lock()
+	if a.client == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("not connected")
+	}
+
+	session, err := a.client.NewSession()
+	if err != nil {
+		a.mu.Unlock()
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	a.mu.Unlock()
+
+	if rows <= 0 {
+		rows = 24
+	}
+	if cols <= 0 {
+		cols = 80
+	}
+
+	err = session.RequestPty("xterm-256color", rows, cols, ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	})
+	if err != nil {
+		session.Close()
+		return fmt.Errorf("failed to request PTY: %w", err)
+	}
+
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		session.Close()
+		return fmt.Errorf("failed to get stdout: %w", err)
+	}
+
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		session.Close()
+		return fmt.Errorf("failed to get stdin: %w", err)
+	}
+
+	if err := session.Shell(); err != nil {
+		session.Close()
+		return fmt.Errorf("failed to start shell: %w", err)
+	}
+
+	a.shellSession = session
+	a.shellStdin = stdin
+	a.shellActive = true
+
+	runtime.EventsEmit(a.ctx, "shell:started")
+
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdout.Read(buf)
+			if n > 0 {
+				runtime.EventsEmit(a.ctx, "shell:output", string(buf[:n]))
+			}
+			if err != nil {
+				break
+			}
+		}
+
+		a.shellMu.Lock()
+		a.shellActive = false
+		a.shellSession = nil
+		a.shellStdin = nil
+		a.shellMu.Unlock()
+
+		runtime.EventsEmit(a.ctx, "shell:stopped")
+	}()
+
+	return nil
+}
+
+func (a *App) WriteToShell(data string) error {
+	a.shellMu.Lock()
+	stdin := a.shellStdin
+	a.shellMu.Unlock()
+
+	if stdin == nil {
+		return fmt.Errorf("shell not active")
+	}
+
+	_, err := stdin.Write([]byte(data))
+	return err
+}
+
+func (a *App) ResizeShell(rows, cols int) error {
+	a.shellMu.Lock()
+	session := a.shellSession
+	a.shellMu.Unlock()
+
+	if session == nil {
+		return fmt.Errorf("shell not active")
+	}
+
+	return session.WindowChange(rows, cols)
+}
+
+func (a *App) StopShell() {
+	a.shellMu.Lock()
+	session := a.shellSession
+	stdin := a.shellStdin
+	a.shellMu.Unlock()
+
+	if stdin != nil {
+		stdin.Close()
+	}
+	if session != nil {
+		session.Close()
+	}
+}
+
+func (a *App) IsShellActive() bool {
+	a.shellMu.Lock()
+	defer a.shellMu.Unlock()
+	return a.shellActive
 }
 
 func (a *App) GetDeviceInfo() map[string]string {
@@ -1098,23 +1309,23 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 	}
 
 	if a.client == nil {
-		fmt.Println("[DEBUG] GetUpdateServiceStatus: client is nil")
+		debugln("[DEBUG] GetUpdateServiceStatus: client is nil")
 		return status
 	}
 
 	output, err := a.runCommand("systemctl is-enabled update-engine.service")
-	fmt.Printf("[DEBUG] GetUpdateServiceStatus: is-enabled output=%q, err=%v\n", output, err)
+	debugf("[DEBUG] GetUpdateServiceStatus: is-enabled output=%q, err=%v\n", output, err)
 	if err == nil {
 		status.Enabled = strings.TrimSpace(output) == "enabled"
 	}
 
 	output, err = a.runCommand("systemctl is-active update-engine.service")
-	fmt.Printf("[DEBUG] GetUpdateServiceStatus: is-active output=%q, err=%v\n", output, err)
+	debugf("[DEBUG] GetUpdateServiceStatus: is-active output=%q, err=%v\n", output, err)
 	if err == nil {
 		status.Running = strings.TrimSpace(output) == "active"
 	}
 
-	fmt.Printf("[DEBUG] GetUpdateServiceStatus: returning enabled=%v, running=%v\n", status.Enabled, status.Running)
+	debugf("[DEBUG] GetUpdateServiceStatus: returning enabled=%v, running=%v\n", status.Enabled, status.Running)
 	return status
 }
 
@@ -1316,9 +1527,9 @@ func containsString(slice []string, s string) bool {
 }
 
 func (a *App) GetPackages(deviceType string) []PackageInfo {
-	fmt.Printf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s\n", a.metadata, deviceType)
+	debugf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s\n", a.metadata, deviceType)
 	packages := a.metadata.GetAllPackages()
-	fmt.Printf("[DEBUG] GetPackages got %d packages\n", len(packages))
+	debugf("[DEBUG] GetPackages got %d packages\n", len(packages))
 	var result []PackageInfo
 
 	for _, pkg := range packages {
@@ -1350,7 +1561,7 @@ func (a *App) GetPackages(deviceType string) []PackageInfo {
 		})
 	}
 
-	fmt.Printf("[DEBUG] GetPackages returning %d PackageInfo\n", len(result))
+	debugf("[DEBUG] GetPackages returning %d PackageInfo\n", len(result))
 	return result
 }
 
@@ -1521,25 +1732,25 @@ type PackageCompatibilityStatus struct {
 }
 
 func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
-	fmt.Println("[DEBUG] GetPackageCompatibilityStatus: called")
+	debugln("[DEBUG] GetPackageCompatibilityStatus: called")
 	if a.vellumClient == nil {
-		fmt.Println("[DEBUG] GetPackageCompatibilityStatus: vellumClient is nil")
+		debugln("[DEBUG] GetPackageCompatibilityStatus: vellumClient is nil")
 		return PackageCompatibilityStatus{FetchFailed: true}
 	}
 
 	osState, err := a.vellumClient.GetOSVersionState()
 	if err != nil {
-		fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: GetOSVersionState error: %v\n", err)
+		debugf("[DEBUG] GetPackageCompatibilityStatus: GetOSVersionState error: %v\n", err)
 		return PackageCompatibilityStatus{FetchFailed: true}
 	}
-	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: osState=%+v\n", osState)
+	debugf("[DEBUG] GetPackageCompatibilityStatus: osState=%+v\n", osState)
 
 	installed, err := a.vellumClient.List()
 	if err != nil {
-		fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: List error: %v\n", err)
+		debugf("[DEBUG] GetPackageCompatibilityStatus: List error: %v\n", err)
 		return PackageCompatibilityStatus{FetchFailed: true}
 	}
-	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: installed=%v\n", installed)
+	debugf("[DEBUG] GetPackageCompatibilityStatus: installed=%v\n", installed)
 
 	var filteredInstalled []string
 	for _, pkg := range installed {
@@ -1547,13 +1758,13 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 			filteredInstalled = append(filteredInstalled, pkg)
 		}
 	}
-	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: filteredInstalled=%v\n", filteredInstalled)
+	debugf("[DEBUG] GetPackageCompatibilityStatus: filteredInstalled=%v\n", filteredInstalled)
 
 	compat, err := a.vellumClient.CheckOSCompatibility(osState.CurrentVersion)
-	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: compat=%+v, err=%v\n", compat, err)
+	debugf("[DEBUG] GetPackageCompatibilityStatus: compat=%+v, err=%v\n", compat, err)
 
 	if err != nil && (compat == nil || compat.FetchFailed) {
-		fmt.Println("[DEBUG] GetPackageCompatibilityStatus: returning with FetchFailed due to error")
+		debugln("[DEBUG] GetPackageCompatibilityStatus: returning with FetchFailed due to error")
 		return PackageCompatibilityStatus{
 			InstalledPackages: filteredInstalled,
 			CurrentOsVersion:  osState.CurrentVersion,
@@ -1564,7 +1775,7 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 
 	allEmpty := len(compat.Compatible) == 0 && len(compat.Incompatible) == 0 && len(compat.NoConstraint) == 0
 	if compat.FetchFailed || allEmpty {
-		fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: fallback (FetchFailed=%v, allEmpty=%v)\n", compat.FetchFailed, allEmpty)
+		debugf("[DEBUG] GetPackageCompatibilityStatus: fallback (FetchFailed=%v, allEmpty=%v)\n", compat.FetchFailed, allEmpty)
 		return PackageCompatibilityStatus{
 			InstalledPackages:    filteredInstalled,
 			CompatiblePackages:   filteredInstalled,
@@ -1583,7 +1794,7 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 		StoredOsVersion:      osState.StoredVersion,
 		FetchFailed:          false,
 	}
-	fmt.Printf("[DEBUG] GetPackageCompatibilityStatus: returning result=%+v\n", result)
+	debugf("[DEBUG] GetPackageCompatibilityStatus: returning result=%+v\n", result)
 	return result
 }
 
@@ -1713,6 +1924,23 @@ type InstallResult struct {
 	DNSError bool     `json:"dnsError"`
 }
 
+type FileInfo struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	IsDir   bool   `json:"isDir"`
+	ModTime int64  `json:"modTime"`
+	Mode    string `json:"mode"`
+}
+
+type TransferProgress struct {
+	Filename   string  `json:"filename"`
+	BytesSent  int64   `json:"bytesSent"`
+	TotalBytes int64   `json:"totalBytes"`
+	Percentage float64 `json:"percentage"`
+	Status     string  `json:"status"`
+}
+
 type DialogRequest struct {
 	Title             string   `json:"title"`
 	Message           string   `json:"message"`
@@ -1748,7 +1976,7 @@ func (a *App) SimulateInstall(packageNames []string, deviceType string) (*Instal
 	// Use SimulateAdd to get all packages that will be installed
 	allPackages, err := a.vellumClient.SimulateAdd(packageNames...)
 	if err != nil {
-		fmt.Printf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
+		debugf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
 		return &InstallSimulationResult{Packages: packageNames, Requested: packageNames}, nil
 	}
 
@@ -1768,7 +1996,7 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 
 	simResult, err := a.vellumClient.SimulateDel(packageNames...)
 	if err != nil {
-		fmt.Printf("[DEBUG] SimulateDel failed: %v\n", err)
+		debugf("[DEBUG] SimulateDel failed: %v\n", err)
 		return &UninstallSimulationResult{Packages: packageNames}, nil
 	}
 
@@ -1781,7 +2009,7 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 	if len(simResult.Blocked) > 0 {
 		recursiveList, err := a.vellumClient.SimulateDelRecursive(packageNames...)
 		if err != nil {
-			fmt.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
+			debugf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
 		} else {
 			result.RecursivePackages = recursiveList
 		}
@@ -1986,11 +2214,11 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		if a.vellumClient != nil {
 			simResult, err := a.vellumClient.SimulateDel(packageNames...)
 			if err != nil {
-				fmt.Printf("[DEBUG] SimulateDel failed: %v, using packageNames only\n", err)
+				debugf("[DEBUG] SimulateDel failed: %v, using packageNames only\n", err)
 				allPackages = packageNames
 			} else if len(simResult.Blocked) > 0 {
 				// Packages are blocked by dependents - prompt user
-				fmt.Printf("[DEBUG] Packages blocked: %v\n", simResult.Blocked)
+				debugf("[DEBUG] Packages blocked: %v\n", simResult.Blocked)
 				runtime.EventsEmit(a.ctx, "uninstall:blocked", BlockedUninstallInfo{
 					RequestedPackages: packageNames,
 					BlockedBy:         simResult.Blocked,
@@ -2009,7 +2237,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 				useRecursive = true
 				allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
 				if err != nil {
-					fmt.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
+					debugf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
 					allPackages = packageNames
 				}
 			} else {
@@ -2227,12 +2455,12 @@ func (e *wailsExecutor) Execute(cmds []component.CommandResult) error {
 }
 
 func (e *wailsExecutor) ExecuteWithOutput(cmd string) (string, error) {
-	fmt.Printf("[DEBUG] ExecuteWithOutput waiting for lock: %s\n", cmd[:min(50, len(cmd))])
+	debugf("[DEBUG] ExecuteWithOutput waiting for lock: %s\n", cmd[:min(50, len(cmd))])
 	e.app.mu.Lock()
-	fmt.Printf("[DEBUG] ExecuteWithOutput got lock: %s\n", cmd[:min(50, len(cmd))])
+	debugf("[DEBUG] ExecuteWithOutput got lock: %s\n", cmd[:min(50, len(cmd))])
 	defer func() {
 		e.app.mu.Unlock()
-		fmt.Printf("[DEBUG] ExecuteWithOutput released lock: %s\n", cmd[:min(50, len(cmd))])
+		debugf("[DEBUG] ExecuteWithOutput released lock: %s\n", cmd[:min(50, len(cmd))])
 	}()
 	return e.app.runCommand(cmd)
 }
@@ -2291,43 +2519,47 @@ func (a *App) GetAppVersion() string {
 }
 
 type SettingsInfo struct {
-	TabVisibility map[string]bool `json:"tabVisibility"`
-	ProxyMode     bool            `json:"proxyMode"`
+	TabVisibility              map[string]bool `json:"tabVisibility"`
+	ProxyMode                  bool            `json:"proxyMode"`
+	SuppressSystemFileWarnings bool            `json:"suppressSystemFileWarnings"`
+	Theme                      string          `json:"theme"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
 	if a.settingsStore == nil {
 		return SettingsInfo{
-			TabVisibility: map[string]bool{"mods": true, "maintenance": true},
-			ProxyMode:     true,
+			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
+			ProxyMode:                  true,
+			SuppressSystemFileWarnings: false,
+			Theme:                      "system",
 		}
 	}
 	settings, err := a.settingsStore.Load()
 	if err != nil {
 		return SettingsInfo{
-			TabVisibility: map[string]bool{"mods": true, "maintenance": true},
-			ProxyMode:     true,
+			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
+			ProxyMode:                  true,
+			SuppressSystemFileWarnings: false,
+			Theme:                      "system",
 		}
 	}
 	return SettingsInfo{
-		TabVisibility: map[string]bool{
-			"mods":        settings.TabVisibility.Mods,
-			"maintenance": settings.TabVisibility.Maintenance,
-		},
-		ProxyMode: settings.ProxyMode,
+		TabVisibility:              settings.TabVisibility,
+		ProxyMode:                  settings.ProxyMode,
+		SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
+		Theme:                      settings.Theme,
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, theme string) error {
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
 	settings := &storage.Settings{
-		TabVisibility: storage.TabVisibility{
-			Mods:        tabVisibility["mods"],
-			Maintenance: tabVisibility["maintenance"],
-		},
-		ProxyMode: proxyMode,
+		TabVisibility:              storage.TabVisibility(tabVisibility),
+		ProxyMode:                  proxyMode,
+		SuppressSystemFileWarnings: suppressSystemFileWarnings,
+		Theme:                      theme,
 	}
 	return a.settingsStore.Save(settings)
 }
@@ -2353,4 +2585,850 @@ func (a *App) UninstallVellum(removeAllPackages bool) {
 		a.vellumClient = nil
 		runtime.EventsEmit(a.ctx, "vellum:uninstall-complete")
 	}()
+}
+
+// isSystemPath returns true if the path is outside /home/root (a system path)
+func isSystemPath(path string) bool {
+	cleanPath := filepath.Clean(path)
+	return !strings.HasPrefix(cleanPath, "/home/root")
+}
+
+// makeFilesystemWritable makes the root filesystem writable on RMPP/RMPP-M devices
+func (a *App) makeFilesystemWritable(client *ssh.Client) error {
+	deviceType, err := a.detectDevice()
+	if err != nil {
+		return nil // If we can't detect, assume it's not RMPP
+	}
+
+	if deviceType != "rmpp" && deviceType != "rmppm" {
+		return nil // Only RMPP devices have read-only root
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	// Remount root as rw and unmount /etc overlay
+	cmd := `mount -o remount,rw / 2>/dev/null; if grep -q '^overlay.*/etc' /proc/mounts; then umount -l /etc 2>/dev/null; fi`
+	if err := session.Run(cmd); err != nil {
+		return fmt.Errorf("failed to make filesystem writable: %w", err)
+	}
+
+	return nil
+}
+
+// restoreFilesystem restores the /etc overlay and remounts root as read-only on RMPP/RMPP-M
+func (a *App) restoreFilesystem(client *ssh.Client) error {
+	deviceType, err := a.detectDevice()
+	if err != nil {
+		return nil
+	}
+
+	if deviceType != "rmpp" && deviceType != "rmppm" {
+		return nil
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	// Restore /etc overlay and remount root as ro
+	cmd := `if [ -d /var/volatile/.etc-work ]; then rm -rf /var/volatile/.etc-work/* 2>/dev/null; mount -t overlay overlay -o rw,relatime,lowerdir=/etc,upperdir=/var/volatile/etc,workdir=/var/volatile/.etc-work /etc 2>/dev/null; fi; sync; mount -o remount,ro / 2>/dev/null`
+	session.Run(cmd) // Best effort, don't fail if this errors
+
+	return nil
+}
+
+func (a *App) ListDirectory(dirPath string) ([]FileInfo, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	if dirPath == "" {
+		dirPath = "/home/root"
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	entries, err := sftpClient.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	var files []FileInfo
+	for _, entry := range entries {
+		fullPath := path.Join(dirPath, entry.Name())
+		if dirPath == "/" {
+			fullPath = "/" + entry.Name()
+		}
+		files = append(files, FileInfo{
+			Name:    entry.Name(),
+			Path:    fullPath,
+			Size:    entry.Size(),
+			IsDir:   entry.IsDir(),
+			ModTime: entry.ModTime().Unix(),
+			Mode:    entry.Mode().String(),
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].IsDir != files[j].IsDir {
+			return files[i].IsDir
+		}
+		return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name)
+	})
+
+	return files, nil
+}
+
+func (a *App) DownloadFile(remotePath string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": "Not connected",
+			})
+			return
+		}
+
+		filename := path.Base(remotePath)
+		localPath, err := saveFileDialog(a.ctx, "Save File", filename)
+		if err != nil || localPath == "" {
+			return
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		remoteFile, err := sftpClient.Open(remotePath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to open remote file: %v", err),
+			})
+			return
+		}
+		defer remoteFile.Close()
+
+		stat, err := remoteFile.Stat()
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to stat remote file: %v", err),
+			})
+			return
+		}
+		totalBytes := stat.Size()
+
+		localFile, err := os.Create(localPath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create local file: %v", err),
+			})
+			return
+		}
+		defer localFile.Close()
+
+		buffer := make([]byte, 32*1024)
+		var transferred int64
+
+		for {
+			n, err := remoteFile.Read(buffer)
+			if n > 0 {
+				_, writeErr := localFile.Write(buffer[:n])
+				if writeErr != nil {
+					runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+						"message": fmt.Sprintf("Failed to write to local file: %v", writeErr),
+					})
+					return
+				}
+				transferred += int64(n)
+
+				var percentage float64
+				if totalBytes > 0 {
+					percentage = float64(transferred) / float64(totalBytes) * 100
+				}
+				runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
+					Filename:   filename,
+					BytesSent:  transferred,
+					TotalBytes: totalBytes,
+					Percentage: percentage,
+					Status:     "downloading",
+				})
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+					"message": fmt.Sprintf("Failed to read remote file: %v", err),
+				})
+				return
+			}
+		}
+
+		runtime.EventsEmit(a.ctx, "filebrowser:download-complete", map[string]string{
+			"path": remotePath,
+		})
+	}()
+}
+
+func (a *App) UploadFile(remotePath string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": "Not connected",
+			})
+			return
+		}
+
+		localPath, err := openFileDialog(a.ctx, "Select File to Upload")
+		if err != nil || localPath == "" {
+			return
+		}
+
+		localFile, err := os.Open(localPath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to open local file: %v", err),
+			})
+			return
+		}
+		defer localFile.Close()
+
+		stat, err := localFile.Stat()
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to stat local file: %v", err),
+			})
+			return
+		}
+		totalBytes := stat.Size()
+		filename := stat.Name()
+
+		destPath := remotePath
+		if strings.HasSuffix(remotePath, "/") || remotePath == "" {
+			destPath = path.Join(remotePath, filename)
+		}
+
+		// Make filesystem writable for system paths on RMPP devices
+		if isSystemPath(destPath) {
+			if err := a.makeFilesystemWritable(client); err != nil {
+				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+					"message": fmt.Sprintf("Failed to prepare filesystem: %v", err),
+				})
+				return
+			}
+			defer a.restoreFilesystem(client)
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		remoteFile, err := sftpClient.Create(destPath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create remote file: %v", err),
+			})
+			return
+		}
+		defer remoteFile.Close()
+
+		buffer := make([]byte, 32*1024)
+		var transferred int64
+
+		for {
+			n, err := localFile.Read(buffer)
+			if n > 0 {
+				_, writeErr := remoteFile.Write(buffer[:n])
+				if writeErr != nil {
+					runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+						"message": fmt.Sprintf("Failed to write to remote file: %v", writeErr),
+					})
+					return
+				}
+				transferred += int64(n)
+
+				var percentage float64
+				if totalBytes > 0 {
+					percentage = float64(transferred) / float64(totalBytes) * 100
+				}
+				runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
+					Filename:   filename,
+					BytesSent:  transferred,
+					TotalBytes: totalBytes,
+					Percentage: percentage,
+					Status:     "uploading",
+				})
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+					"message": fmt.Sprintf("Failed to read local file: %v", err),
+				})
+				return
+			}
+		}
+
+		runtime.EventsEmit(a.ctx, "filebrowser:upload-complete", map[string]string{
+			"path": destPath,
+		})
+	}()
+}
+
+func (a *App) DeletePath(path string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	// Make filesystem writable for system paths on RMPP devices
+	if isSystemPath(path) {
+		if err := a.makeFilesystemWritable(client); err != nil {
+			return err
+		}
+		defer a.restoreFilesystem(client)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	stat, err := sftpClient.Stat(path)
+	if err != nil {
+		return fmt.Errorf("failed to stat path: %w", err)
+	}
+
+	if stat.IsDir() {
+		entries, err := sftpClient.ReadDir(path)
+		if err != nil {
+			return fmt.Errorf("failed to read directory: %w", err)
+		}
+		if len(entries) > 0 {
+			session, err := client.NewSession()
+			if err != nil {
+				return fmt.Errorf("failed to create SSH session: %w", err)
+			}
+			defer session.Close()
+			_, err = session.CombinedOutput(fmt.Sprintf("rm -rf %q", path))
+			if err != nil {
+				return fmt.Errorf("failed to delete directory: %w", err)
+			}
+		} else {
+			err = sftpClient.RemoveDirectory(path)
+			if err != nil {
+				return fmt.Errorf("failed to remove directory: %w", err)
+			}
+		}
+	} else {
+		err = sftpClient.Remove(path)
+		if err != nil {
+			return fmt.Errorf("failed to delete file: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (a *App) RenamePath(oldPath, newPath string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	// Make filesystem writable for system paths on RMPP devices
+	if isSystemPath(oldPath) || isSystemPath(newPath) {
+		if err := a.makeFilesystemWritable(client); err != nil {
+			return err
+		}
+		defer a.restoreFilesystem(client)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	err = sftpClient.Rename(oldPath, newPath)
+	if err != nil {
+		return fmt.Errorf("failed to rename: %w", err)
+	}
+
+	return nil
+}
+
+func (a *App) CreateDirectory(path string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	// Make filesystem writable for system paths on RMPP devices
+	if isSystemPath(path) {
+		if err := a.makeFilesystemWritable(client); err != nil {
+			return err
+		}
+		defer a.restoreFilesystem(client)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	err = sftpClient.Mkdir(path)
+	if err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	return nil
+}
+
+type BackupInfo struct {
+	Name      string `json:"name"`
+	Timestamp int64  `json:"timestamp"`
+	Size      int64  `json:"size"`
+}
+
+func (a *App) ReadConfigFile() (string, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	file, err := sftpClient.Open("/home/root/.config/remarkable/xochitl.conf")
+	if err != nil {
+		return "", fmt.Errorf("failed to open config file: %w", err)
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return "", fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	return string(content), nil
+}
+
+func (a *App) WriteConfigFile(content string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	_, err := ini.Load([]byte(content))
+	if err != nil {
+		return fmt.Errorf("invalid INI syntax: %w", err)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	tmpPath := "/home/root/.config/remarkable/xochitl.conf.tmp"
+	finalPath := "/home/root/.config/remarkable/xochitl.conf"
+
+	tmpFile, err := sftpClient.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	_, err = tmpFile.Write([]byte(content))
+	if err != nil {
+		tmpFile.Close()
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	// Delete the target file first - Rename only works when destination doesn't exist
+	_ = sftpClient.Remove(finalPath)
+
+	err = sftpClient.Rename(tmpPath, finalPath)
+	if err != nil {
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	return nil
+}
+
+func (a *App) BackupConfigFile() (string, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	configPath := "/home/root/.config/remarkable/xochitl.conf"
+	file, err := sftpClient.Open(configPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open config file: %w", err)
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return "", fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	backupName := fmt.Sprintf("xochitl.conf.backup-%s", time.Now().Format("2006-01-02-150405"))
+	backupPath := path.Join("/home/root/.config/remarkable", backupName)
+
+	backupFile, err := sftpClient.Create(backupPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create backup file: %w", err)
+	}
+	defer backupFile.Close()
+
+	_, err = backupFile.Write(content)
+	if err != nil {
+		return "", fmt.Errorf("failed to write backup file: %w", err)
+	}
+
+	return backupName, nil
+}
+
+func (a *App) ListConfigBackups() ([]BackupInfo, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	entries, err := sftpClient.ReadDir("/home/root/.config/remarkable")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	var backups []BackupInfo
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "xochitl.conf.backup-") {
+			backups = append(backups, BackupInfo{
+				Name:      entry.Name(),
+				Timestamp: entry.ModTime().Unix(),
+				Size:      entry.Size(),
+			})
+		}
+	}
+
+	sort.Slice(backups, func(i, j int) bool {
+		return backups[i].Timestamp > backups[j].Timestamp
+	})
+
+	return backups, nil
+}
+
+func (a *App) RestoreConfigBackup(backupName string) error {
+	debugln("RestoreConfigBackup called with backupName:", backupName)
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		debugln("RestoreConfigBackup: not connected")
+		return fmt.Errorf("not connected")
+	}
+
+	if !strings.HasPrefix(backupName, "xochitl.conf.backup-") {
+		debugln("RestoreConfigBackup: invalid backup name")
+		return fmt.Errorf("invalid backup name")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		debugln("RestoreConfigBackup: failed to create SFTP client:", err)
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	backupPath := path.Join("/home/root/.config/remarkable", backupName)
+	debugln("RestoreConfigBackup: opening backup file:", backupPath)
+	file, err := sftpClient.Open(backupPath)
+	if err != nil {
+		debugln("RestoreConfigBackup: failed to open backup file:", err)
+		return fmt.Errorf("failed to open backup file: %w", err)
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		debugln("RestoreConfigBackup: failed to read backup file:", err)
+		return fmt.Errorf("failed to read backup file: %w", err)
+	}
+	debugln("RestoreConfigBackup: read", len(content), "bytes from backup")
+
+	_, err = ini.Load(content)
+	if err != nil {
+		debugln("RestoreConfigBackup: backup file has invalid INI syntax:", err)
+		return fmt.Errorf("backup file has invalid INI syntax: %w", err)
+	}
+
+	debugln("RestoreConfigBackup: calling WriteConfigFile")
+	err = a.WriteConfigFile(string(content))
+	if err != nil {
+		debugln("RestoreConfigBackup: WriteConfigFile failed:", err)
+	} else {
+		debugln("RestoreConfigBackup: success")
+	}
+	return err
+}
+
+func (a *App) CreateDeviceBackup() {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		deviceID := a.connectedDeviceID
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "backup:error", map[string]string{
+				"message": "Not connected to device",
+			})
+			return
+		}
+
+		rawDeviceName := ""
+		if savedDevice, err := a.deviceStore.Get(deviceID); err == nil && savedDevice.Name != "" {
+			rawDeviceName = savedDevice.Name
+		}
+		deviceName := "device"
+		if rawDeviceName != "" {
+			deviceName = sanitizeFilename(rawDeviceName)
+		}
+
+		timestamp := time.Now().Format("2006-01-02-150405")
+		defaultName := fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp)
+		destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName)
+		if err != nil || destPath == "" {
+			return
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "backup:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		a.backupMu.Lock()
+		a.backupCancelCh = make(chan struct{})
+		cancelCh := a.backupCancelCh
+		a.backupMu.Unlock()
+
+		manager := backup.Manager{
+			Ctx:        a.ctx,
+			SftpClient: sftpClient,
+			SSHClient:  client,
+			CancelCh:   cancelCh,
+			ProgressFn: func(p backup.Progress) {
+				runtime.EventsEmit(a.ctx, "backup:progress", p)
+			},
+			DeviceName: rawDeviceName,
+			DeviceID:   deviceID,
+		}
+
+		sources := []string{
+			"/home/root/.local/share/remarkable/xochitl",
+			"/home/root/.config/remarkable",
+		}
+
+		err = manager.CreateBackup(destPath, sources)
+
+		a.backupMu.Lock()
+		a.backupCancelCh = nil
+		a.backupMu.Unlock()
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "backup:error", map[string]string{
+				"message": err.Error(),
+			})
+		} else {
+			runtime.EventsEmit(a.ctx, "backup:complete", map[string]string{
+				"message": "Backup completed successfully",
+				"path":    destPath,
+			})
+		}
+	}()
+}
+
+func (a *App) SelectRestoreFile() string {
+	archivePath, err := openFileDialog(a.ctx, "Select Backup to Restore")
+	if err != nil || archivePath == "" {
+		return ""
+	}
+
+	metadata, err := backup.ReadBackupMetadata(archivePath)
+	if err == nil && metadata != nil && metadata.DeviceID != "" {
+		a.mu.Lock()
+		currentDeviceID := a.connectedDeviceID
+		a.mu.Unlock()
+
+		if currentDeviceID != "" && metadata.DeviceID != currentDeviceID {
+			currentDeviceName := ""
+			if savedDevice, err := a.deviceStore.Get(currentDeviceID); err == nil {
+				currentDeviceName = savedDevice.Name
+			}
+			runtime.EventsEmit(a.ctx, "restore:device-mismatch", map[string]string{
+				"backupDevice":  metadata.DeviceName,
+				"currentDevice": currentDeviceName,
+			})
+		}
+	}
+
+	return archivePath
+}
+
+func (a *App) RestoreDeviceBackup(archivePath string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "restore:error", map[string]string{
+				"message": "Not connected to device",
+			})
+			return
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "restore:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		a.backupMu.Lock()
+		a.backupCancelCh = make(chan struct{})
+		cancelCh := a.backupCancelCh
+		a.backupMu.Unlock()
+
+		manager := backup.Manager{
+			Ctx:        a.ctx,
+			SftpClient: sftpClient,
+			SSHClient:  client,
+			CancelCh:   cancelCh,
+			ProgressFn: func(p backup.Progress) {
+				runtime.EventsEmit(a.ctx, "restore:progress", p)
+			},
+		}
+
+		err = manager.RestoreBackup(archivePath)
+
+		a.backupMu.Lock()
+		a.backupCancelCh = nil
+		a.backupMu.Unlock()
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "restore:error", map[string]string{
+				"message": err.Error(),
+			})
+		} else {
+			runtime.EventsEmit(a.ctx, "restore:complete", map[string]string{
+				"message": "Restore completed successfully! Please reboot your device for changes to take effect.",
+			})
+		}
+	}()
+}
+
+func (a *App) CancelBackup() {
+	a.backupMu.Lock()
+	defer a.backupMu.Unlock()
+
+	if a.backupCancelCh != nil {
+		close(a.backupCancelCh)
+		a.backupCancelCh = nil
+	}
+}
+
+func (a *App) RevealInFileManager(path string) {
+	dir := filepath.Dir(path)
+
+	// Check if running in Flatpak (/.flatpak-info exists)
+	if _, err := os.Stat("/.flatpak-info"); err == nil {
+		// Use xdg-open through flatpak-spawn to open on host
+		exec.Command("flatpak-spawn", "--host", "xdg-open", dir).Start()
+		return
+	}
+
+	open.Start(dir)
 }

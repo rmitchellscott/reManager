@@ -4,8 +4,15 @@ frontend/dist/
 frontend/.vite/
 .cache-go/
 
+# Flatpak Build
+build-dir/
+.flatpak-builder/
+repo/
+*.flatpak
+
 # Dependencies
 frontend/node_modules/
+vendor/
 
 # Generated Files
 frontend/wailsjs/

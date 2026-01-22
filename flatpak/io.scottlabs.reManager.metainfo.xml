@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.scottlabs.reManager</id>
+  <name>reManager</name>
+  <summary>Manage mods on reMarkable tablets</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.scottlabs">
+    <name>Mitchell Scott</name>
+  </developer>
+  <description>
+    <p>
+      A multi-platform desktop app for managing mods on reMarkable tablets.
+      Powered by the Vellum package manager.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Multi-Device Management: Save multiple sets of SSH credentials with password or key-based authentication</li>
+      <li>Package Management: Browse, install, upgrade, and uninstall packages with automatic dependency resolution</li>
+      <li>Maintenance Tools: Run maintenance commands and system tasks with real-time terminal output</li>
+    </ul>
+  </description>
+  <url type="homepage">https://github.com/rmitchellscott/reManager</url>
+  <url type="bugtracker">https://github.com/rmitchellscott/reManager/issues</url>
+  <launchable type="desktop-id">io.scottlabs.reManager.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image scheme_preference="light">https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/screenshot-linux-light.png</image>
+      <image scheme_preference="dark">https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/screenshot-linux-dark.png</image>
+      <caption>Main application window</caption>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.0.2" date="2026-01-14"/>
+  </releases>
+  <branding>
+    <color type="primary" scheme_preference="light">#f5f5f5</color>
+    <color type="primary" scheme_preference="dark">#1a1a1a</color>
+  </branding>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+</component>

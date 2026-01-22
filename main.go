@@ -33,7 +33,7 @@ func main() {
 			app,
 		},
 		Debug: options.Debug{
-			OpenInspectorOnStartup: true,
+			OpenInspectorOnStartup: debugMode,
 		},
 		Mac: &mac.Options{
 			WebviewIsTransparent: false,
