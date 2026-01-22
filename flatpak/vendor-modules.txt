@@ -368,6 +368,7 @@ github.com/rymdport/portal/filechooser
 github.com/rymdport/portal/internal/apis
 github.com/rymdport/portal/internal/convert
 github.com/rymdport/portal/internal/request
+github.com/rymdport/portal/openuri
 # github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 ## explicit; go 1.13
 github.com/sabhiram/go-gitignore

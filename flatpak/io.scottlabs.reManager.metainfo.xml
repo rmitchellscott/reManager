@@ -25,14 +25,13 @@
   <launchable type="desktop-id">io.scottlabs.reManager.desktop</launchable>
   <screenshots>
     <screenshot type="default">
-      <image scheme_preference="light">https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/screenshot-linux-light.png</image>
-      <image scheme_preference="dark">https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/screenshot-linux-dark.png</image>
+      <image>https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/screenshot-linux-light.png</image>
       <caption>Main application window</caption>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="0.0.2" date="2026-01-14"/>
+    <release version="1.0.1" date="2026-01-22"/>
   </releases>
   <branding>
     <color type="primary" scheme_preference="light">#f5f5f5</color>

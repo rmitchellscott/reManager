@@ -17,7 +17,7 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: reManager-x86_64.flatpak
+          bundle: reManager.flatpak
           manifest-path: flatpak/io.scottlabs.reManager.yml
           arch: x86_64
           cache-key: flatpak-builder-x86_64-${{ github.sha }}
@@ -35,7 +35,7 @@ jobs:
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: reManager-aarch64.flatpak
+          bundle: reManager.flatpak
           manifest-path: flatpak/io.scottlabs.reManager.yml
           arch: aarch64
           cache-key: flatpak-builder-aarch64-${{ github.sha }}

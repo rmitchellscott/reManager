@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/pkg/sftp"
 	"github.com/rymdport/portal/filechooser"
+	"github.com/rymdport/portal/openuri"
 	"github.com/skratchdot/open-golang/open"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
@@ -3423,10 +3423,17 @@ func (a *App) CancelBackup() {
 func (a *App) RevealInFileManager(path string) {
 	dir := filepath.Dir(path)
 
-	// Check if running in Flatpak (/.flatpak-info exists)
-	if _, err := os.Stat("/.flatpak-info"); err == nil {
-		// Use xdg-open through flatpak-spawn to open on host
-		exec.Command("flatpak-spawn", "--host", "xdg-open", dir).Start()
+	if isRunningInFlatpak() {
+		file, err := os.Open(dir)
+		if err != nil {
+			open.Start(dir)
+			return
+		}
+		defer file.Close()
+
+		if err := openuri.OpenDirectory("", file.Fd(), nil); err != nil {
+			open.Start(dir)
+		}
 		return
 	}
 
