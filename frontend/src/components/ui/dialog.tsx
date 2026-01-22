@@ -22,12 +22,12 @@ export function Dialog({ open, onOpenChange, children, closable = true, classNam
   if (!open) return null
 
   return (
-    <div className={cn("fixed inset-0 z-50 flex items-center justify-center", className)}>
+    <div className={cn("fixed inset-0 z-[60] flex items-center justify-center", className)}>
       <div
         className="fixed inset-0 z-40 bg-black/50 backdrop-blur-[1px]"
         onClick={() => closable && onOpenChange(false)}
       />
-      <div className="relative z-50 w-full px-4 flex justify-center pointer-events-none">
+      <div className="relative z-[60] w-full px-4 flex justify-center pointer-events-none">
         <div className="pointer-events-auto">{children}</div>
       </div>
     </div>

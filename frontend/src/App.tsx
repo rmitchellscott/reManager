@@ -1201,9 +1201,10 @@ export default function App() {
     setBootstrapError(null)
     setVellumUninstalling(false)
     setVellumUninstallOutput('')
-    setConnectionStatus('connected')
     setConnectionError(null)
     setReconnectAttempt(0)
+    setShowFileBrowser(false)
+    setShowConfigEditor(false)
 
     const devices = await window.go.main.App.GetSavedDevices()
     setSavedDevices(devices || [])

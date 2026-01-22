@@ -29,13 +29,12 @@ Powered by the [Vellum](https://github.com/vellum-dev) package manager. See the 
 
 ### Linux
 
-Ensure the required dependencies are installed:
-  - GTK 3
-  - WebKitGTK 4.1
-
-Download and run the [latest release](https://github.com/rmitchellscott/reManager/releases/latest).  
-Built for amd64 and arm64.  
-Flatpak coming soon.
+Download and run the [latest release](https://github.com/rmitchellscott/reManager/releases/latest):
+- Flatpak
+- Binaries
+   - Requires GTK 3 and WebGTK 4.1
+ 
+Built for x86_64 (amd64) and aarch64 (arm64)
 
 ### macOS
 

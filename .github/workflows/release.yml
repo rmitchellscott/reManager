@@ -249,11 +249,71 @@ jobs:
           name: reManager-windows-arm64
           path: build/bin/reManager-windows-arm64.zip
 
+  build-flatpak-x86_64:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: reManager-x86_64.flatpak
+          manifest-path: flatpak/io.scottlabs.reManager.yml
+          arch: x86_64
+          cache-key: flatpak-builder-x86_64-${{ github.sha }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reManager-flatpak-x86_64
+          path: reManager-x86_64.flatpak
+
+  build-flatpak-aarch64:
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: reManager-aarch64.flatpak
+          manifest-path: flatpak/io.scottlabs.reManager.yml
+          arch: aarch64
+          cache-key: flatpak-builder-aarch64-${{ github.sha }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reManager-flatpak-aarch64
+          path: reManager-aarch64.flatpak
+
   release:
-    needs: [build-macos, build-linux-amd64, build-linux-arm64, build-windows, build-windows-arm64]
+    needs: [build-macos, build-linux-amd64, build-linux-arm64, build-windows, build-windows-arm64, build-flatpak-x86_64, build-flatpak-aarch64]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@git-cliff
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          {
+            echo 'CHANGELOG<<EOF'
+            git cliff --latest --strip header | tail -n +2
+            echo EOF
+          } >> $GITHUB_OUTPUT
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -262,10 +322,12 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
             artifacts/reManager-macos-universal/reManager-macos-universal.zip
             artifacts/reManager-linux-amd64/reManager-linux-amd64.tar.gz
             artifacts/reManager-linux-arm64/reManager-linux-arm64.tar.gz
             artifacts/reManager-windows-amd64/reManager-windows-amd64.zip
             artifacts/reManager-windows-arm64/reManager-windows-arm64.zip
-          generate_release_notes: true
+            artifacts/reManager-flatpak-x86_64/reManager-x86_64.flatpak
+            artifacts/reManager-flatpak-aarch64/reManager-aarch64.flatpak
