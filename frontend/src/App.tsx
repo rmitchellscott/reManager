@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { applyTheme } from './main'
+import { applyThemeWithPortal } from './main'
+import { debugLog } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -189,8 +190,9 @@ declare global {
           RespondToDialog(confirmed: boolean): Promise<void>
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; theme: string }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string): Promise<void>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; theme: string; terminalTheme: string; editorTheme: string }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string, terminalTheme: string, editorTheme: string): Promise<void>
+          GetSystemColorScheme(): Promise<string>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           GetDeviceTimezone(): Promise<string>
           GetTimezoneStatus(): Promise<TimezoneStatus>
@@ -297,6 +299,9 @@ export default function App() {
   const [proxyMode, setProxyMode] = useState(true)
   const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
   const [theme, setTheme] = useState('system')
+  const [terminalTheme, setTerminalTheme] = useState('match')
+  const [editorTheme, setEditorTheme] = useState('match')
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
   const [vellumUninstalling, setVellumUninstalling] = useState(false)
@@ -396,6 +401,27 @@ export default function App() {
     return Array.from(cats).sort()
   }, [packages])
 
+  const resolvedAppTheme = useMemo((): 'dark' | 'light' => {
+    if (theme === 'system') {
+      return systemPrefersDark ? 'dark' : 'light'
+    }
+    return theme === 'dark' ? 'dark' : 'light'
+  }, [theme, systemPrefersDark])
+
+  const resolvedTerminalTheme = useMemo((): 'dark' | 'light' => {
+    if (terminalTheme === 'match') {
+      return resolvedAppTheme
+    }
+    return terminalTheme === 'dark' ? 'dark' : 'light'
+  }, [terminalTheme, resolvedAppTheme])
+
+  const resolvedEditorTheme = useMemo((): 'dark' | 'light' => {
+    if (editorTheme === 'match') {
+      return resolvedAppTheme
+    }
+    return editorTheme === 'dark' ? 'dark' : 'light'
+  }, [editorTheme, resolvedAppTheme])
+
   const compareVersions = (a: string, b: string): number => {
     const aParts = a.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
     const bParts = b.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
@@ -460,7 +486,7 @@ export default function App() {
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        console.log('[DEBUG] loadInitialData: starting')
+        debugLog('[DEBUG] loadInitialData: starting')
         const [keys, pkgs, tasks, devices, version, settings] = await Promise.all([
           window.go.main.App.GetDefaultSSHKeys(),
           window.go.main.App.GetPackages(''),
@@ -469,7 +495,7 @@ export default function App() {
           window.go.main.App.GetAppVersion(),
           window.go.main.App.GetSettings(),
         ])
-        console.log('[DEBUG] loadInitialData: got pkgs', pkgs?.length, pkgs)
+        debugLog('[DEBUG] loadInitialData: got pkgs', pkgs?.length, pkgs)
 
         setAvailableKeys(keys || [])
         if (keys && keys.length > 0) {
@@ -488,12 +514,41 @@ export default function App() {
         const loadedTheme = settings?.theme || 'system'
         setTheme(loadedTheme)
         localStorage.setItem('theme', loadedTheme)
+        setTerminalTheme(settings?.terminalTheme || 'match')
+        setEditorTheme(settings?.editorTheme || 'match')
       } catch (err) {
-        console.log('Could not load initial data:', err)
+        debugLog('Could not load initial data:', err)
         setSelectedKey('__other__')
       }
     }
     loadInitialData()
+  }, [])
+
+  useEffect(() => {
+    window.go.main.App.GetSystemColorScheme().then((scheme: string) => {
+      if (scheme === 'dark' || scheme === 'light') {
+        setSystemPrefersDark(scheme === 'dark')
+      }
+    }).catch(() => {})
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleChange = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches)
+    mediaQuery.addEventListener('change', handleChange)
+
+    let unsubscribeTheme: (() => void) | undefined
+    if (typeof window.runtime !== 'undefined') {
+      unsubscribeTheme = window.runtime.EventsOn('system-theme-changed', (...args: unknown[]) => {
+        const scheme = args[0] as string
+        if (scheme === 'dark' || scheme === 'light') {
+          setSystemPrefersDark(scheme === 'dark')
+        }
+      })
+    }
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange)
+      unsubscribeTheme?.()
+    }
   }, [])
 
   useEffect(() => {
@@ -545,9 +600,9 @@ export default function App() {
         const filteredPkgs = await window.go.main.App.GetPackages(deviceType)
         setPackages(filteredPkgs || [])
 
-        console.log('[DEBUG] handleConnectToSavedDevice: calling GetInstalledPackagesWithOsCheck')
+        debugLog('[DEBUG] handleConnectToSavedDevice: calling GetInstalledPackagesWithOsCheck')
         const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
-        console.log('[DEBUG] handleConnectToSavedDevice: result =', installedResult)
+        debugLog('[DEBUG] handleConnectToSavedDevice: result =', installedResult)
         setInstalledPackages(new Set(installedResult.packages || []))
         if (installedResult.osUpgraded) {
           setOsUpgradeDetected(true)
@@ -644,14 +699,14 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window.runtime === 'undefined') {
-      console.log('window.runtime is undefined, events will not work')
+      debugLog('window.runtime is undefined, events will not work')
       return
     }
-    console.log('Setting up event listeners')
+    debugLog('Setting up event listeners')
 
     const unsubscribeOutput = window.runtime.EventsOn('command:output', (...args: unknown[]) => {
       const data = args[0] as string
-      console.log('Received command:output:', data)
+      debugLog('Received command:output:', data)
 
       if (commandContextRef.current === 'maintenance') {
         setMaintenanceOutput((prev) => prev + data)
@@ -662,7 +717,7 @@ export default function App() {
 
     const unsubscribeDone = window.runtime.EventsOn('command:done', async (...args: unknown[]) => {
       const success = args[0] as boolean
-      console.log('Received command:done:', success)
+      debugLog('Received command:done:', success)
 
       if (runningSystemTaskRef.current || settingTimezoneRef.current) {
         if (!success && !manuallyStoppedRef.current) {
@@ -727,7 +782,7 @@ export default function App() {
 
     const unsubscribeProgress = window.runtime.EventsOn('install:progress', (...args: unknown[]) => {
       const progress = args[0] as InstallProgress
-      console.log('Received install:progress:', progress)
+      debugLog('Received install:progress:', progress)
       setCurrentComponent(progress.component)
       setProgressStatus(progress.status)
       setProgressTotal(progress.total)
@@ -750,7 +805,7 @@ export default function App() {
 
     const unsubscribeComplete = window.runtime.EventsOn('install:complete', async (...args: unknown[]) => {
       const result = args[0] as InstallResult
-      console.log('Received install:complete:', result)
+      debugLog('Received install:complete:', result)
 
       setLastInstallSuccess(result.success)
 
@@ -798,7 +853,7 @@ export default function App() {
 
     const unsubscribeDialog = window.runtime.EventsOn('hook:dialog', (...args: unknown[]) => {
       const dialog = args[0] as DialogRequest
-      console.log('Received hook:dialog:', dialog)
+      debugLog('Received hook:dialog:', dialog)
       setDialogRequest(dialog)
       setShowRebuildDialog(true)
     })
@@ -809,12 +864,12 @@ export default function App() {
     })
 
     const unsubscribeBootstrapPrompt = window.runtime.EventsOn('vellum:bootstrap-prompt', () => {
-      console.log('Received vellum:bootstrap-prompt')
+      debugLog('Received vellum:bootstrap-prompt')
       setVellumInstalled(false)
     })
 
     const unsubscribeBootstrapStart = window.runtime.EventsOn('vellum:bootstrap-start', () => {
-      console.log('Received vellum:bootstrap-start')
+      debugLog('Received vellum:bootstrap-start')
       setBootstrapping(true)
       setBootstrapOutput('')
       setBootstrapError(null)
@@ -826,25 +881,25 @@ export default function App() {
     })
 
     const unsubscribeBootstrapComplete = window.runtime.EventsOn('vellum:bootstrap-complete', () => {
-      console.log('Received vellum:bootstrap-complete')
+      debugLog('Received vellum:bootstrap-complete')
       setBootstrapping(false)
       setVellumInstalled(true)
     })
 
     const unsubscribeBootstrapError = window.runtime.EventsOn('vellum:bootstrap-error', (...args: unknown[]) => {
       const errMsg = args[0] as string
-      console.log('Received vellum:bootstrap-error:', errMsg)
+      debugLog('Received vellum:bootstrap-error:', errMsg)
       setBootstrapping(false)
       setBootstrapError(errMsg)
     })
 
     const unsubscribeVellumReady = window.runtime.EventsOn('vellum:ready', () => {
-      console.log('Received vellum:ready')
+      debugLog('Received vellum:ready')
       setVellumInstalled(true)
     })
 
     const unsubscribeVellumUninstallStart = window.runtime.EventsOn('vellum:uninstall-start', () => {
-      console.log('Received vellum:uninstall-start')
+      debugLog('Received vellum:uninstall-start')
       setVellumUninstalling(true)
       setVellumUninstallOutput('')
     })
@@ -855,7 +910,7 @@ export default function App() {
     })
 
     const unsubscribeVellumUninstallComplete = window.runtime.EventsOn('vellum:uninstall-complete', () => {
-      console.log('Received vellum:uninstall-complete')
+      debugLog('Received vellum:uninstall-complete')
       setVellumUninstalling(false)
       setVellumInstalled(false)
       setShowSettingsDialog(false)
@@ -863,20 +918,20 @@ export default function App() {
 
     const unsubscribeVellumUninstallError = window.runtime.EventsOn('vellum:uninstall-error', (...args: unknown[]) => {
       const errMsg = args[0] as string
-      console.log('Received vellum:uninstall-error:', errMsg)
+      debugLog('Received vellum:uninstall-error:', errMsg)
       setVellumUninstalling(false)
       setVellumUninstallOutput((prev) => prev + '\nError: ' + errMsg)
     })
 
     const unsubscribeHashtabMismatch = window.runtime.EventsOn('hashtab:version-mismatch', (...args: unknown[]) => {
       const status = args[0] as HashtabVersionStatus
-      console.log('Received hashtab:version-mismatch:', status)
+      debugLog('Received hashtab:version-mismatch:', status)
       setHashtabMismatch(status)
     })
 
     const unsubscribeTimezoneStatus = window.runtime.EventsOn('timezone:status', (...args: unknown[]) => {
       const status = args[0] as TimezoneStatus
-      console.log('Received timezone:status:', status)
+      debugLog('Received timezone:status:', status)
       if (status.deviceTimezone) {
         setDeviceTimezone(status.deviceTimezone)
         setSelectedTimezone(status.savedTimezone || status.deviceTimezone)
@@ -885,7 +940,7 @@ export default function App() {
 
     const unsubscribeTimezoneMismatch = window.runtime.EventsOn('timezone:mismatch', (...args: unknown[]) => {
       const status = args[0] as TimezoneStatus
-      console.log('Received timezone:mismatch:', status)
+      debugLog('Received timezone:mismatch:', status)
       setTimezoneMismatch(status)
       setDeviceTimezone(status.deviceTimezone)
       setSelectedTimezone(status.savedTimezone || status.deviceTimezone)
@@ -893,7 +948,7 @@ export default function App() {
 
     const unsubscribeTimezoneComplete = window.runtime.EventsOn('timezone:complete', (...args: unknown[]) => {
       const timezone = args[0] as string
-      console.log('Timezone set complete:', timezone)
+      debugLog('Timezone set complete:', timezone)
       settingTimezoneRef.current = false
       setSettingTimezone(false)
       setCommandRunning(false)
@@ -915,7 +970,7 @@ export default function App() {
 
     const unsubscribeOsMismatch = window.runtime.EventsOn('os:mismatch', (...args: unknown[]) => {
       const data = args[0] as { prevVersion: string; newVersion: string }
-      console.log('Received os:mismatch:', data)
+      debugLog('Received os:mismatch:', data)
       setOsMismatchDetected(true)
       setStoredOsVersion(data.prevVersion)
       setCurrentOsVersion(data.newVersion)
@@ -928,19 +983,19 @@ export default function App() {
         noConstraint: string[]
         fetchFailed: boolean
       }
-      console.log('Received upgrade:blocked:', compat)
+      debugLog('Received upgrade:blocked:', compat)
       setChecklistLoading(false)
     })
 
     const unsubscribeUpgradeError = window.runtime.EventsOn('upgrade:error', (...args: unknown[]) => {
       const errMsg = args[0] as string
-      console.log('Received upgrade:error:', errMsg)
+      debugLog('Received upgrade:error:', errMsg)
       setChecklistLoading(false)
     })
 
     const unsubscribeUpgradeComplete = window.runtime.EventsOn('upgrade:complete', (...args: unknown[]) => {
       const success = args[0] as boolean
-      console.log('Received upgrade:complete:', success)
+      debugLog('Received upgrade:complete:', success)
       setChecklistLoading(false)
       if (success) {
         setOsMismatchDetected(false)
@@ -950,7 +1005,7 @@ export default function App() {
 
     const unsubscribePackageUpgradeComplete = window.runtime.EventsOn('package-upgrade:complete', async (...args: unknown[]) => {
       const success = args[0] as boolean
-      console.log('Received package-upgrade:complete:', success)
+      debugLog('Received package-upgrade:complete:', success)
       setCommandRunning(false)
       setCommandContext(null)
       if (success) {
@@ -960,7 +1015,7 @@ export default function App() {
 
     const unsubscribeSystemTaskComplete = window.runtime.EventsOn('systemtask:complete', async (...args: unknown[]) => {
       const success = args[0] as boolean
-      console.log('Received systemtask:complete:', success)
+      debugLog('Received systemtask:complete:', success)
 
       const [hashtabStatus, tzStatus] = await Promise.all([
         window.go.main.App.CheckHashtabVersion(),
@@ -995,20 +1050,20 @@ export default function App() {
     })
 
     const unsubscribeAutoUpdate = window.runtime.EventsOn('autoupdate:enabled', () => {
-      console.log('Received autoupdate:enabled')
+      debugLog('Received autoupdate:enabled')
       setTimeout(() => setShowAutoUpdateBanner(true), 1000)
     })
 
     const unsubscribeConnectionLost = window.runtime.EventsOn('connection:lost', (...args: unknown[]) => {
       const data = args[0] as { reason: string; deviceId: string }
-      console.log('Received connection:lost:', data)
+      debugLog('Received connection:lost:', data)
       setConnectionStatus('lost')
       setConnectionError(data.reason)
     })
 
     const unsubscribeConnectionReconnecting = window.runtime.EventsOn('connection:reconnecting', (...args: unknown[]) => {
       const data = args[0] as { attempt: number; maxAttempts: number; deviceId: string }
-      console.log('Received connection:reconnecting:', data)
+      debugLog('Received connection:reconnecting:', data)
       setConnectionStatus('reconnecting')
       setReconnectAttempt(data.attempt)
       setReconnectMaxAttempts(data.maxAttempts)
@@ -1016,7 +1071,7 @@ export default function App() {
 
     const unsubscribeConnectionRestored = window.runtime.EventsOn('connection:restored', async (...args: unknown[]) => {
       const data = args[0] as { deviceId: string; device: string }
-      console.log('Received connection:restored:', data)
+      debugLog('Received connection:restored:', data)
       setConnectionStatus('connected')
       setConnectionError(null)
       setReconnectAttempt(0)
@@ -1025,7 +1080,7 @@ export default function App() {
 
     const unsubscribeConnectionFailed = window.runtime.EventsOn('connection:failed', (...args: unknown[]) => {
       const data = args[0] as { reason: string; deviceId: string }
-      console.log('Received connection:failed:', data)
+      debugLog('Received connection:failed:', data)
       setConnectionStatus('failed')
       setConnectionError(data.reason)
     })
@@ -1104,9 +1159,9 @@ export default function App() {
         const filteredPkgs = await window.go.main.App.GetPackages(deviceType)
         setPackages(filteredPkgs || [])
 
-        console.log('[DEBUG] handleConnect: calling GetInstalledPackagesWithOsCheck')
+        debugLog('[DEBUG] handleConnect: calling GetInstalledPackagesWithOsCheck')
         const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
-        console.log('[DEBUG] handleConnect: result =', installedResult)
+        debugLog('[DEBUG] handleConnect: result =', installedResult)
         setInstalledPackages(new Set(installedResult.packages || []))
         if (installedResult.osUpgraded) {
           setOsUpgradeDetected(true)
@@ -1202,6 +1257,7 @@ export default function App() {
     setVellumUninstalling(false)
     setVellumUninstallOutput('')
     setConnectionError(null)
+    setConnectionStatus('connected')
     setReconnectAttempt(0)
     setShowFileBrowser(false)
     setShowConfigEditor(false)
@@ -1210,19 +1266,21 @@ export default function App() {
     setSavedDevices(devices || [])
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string) => {
     setTabVisibility(newTabVisibility)
     setProxyMode(newProxyMode)
     setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
     setTheme(newTheme)
     localStorage.setItem('theme', newTheme)
-    applyTheme(newTheme)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newTheme)
+    await applyThemeWithPortal(newTheme)
+    setTerminalTheme(newTerminalTheme)
+    setEditorTheme(newEditorTheme)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newTheme, newTerminalTheme, newEditorTheme)
   }
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, theme)
+    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, theme, terminalTheme, editorTheme)
     setShowDnsErrorModal(false)
   }
 
@@ -1919,6 +1977,7 @@ export default function App() {
                   bootstrapOutput={bootstrapOutput}
                   bootstrapError={bootstrapError}
                   onInstall={() => window.go.main.App.BootstrapVellum()}
+                  terminalTheme={resolvedTerminalTheme}
                 />
               ) : osMismatchDetected && compatibilityStatus ? (
                 <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
@@ -2509,6 +2568,7 @@ export default function App() {
                         isConnected={connectionStatus === 'connected'}
                         visible={activeTab === 'utilities'}
                         onRunningChange={setIsTerminalRunning}
+                        theme={resolvedTerminalTheme}
                       />
                     </CardContent>
                   </Card>
@@ -2691,7 +2751,7 @@ export default function App() {
       </Dialog>
 
       {/* Hook Dialog (e.g., Rebuild Qt Resources) */}
-      <Dialog open={showRebuildDialog} onOpenChange={setShowRebuildDialog} className="z-[60]">
+      <Dialog open={showRebuildDialog} onOpenChange={setShowRebuildDialog} priority>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -2901,6 +2961,7 @@ export default function App() {
               }}
               canStop={(installing || uninstalling) || currentRunningCommand !== null}
               onStop={(installing || uninstalling) ? handleCancelInstallation : handleStopCommand}
+              terminalTheme={resolvedTerminalTheme}
             />
           )}
         </DialogContent>
@@ -3009,6 +3070,8 @@ export default function App() {
         proxyMode={proxyMode}
         suppressSystemFileWarnings={suppressSystemFileWarnings}
         theme={theme}
+        terminalTheme={terminalTheme}
+        editorTheme={editorTheme}
         onSaveSettings={handleSaveSettings}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
@@ -3120,7 +3183,7 @@ export default function App() {
                 </Button>
               </div>
 
-              <ConfigEditor isConnected={connectionStatus === 'connected'} />
+              <ConfigEditor isConnected={connectionStatus === 'connected'} theme={resolvedEditorTheme} />
             </div>
           </div>
         </div>

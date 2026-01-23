@@ -17,7 +17,9 @@ interface SettingsDialogProps {
   proxyMode: boolean
   suppressSystemFileWarnings: boolean
   theme: string
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string) => void
+  terminalTheme: string
+  editorTheme: string
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string, terminalTheme: string, editorTheme: string) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -33,6 +35,8 @@ export function SettingsDialog({
   proxyMode,
   suppressSystemFileWarnings,
   theme,
+  terminalTheme,
+  editorTheme,
   onSaveSettings,
   onUninstallVellum,
   uninstalling,
@@ -45,6 +49,8 @@ export function SettingsDialog({
   const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
   const [localSuppressSystemFileWarnings, setLocalSuppressSystemFileWarnings] = useState(suppressSystemFileWarnings)
   const [localTheme, setLocalTheme] = useState(theme)
+  const [localTerminalTheme, setLocalTerminalTheme] = useState(terminalTheme)
+  const [localEditorTheme, setLocalEditorTheme] = useState(editorTheme)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
 
@@ -52,6 +58,8 @@ export function SettingsDialog({
     localProxyMode !== proxyMode ||
     localSuppressSystemFileWarnings !== suppressSystemFileWarnings ||
     localTheme !== theme ||
+    localTerminalTheme !== terminalTheme ||
+    localEditorTheme !== editorTheme ||
     JSON.stringify(localTabVisibility) !== JSON.stringify({ ...defaultTabVisibility, ...tabVisibility })
 
   useEffect(() => {
@@ -60,20 +68,24 @@ export function SettingsDialog({
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
       setLocalTheme(theme)
+      setLocalTerminalTheme(terminalTheme)
+      setLocalEditorTheme(editorTheme)
     }
-  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, theme])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, theme, terminalTheme, editorTheme])
 
   const handleCancel = () => {
     setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
     setLocalProxyMode(proxyMode)
     setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
     setLocalTheme(theme)
+    setLocalTerminalTheme(terminalTheme)
+    setLocalEditorTheme(editorTheme)
     setShowUninstallConfirm(false)
     onOpenChange(false)
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localTheme)
+    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localTheme, localTerminalTheme, localEditorTheme)
     onOpenChange(false)
   }
 
@@ -84,6 +96,8 @@ export function SettingsDialog({
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
       setLocalTheme(theme)
+      setLocalTerminalTheme(terminalTheme)
+      setLocalEditorTheme(editorTheme)
     }
     onOpenChange(newOpen)
   }
@@ -110,13 +124,39 @@ export function SettingsDialog({
               <div className="flex items-center justify-between gap-4">
                 <Label htmlFor="theme-select" className="font-normal">Theme</Label>
                 <Select value={localTheme} onValueChange={setLocalTheme}>
-                  <SelectTrigger id="theme-select" className="w-32">
+                  <SelectTrigger id="theme-select" className="w-40">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="light">Light</SelectItem>
                     <SelectItem value="dark">Dark</SelectItem>
                     <SelectItem value="system">System</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="terminal-theme-select" className="font-normal">Terminal Theme</Label>
+                <Select value={localTerminalTheme} onValueChange={setLocalTerminalTheme}>
+                  <SelectTrigger id="terminal-theme-select" className="w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="match">Match reManager</SelectItem>
+                    <SelectItem value="dark">Dark</SelectItem>
+                    <SelectItem value="light">Light</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="editor-theme-select" className="font-normal">Editor Theme</Label>
+                <Select value={localEditorTheme} onValueChange={setLocalEditorTheme}>
+                  <SelectTrigger id="editor-theme-select" className="w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="match">Match reManager</SelectItem>
+                    <SelectItem value="dark">Dark</SelectItem>
+                    <SelectItem value="light">Light</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -211,6 +251,11 @@ export function SettingsDialog({
                   </Button>
                 ) : (
                   <div className="space-y-3">
+                    {uninstallOutput && (
+                      <div className="h-[100px] rounded-lg overflow-hidden">
+                        <TerminalWithCopy output={uninstallOutput} />
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 text-sm text-destructive">
                       <AlertTriangle className="h-4 w-4" />
                       <span>This will remove Vellum from the device</span>

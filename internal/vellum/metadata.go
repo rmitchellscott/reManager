@@ -9,6 +9,8 @@ import (
 	"time"
 
 	_ "embed"
+
+	"reManager/internal/debug"
 )
 
 const (
@@ -97,20 +99,20 @@ func NewMetadataStore() *MetadataStore {
 
 func (m *MetadataStore) Load() error {
 	if err := m.loadPackagesMetadata(); err != nil {
-		fmt.Printf("[DEBUG] HTTP fetch packages failed: %v, using fallback\n", err)
+		debug.Printf("[DEBUG] HTTP fetch packages failed: %v, using fallback\n", err)
 		if err := json.Unmarshal(fallbackPackagesJSON, &m.packages); err != nil {
 			return fmt.Errorf("failed to parse fallback packages metadata: %w", err)
 		}
 	}
-	fmt.Printf("[DEBUG] Loaded %d packages from metadata\n", len(m.packages.Packages))
+	debug.Printf("[DEBUG] Loaded %d packages from metadata\n", len(m.packages.Packages))
 
 	if err := m.loadRemanagerMetadata(); err != nil {
-		fmt.Printf("[DEBUG] HTTP fetch remanager failed: %v, using fallback\n", err)
+		debug.Printf("[DEBUG] HTTP fetch remanager failed: %v, using fallback\n", err)
 		if err := json.Unmarshal(fallbackRemanagerJSON, &m.remanager); err != nil {
 			return fmt.Errorf("failed to parse fallback remanager metadata: %w", err)
 		}
 	}
-	fmt.Printf("[DEBUG] Loaded %d remanager package configs\n", len(m.remanager.Packages))
+	debug.Printf("[DEBUG] Loaded %d remanager package configs\n", len(m.remanager.Packages))
 
 	return nil
 }
@@ -158,7 +160,7 @@ func (m *MetadataStore) Refresh() error {
 	}
 	m.mu.Unlock()
 
-	fmt.Printf("[DEBUG] Refreshed metadata: %d packages, %d remanager configs\n", len(m.packages.Packages), len(m.remanager.Packages))
+	debug.Printf("[DEBUG] Refreshed metadata: %d packages, %d remanager configs\n", len(m.packages.Packages), len(m.remanager.Packages))
 	return nil
 }
 

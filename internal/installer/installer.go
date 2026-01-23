@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"reManager/internal/component"
+	"reManager/internal/debug"
 	"reManager/internal/executor"
 	"reManager/internal/vellum"
 )
@@ -54,7 +55,7 @@ func (i *Installer) Install(
 	var errors []string
 	var dnsError bool
 
-	fmt.Printf("[DEBUG] Install starting for packages: %v (all: %v)\n", packageNames, allPackages)
+	debug.Printf("[DEBUG] Install starting for packages: %v (all: %v)\n", packageNames, allPackages)
 
 	if onProgress != nil {
 		onProgress(executor.ProgressInfo{
@@ -72,7 +73,7 @@ func (i *Installer) Install(
 
 	err := i.vellum.AddStreaming(func(line string) {
 		lastOutput = line
-		fmt.Printf("[DEBUG] vellum output: %s\n", line)
+		debug.Printf("[DEBUG] vellum output: %s\n", line)
 
 		if strings.Contains(line, "DNS:") {
 			dnsError = true
@@ -103,7 +104,7 @@ func (i *Installer) Install(
 
 	if err != nil {
 		errMsg := fmt.Sprintf("Installation failed: %v (output: %s)", err, lastOutput)
-		fmt.Printf("[DEBUG] Install error: %s\n", errMsg)
+		debug.Printf("[DEBUG] Install error: %s\n", errMsg)
 		errors = append(errors, errMsg)
 		if onProgress != nil {
 			onProgress(executor.ProgressInfo{
@@ -115,7 +116,7 @@ func (i *Installer) Install(
 			})
 		}
 	} else {
-		fmt.Printf("[DEBUG] All packages installed successfully\n")
+		debug.Printf("[DEBUG] All packages installed successfully\n")
 		if onProgress != nil {
 			onProgress(executor.ProgressInfo{
 				CurrentComponent: packageNames[len(packageNames)-1],
@@ -133,7 +134,7 @@ func (i *Installer) Install(
 		if hooks != nil && hooks.PostInstall != "" {
 			hookFunc := vellum.GetHook(hooks.PostInstall)
 			if hookFunc != nil {
-				fmt.Printf("[DEBUG] Running postInstall hook for %s\n", pkgName)
+				debug.Printf("[DEBUG] Running postInstall hook for %s\n", pkgName)
 				hookResult, err := hookFunc(ctx)
 				if err != nil {
 					errors = append(errors, fmt.Sprintf("Post-install hook failed for %s: %v", pkgName, err))
@@ -166,7 +167,7 @@ func (i *Installer) Uninstall(
 ) InstallResult {
 	var errors []string
 
-	fmt.Printf("[DEBUG] Uninstall starting for packages: %v (all: %v, recursive: %v)\n", packageNames, allPackages, useRecursive)
+	debug.Printf("[DEBUG] Uninstall starting for packages: %v (all: %v, recursive: %v)\n", packageNames, allPackages, useRecursive)
 
 	// Run preUninstall hooks for ALL packages first (before any actual uninstall)
 	for _, pkgName := range allPackages {
@@ -174,7 +175,7 @@ func (i *Installer) Uninstall(
 		if hooks != nil && hooks.PreUninstall != "" {
 			hookFunc := vellum.GetHook(hooks.PreUninstall)
 			if hookFunc != nil {
-				fmt.Printf("[DEBUG] Running preUninstall hook for %s\n", pkgName)
+				debug.Printf("[DEBUG] Running preUninstall hook for %s\n", pkgName)
 				hookResult, err := hookFunc(ctx)
 				if err != nil {
 					errors = append(errors, fmt.Sprintf("Pre-uninstall hook failed for %s: %v", pkgName, err))
@@ -259,7 +260,7 @@ func (i *Installer) Uninstall(
 		if hooks != nil && hooks.PostUninstall != "" {
 			hookFunc := vellum.GetHook(hooks.PostUninstall)
 			if hookFunc != nil {
-				fmt.Printf("[DEBUG] Running postUninstall hook for %s\n", pkgName)
+				debug.Printf("[DEBUG] Running postUninstall hook for %s\n", pkgName)
 				hookResult, err := hookFunc(ctx)
 				if err != nil {
 					errors = append(errors, fmt.Sprintf("Post-uninstall hook failed for %s: %v", pkgName, err))

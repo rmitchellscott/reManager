@@ -7,6 +7,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+
+	"reManager/internal/debug"
 )
 
 //go:embed all:frontend/dist
@@ -33,7 +35,7 @@ func main() {
 			app,
 		},
 		Debug: options.Debug{
-			OpenInspectorOnStartup: debugMode,
+			OpenInspectorOnStartup: debug.Enabled,
 		},
 		Mac: &mac.Options{
 			WebviewIsTransparent: false,

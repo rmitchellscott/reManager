@@ -8,26 +8,37 @@ interface InteractiveTerminalProps {
   isConnected: boolean
   visible: boolean
   onRunningChange?: (running: boolean) => void
+  theme?: 'dark' | 'light'
 }
 
 const lightTheme: ITheme = {
   background: '#fafafa',
   foreground: '#1a1a1a',
   cursor: '#1a1a1a',
+  selectionBackground: '#b4d5fe',
   black: '#1a1a1a',
-  red: '#d93526',
-  green: '#3a7d2c',
-  yellow: '#b58900',
-  blue: '#2563eb',
-  magenta: '#8b5cf6',
-  cyan: '#0891b2',
-  white: '#e5e5e5',
+  red: '#c41a16',
+  green: '#007400',
+  yellow: '#826b00',
+  blue: '#0451a5',
+  magenta: '#a626a4',
+  cyan: '#0997b3',
+  white: '#767676',
+  brightBlack: '#5c5c5c',
+  brightRed: '#d93526',
+  brightGreen: '#3a7d2c',
+  brightYellow: '#b58900',
+  brightBlue: '#2563eb',
+  brightMagenta: '#8b5cf6',
+  brightCyan: '#0891b2',
+  brightWhite: '#1a1a1a',
 }
 
 const darkTheme: ITheme = {
   background: '#1a1a1a',
   foreground: '#fafafa',
   cursor: '#fafafa',
+  selectionBackground: '#3a3a5a',
   black: '#3a3a3a',
   red: '#f87171',
   green: '#4ade80',
@@ -36,25 +47,29 @@ const darkTheme: ITheme = {
   magenta: '#a78bfa',
   cyan: '#22d3ee',
   white: '#e5e5e5',
+  brightBlack: '#666666',
+  brightRed: '#fca5a5',
+  brightGreen: '#86efac',
+  brightYellow: '#fde047',
+  brightBlue: '#93c5fd',
+  brightMagenta: '#c4b5fd',
+  brightCyan: '#67e8f9',
+  brightWhite: '#ffffff',
 }
 
-function getSystemTheme(): ITheme {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? darkTheme : lightTheme
-}
-
-export function InteractiveTerminal({ isConnected, visible, onRunningChange }: InteractiveTerminalProps) {
+export function InteractiveTerminal({ isConnected, visible, onRunningChange, theme }: InteractiveTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
-  const [isDark, setIsDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const isDark = theme === 'dark'
   const [shellRunning, setShellRunning] = useState(false)
 
   const initTerminal = useCallback(() => {
     if (!terminalRef.current || xtermRef.current) return
 
     const term = new XTerm({
-      theme: getSystemTheme(),
+      theme: isDark ? darkTheme : lightTheme,
       fontSize: 13,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       cursorBlink: true,
@@ -97,13 +112,6 @@ export function InteractiveTerminal({ isConnected, visible, onRunningChange }: I
     }
     window.addEventListener('resize', handleResize)
 
-    const handleThemeChange = (e: MediaQueryListEvent) => {
-      term.options.theme = e.matches ? darkTheme : lightTheme
-      setIsDark(e.matches)
-    }
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    mediaQuery.addEventListener('change', handleThemeChange)
-
     const unsubscribeOutput = window.runtime.EventsOn('shell:output', (...args: unknown[]) => {
       const data = args[0] as string
       term.write(data)
@@ -116,14 +124,13 @@ export function InteractiveTerminal({ isConnected, visible, onRunningChange }: I
 
     cleanupRef.current = () => {
       window.removeEventListener('resize', handleResize)
-      mediaQuery.removeEventListener('change', handleThemeChange)
       unsubscribeOutput()
       unsubscribeStopped()
       term.dispose()
       xtermRef.current = null
       fitAddonRef.current = null
     }
-  }, [])
+  }, [isDark])
 
   const startShell = useCallback(async () => {
     if (!isConnected) return
@@ -185,6 +192,12 @@ export function InteractiveTerminal({ isConnected, visible, onRunningChange }: I
       })
     }
   }, [visible, shellRunning])
+
+  useEffect(() => {
+    if (xtermRef.current) {
+      xtermRef.current.options.theme = isDark ? darkTheme : lightTheme
+    }
+  }, [isDark])
 
   useEffect(() => {
     return () => {

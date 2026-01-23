@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"reManager/internal/debug"
 	"reManager/internal/executor"
 )
 
@@ -23,9 +24,9 @@ func NewClient(exec executor.CommandExecutor) *Client {
 
 func (c *Client) IsInstalled() (bool, error) {
 	cmd := fmt.Sprintf("test -x %s && echo yes || echo no", VellumBin)
-	fmt.Printf("[DEBUG] IsInstalled running: %s\n", cmd)
+	debug.Printf("[DEBUG] IsInstalled running: %s\n", cmd)
 	output, err := c.executor.ExecuteWithOutput(cmd)
-	fmt.Printf("[DEBUG] IsInstalled output: %q, err: %v\n", output, err)
+	debug.Printf("[DEBUG] IsInstalled output: %q, err: %v\n", output, err)
 	if err != nil {
 		return false, err
 	}
@@ -46,9 +47,9 @@ func (c *Client) AddStreaming(onOutput func(line string), packages ...string) er
 		return nil
 	}
 	cmd := fmt.Sprintf("%s add %s", VellumBin, strings.Join(packages, " "))
-	fmt.Printf("[DEBUG] AddStreaming running: %s\n", cmd)
+	debug.Printf("[DEBUG] AddStreaming running: %s\n", cmd)
 	err := c.executor.ExecuteStreaming(cmd, onOutput)
-	fmt.Printf("[DEBUG] AddStreaming result: err=%v\n", err)
+	debug.Printf("[DEBUG] AddStreaming result: err=%v\n", err)
 	return err
 }
 
@@ -166,9 +167,9 @@ func (c *Client) GetOSVersionState() (*OSVersionState, error) {
 
 func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, error) {
 	cmd := fmt.Sprintf("%s check-os %s", VellumBin, targetOS)
-	fmt.Printf("[DEBUG] CheckOSCompatibility: running '%s'\n", cmd)
+	debug.Printf("[DEBUG] CheckOSCompatibility: running '%s'\n", cmd)
 	output, err := c.executor.ExecuteWithOutput(cmd)
-	fmt.Printf("[DEBUG] CheckOSCompatibility: output=%q, err=%v\n", output, err)
+	debug.Printf("[DEBUG] CheckOSCompatibility: output=%q, err=%v\n", output, err)
 
 	result := &CompatibilityResult{
 		Compatible:   []string{},
@@ -178,7 +179,7 @@ func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, er
 
 	if err != nil && output == "" {
 		result.FetchFailed = true
-		fmt.Printf("[DEBUG] CheckOSCompatibility: early return with FetchFailed=true\n")
+		debug.Printf("[DEBUG] CheckOSCompatibility: early return with FetchFailed=true\n")
 		return result, err
 	}
 
@@ -206,7 +207,7 @@ func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, er
 		result.FetchFailed = true
 	}
 
-	fmt.Printf("[DEBUG] CheckOSCompatibility: result=%+v\n", result)
+	debug.Printf("[DEBUG] CheckOSCompatibility: result=%+v\n", result)
 	return result, nil
 }
 
@@ -407,18 +408,13 @@ func parseBlockedPackages(output string) map[string][]string {
 }
 
 func (c *Client) UninstallVellum(removeAllPackages bool, onOutput func(line string)) error {
+	var cmd string
 	if removeAllPackages {
-		packages, err := c.List()
-		if err == nil && len(packages) > 0 {
-			onOutput("Removing all installed packages...\n")
-			cmd := fmt.Sprintf("%s del -r %s", VellumBin, strings.Join(packages, " "))
-			if err := c.executor.ExecuteStreaming(cmd, onOutput); err != nil {
-				return fmt.Errorf("failed to remove packages: %w", err)
-			}
-		}
+		onOutput("Removing Vellum and all packages...\n")
+		cmd = fmt.Sprintf("%s self uninstall --all -y", VellumBin)
+	} else {
+		onOutput("Removing Vellum...\n")
+		cmd = fmt.Sprintf("%s self uninstall -y", VellumBin)
 	}
-
-	onOutput("Removing Vellum...\n")
-	cmd := fmt.Sprintf("rm -rf %s", VellumRoot)
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }

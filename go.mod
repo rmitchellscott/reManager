@@ -5,7 +5,7 @@ go 1.23.0
 require (
 	github.com/klauspost/compress v1.17.11
 	github.com/pkg/sftp v1.13.10
-	github.com/rymdport/portal v0.4.2
+	github.com/rymdport/portal v0.4.3-0.20250830211640-988999c60cca
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
 	github.com/spf13/cobra v1.10.2
 	github.com/wailsapp/wails/v2 v2.11.0

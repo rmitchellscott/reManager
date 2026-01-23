@@ -13,6 +13,7 @@ interface ProgressModalProps {
   onClose: () => void
   canStop?: boolean
   onStop?: () => void
+  terminalTheme?: 'dark' | 'light'
 }
 
 export function ProgressModal({
@@ -24,6 +25,7 @@ export function ProgressModal({
   onClose,
   canStop,
   onStop,
+  terminalTheme,
 }: ProgressModalProps) {
   return (
     <>
@@ -37,7 +39,7 @@ export function ProgressModal({
         </p>
         <Progress value={percentage} />
         <div className="h-[400px] rounded-lg overflow-hidden overscroll-y-contain">
-          <TerminalWithCopy output={terminalOutput} />
+          <TerminalWithCopy output={terminalOutput} theme={terminalTheme} />
         </div>
       </div>
       <DialogFooter>

@@ -310,7 +310,8 @@ jobs:
         run: |
           {
             echo 'CHANGELOG<<EOF'
-            git cliff --latest --strip header | tail -n +2
+            git cliff --config https://gist.githubusercontent.com/rmitchellscott/823c46de7a1c3e6d57e9de90ee00d84a/raw/cliff.toml \
+              --latest --strip header | tail -n +2
             echo EOF
           } >> $GITHUB_OUTPUT
 

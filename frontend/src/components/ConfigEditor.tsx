@@ -27,6 +27,7 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 
 interface ConfigEditorProps {
   isConnected: boolean
+  theme?: 'dark' | 'light'
 }
 
 interface BackupInfo {
@@ -35,7 +36,7 @@ interface BackupInfo {
   size: number
 }
 
-export function ConfigEditor({ isConnected }: ConfigEditorProps) {
+export function ConfigEditor({ isConnected, theme }: ConfigEditorProps) {
   const [content, setContent] = useState("")
   const [originalContent, setOriginalContent] = useState("")
   const [isSaving, setIsSaving] = useState(false)
@@ -46,9 +47,7 @@ export function ConfigEditor({ isConnected }: ConfigEditorProps) {
   const [showError, setShowError] = useState(false)
   const [errorMessage, setErrorMessage] = useState("")
   const [backupsOpen, setBackupsOpen] = useState(false)
-  const [isDark, setIsDark] = useState(
-    window.matchMedia('(prefers-color-scheme: dark)').matches
-  )
+  const isDark = theme === 'dark'
   const [editorHeight, setEditorHeight] = useState(500)
 
   const validateContent = useCallback((text: string): boolean => {
@@ -188,12 +187,6 @@ export function ConfigEditor({ isConnected }: ConfigEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected])
 
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const handleChange = (e: MediaQueryListEvent) => setIsDark(e.matches)
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
-  }, [])
 
   useEffect(() => {
     const calculateHeight = () => {

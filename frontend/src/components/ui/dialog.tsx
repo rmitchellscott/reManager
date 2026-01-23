@@ -7,9 +7,10 @@ interface DialogProps {
   children: React.ReactNode
   closable?: boolean
   className?: string
+  priority?: boolean
 }
 
-export function Dialog({ open, onOpenChange, children, closable = true, className }: DialogProps) {
+export function Dialog({ open, onOpenChange, children, closable = true, className, priority = false }: DialogProps) {
   React.useEffect(() => {
     if (open) {
       document.body.style.overflow = 'hidden'
@@ -21,13 +22,16 @@ export function Dialog({ open, onOpenChange, children, closable = true, classNam
 
   if (!open) return null
 
+  const backdropZ = priority ? 'z-[65]' : 'z-[55]'
+  const contentZ = priority ? 'z-[70]' : 'z-[60]'
+
   return (
-    <div className={cn("fixed inset-0 z-[60] flex items-center justify-center", className)}>
+    <div className={cn(`fixed inset-0 ${contentZ} flex items-center justify-center`, className)}>
       <div
-        className="fixed inset-0 z-40 bg-black/50 backdrop-blur-[1px]"
+        className={`fixed inset-0 ${backdropZ} bg-black/50 backdrop-blur-[1px]`}
         onClick={() => closable && onOpenChange(false)}
       />
-      <div className="relative z-[60] w-full px-4 flex justify-center pointer-events-none">
+      <div className={`relative ${contentZ} w-full px-4 flex justify-center pointer-events-none`}>
         <div className="pointer-events-auto">{children}</div>
       </div>
     </div>

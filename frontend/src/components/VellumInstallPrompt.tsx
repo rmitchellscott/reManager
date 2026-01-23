@@ -9,6 +9,7 @@ interface VellumInstallPromptProps {
   bootstrapOutput: string
   bootstrapError: string | null
   onInstall: () => void
+  terminalTheme?: 'dark' | 'light'
 }
 
 export function VellumInstallPrompt({
@@ -16,6 +17,7 @@ export function VellumInstallPrompt({
   bootstrapOutput,
   bootstrapError,
   onInstall,
+  terminalTheme,
 }: VellumInstallPromptProps) {
   return (
     <Card>
@@ -42,7 +44,7 @@ export function VellumInstallPrompt({
             </div>
             {bootstrapOutput && (
               <div className="h-[300px] rounded-lg overflow-hidden">
-                <TerminalWithCopy output={bootstrapOutput} />
+                <TerminalWithCopy output={bootstrapOutput} theme={terminalTheme} />
               </div>
             )}
           </>

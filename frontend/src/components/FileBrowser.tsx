@@ -298,8 +298,14 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
     if (!deleteDialog) return
     try {
       await window.go.main.App.DeletePath(deleteDialog.path)
+      const deletedPath = deleteDialog.path
       setDeleteDialog(null)
-      loadDirectory(currentPath)
+      if (currentPath === deletedPath || currentPath.startsWith(deletedPath + '/')) {
+        const parentPath = deletedPath.substring(0, deletedPath.lastIndexOf('/')) || '/'
+        loadDirectory(parentPath)
+      } else {
+        loadDirectory(currentPath)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete')
     }

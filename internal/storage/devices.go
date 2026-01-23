@@ -10,8 +10,6 @@ import (
 	"runtime"
 	"sort"
 	"sync"
-
-	"github.com/zalando/go-keyring"
 )
 
 const serviceName = "reManager"
@@ -27,8 +25,9 @@ type SavedDevice struct {
 }
 
 type DeviceStore struct {
-	configPath string
-	mu         sync.RWMutex
+	configPath  string
+	secretStore *SecretStore
+	mu          sync.RWMutex
 }
 
 func NewDeviceStore() (*DeviceStore, error) {
@@ -41,8 +40,14 @@ func NewDeviceStore() (*DeviceStore, error) {
 		return nil, fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	secretStore, err := NewSecretStore(serviceName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secret store: %w", err)
+	}
+
 	return &DeviceStore{
-		configPath: filepath.Join(configDir, "devices.json"),
+		configPath:  filepath.Join(configDir, "devices.json"),
+		secretStore: secretStore,
 	}, nil
 }
 
@@ -147,14 +152,14 @@ func (ds *DeviceStore) Save(device SavedDevice, password string, keyPassphrase s
 	}
 
 	if device.AuthType == "password" && password != "" {
-		if err := keyring.Set(serviceName, "device:"+device.ID, password); err != nil {
-			return device.ID, fmt.Errorf("saved device but failed to store password in keyring: %w", err)
+		if err := ds.secretStore.Set("device:"+device.ID, password); err != nil {
+			return device.ID, fmt.Errorf("saved device but failed to store password: %w", err)
 		}
 	}
 
 	if device.AuthType == "key" && keyPassphrase != "" {
-		if err := keyring.Set(serviceName, "device:"+device.ID+":passphrase", keyPassphrase); err != nil {
-			return device.ID, fmt.Errorf("saved device but failed to store key passphrase in keyring: %w", err)
+		if err := ds.secretStore.Set("device:"+device.ID+":passphrase", keyPassphrase); err != nil {
+			return device.ID, fmt.Errorf("saved device but failed to store key passphrase: %w", err)
 		}
 	}
 
@@ -189,20 +194,20 @@ func (ds *DeviceStore) Delete(id string) error {
 	}
 
 	if authType == "password" {
-		keyring.Delete(serviceName, "device:"+id)
+		ds.secretStore.Delete("device:" + id)
 	} else if authType == "key" {
-		keyring.Delete(serviceName, "device:"+id+":passphrase")
+		ds.secretStore.Delete("device:" + id + ":passphrase")
 	}
 
 	return nil
 }
 
 func (ds *DeviceStore) GetPassword(id string) (string, error) {
-	return keyring.Get(serviceName, "device:"+id)
+	return ds.secretStore.Get("device:" + id)
 }
 
 func (ds *DeviceStore) GetKeyPassphrase(id string) (string, error) {
-	return keyring.Get(serviceName, "device:"+id+":passphrase")
+	return ds.secretStore.Get("device:" + id + ":passphrase")
 }
 
 func (ds *DeviceStore) getAllUnsafe() ([]SavedDevice, error) {

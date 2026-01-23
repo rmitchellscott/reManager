@@ -14,6 +14,8 @@ type Settings struct {
 	ProxyMode                  bool          `json:"proxyMode"`
 	SuppressSystemFileWarnings bool          `json:"suppressSystemFileWarnings"`
 	Theme                      string        `json:"theme"`
+	TerminalTheme              string        `json:"terminalTheme"`
+	EditorTheme                string        `json:"editorTheme"`
 }
 
 type SettingsStore struct {
@@ -62,6 +64,12 @@ func (s *SettingsStore) Load() (*Settings, error) {
 		if _, exists := raw["theme"]; !exists {
 			settings.Theme = "system"
 		}
+		if _, exists := raw["terminalTheme"]; !exists {
+			settings.TerminalTheme = "match"
+		}
+		if _, exists := raw["editorTheme"]; !exists {
+			settings.EditorTheme = "match"
+		}
 	}
 
 	// Merge with defaults so new tabs get their default values
@@ -100,5 +108,7 @@ func (s *SettingsStore) defaultSettings() *Settings {
 		ProxyMode:                  true,
 		SuppressSystemFileWarnings: false,
 		Theme:                      "system",
+		TerminalTheme:              "match",
+		EditorTheme:                "match",
 	}
 }
