@@ -17,11 +17,17 @@
     <ul>
       <li>Multi-Device Management: Save multiple sets of SSH credentials with password or key-based authentication</li>
       <li>Package Management: Browse, install, upgrade, and uninstall packages with automatic dependency resolution</li>
-      <li>Maintenance Tools: Run maintenance commands and system tasks with real-time terminal output</li>
+      <li>Maintenance Tools: Enable/disable auto-updates, set timezone, run package-provided scripts</li>
+      <li>Interactive Terminal: Access a complete shell session on your reMarkable</li>
+      <li>File Browser: Browse filesystem, transfer files to and from your reMarkable</li>
+      <li>Backup and Restore: Backup and restore document library and configuration</li>
+      <li>Configuration Editor: Edit system configuration files with syntax highlighting</li>
     </ul>
   </description>
   <url type="homepage">https://github.com/rmitchellscott/reManager</url>
   <url type="bugtracker">https://github.com/rmitchellscott/reManager/issues</url>
+  <url type="vcs-browser">https://github.com/rmitchellscott/reManager</url>
+  <url type="donation">https://buymeacoffee.com/rmitchellscott</url>
   <launchable type="desktop-id">io.scottlabs.reManager.desktop</launchable>
   <screenshots>
     <screenshot type="default">
@@ -31,7 +37,9 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="1.0.1" date="2026-01-22"/>
+    <release version="1.0.3" date="2026-01-23">
+      <url type="details">https://github.com/rmitchellscott/reManager/releases/tag/v1.0.3</url>
+    </release>
   </releases>
   <branding>
     <color type="primary" scheme_preference="light">#f5f5f5</color>

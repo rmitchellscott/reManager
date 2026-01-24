@@ -24,11 +24,25 @@ Powered by the [Vellum](https://github.com/vellum-dev) package manager. See the 
   - File browser: Browse reMarkable's filesystem, transfer files to and from your reMarkable.
   - Backup & Restore: Backup and restore reMarkable document library and configuration.
   - Configuration editor: Edit system configuration files with a WYSIWYG editor with syntax highlighting.
+ 
+## Reporting issues
+
+Please direct:
+- **Package-related issues or package requests** to the
+  [Vellum package repository](https://github.com/vellum-dev/vellum).
+- **Issues with the software being packaged** to the relevant upstream
+  projects, which are linked in the package index and the reManager sidebar.
+- **Issues with reManager itself** should be opened in this repository.
 
 ## Installation
 
 ### Linux
+#### Flathub
+```shell
+flatpak install flathub io.scottlabs.reManager
+```
 
+#### Manual
 Download and run the [latest release](https://github.com/rmitchellscott/reManager/releases/latest):
 - Flatpak
 - Binaries

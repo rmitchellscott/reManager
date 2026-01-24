@@ -1248,6 +1248,9 @@ func (a *App) StopShell() {
 	stdin := a.shellStdin
 	a.shellMu.Unlock()
 
+	if session != nil {
+		session.Signal(ssh.SIGHUP)
+	}
 	if stdin != nil {
 		stdin.Close()
 	}
@@ -2937,6 +2940,118 @@ func (a *App) UploadFile(remotePath string) {
 			"path": destPath,
 		})
 	}()
+}
+
+func (a *App) UploadFilesFromPaths(localPaths []string, remotePath string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": "Not connected",
+			})
+			return
+		}
+
+		if len(localPaths) == 0 {
+			return
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		for _, localPath := range localPaths {
+			if err := a.uploadSingleFile(client, sftpClient, localPath, remotePath); err != nil {
+				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+					"message": err.Error(),
+				})
+			}
+		}
+
+		runtime.EventsEmit(a.ctx, "filebrowser:upload-complete", map[string]string{
+			"path": remotePath,
+		})
+	}()
+}
+
+func (a *App) uploadSingleFile(client *ssh.Client, sftpClient *sftp.Client, localPath string, remotePath string) error {
+	localFile, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to open local file %s: %v", localPath, err)
+	}
+	defer localFile.Close()
+
+	stat, err := localFile.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat local file: %v", err)
+	}
+
+	if stat.IsDir() {
+		return nil
+	}
+
+	totalBytes := stat.Size()
+	filename := stat.Name()
+
+	destPath := remotePath
+	if strings.HasSuffix(remotePath, "/") || remotePath == "" {
+		destPath = path.Join(remotePath, filename)
+	}
+
+	if isSystemPath(destPath) {
+		if err := a.makeFilesystemWritable(client); err != nil {
+			return fmt.Errorf("failed to prepare filesystem: %v", err)
+		}
+		defer a.restoreFilesystem(client)
+	}
+
+	remoteFile, err := sftpClient.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to create remote file: %v", err)
+	}
+	defer remoteFile.Close()
+
+	buffer := make([]byte, 32*1024)
+	var transferred int64
+
+	for {
+		n, err := localFile.Read(buffer)
+		if n > 0 {
+			_, writeErr := remoteFile.Write(buffer[:n])
+			if writeErr != nil {
+				return fmt.Errorf("failed to write to remote file: %v", writeErr)
+			}
+			transferred += int64(n)
+
+			var percentage float64
+			if totalBytes > 0 {
+				percentage = float64(transferred) / float64(totalBytes) * 100
+			}
+			runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
+				Filename:   filename,
+				BytesSent:  transferred,
+				TotalBytes: totalBytes,
+				Percentage: percentage,
+				Status:     "uploading",
+			})
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read local file: %v", err)
+		}
+	}
+
+	return nil
 }
 
 func (a *App) DeletePath(path string) error {

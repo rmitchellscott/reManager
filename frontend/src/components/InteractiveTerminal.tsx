@@ -155,6 +155,7 @@ export function InteractiveTerminal({ isConnected, visible, onRunningChange, the
       const cols = dims?.cols || 80
 
       await window.go.main.App.StartShell(rows, cols)
+      term.focus()
     } catch (err) {
       console.error('Failed to start shell:', err)
       term.writeln(`\r\nFailed to start shell: ${err}`)

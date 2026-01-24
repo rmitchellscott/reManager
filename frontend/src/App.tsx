@@ -201,6 +201,7 @@ declare global {
           ListDirectory(path: string): Promise<{ name: string; path: string; size: number; isDir: boolean; modTime: number; mode: string }[]>
           DownloadFile(remotePath: string): void
           UploadFile(remotePath: string): void
+          UploadFilesFromPaths(localPaths: string[], remotePath: string): void
           DeletePath(path: string): Promise<void>
           RenamePath(oldPath: string, newPath: string): Promise<void>
           CreateDirectory(path: string): Promise<void>
@@ -558,6 +559,12 @@ export default function App() {
   }, [activeTab, step])
 
   useEffect(() => {
+    if (!updateServiceStatus.enabled) {
+      setShowAutoUpdateBanner(false)
+    }
+  }, [updateServiceStatus.enabled])
+
+  useEffect(() => {
     if (activeTab === 'mods' && !tabVisibility.mods) {
       setActiveTab('maintenance')
     }
@@ -728,6 +735,8 @@ export default function App() {
           setCommandRunning(false)
           setRunningSystemTask(null)
           setSettingTimezone(false)
+          const status = await window.go.main.App.GetUpdateServiceStatus()
+          setUpdateServiceStatus(status)
         }
         return
       }
@@ -1075,7 +1084,40 @@ export default function App() {
       setConnectionStatus('connected')
       setConnectionError(null)
       setReconnectAttempt(0)
+
+      try {
+        const info = await window.go.main.App.GetDeviceInfo()
+        debugLog('Refreshed device info on reconnect:', info)
+        setDeviceInfo(info)
+        if (data.device) {
+          setDevice(data.device)
+        }
+      } catch (err) {
+        debugLog('Failed to refresh device info on reconnect:', err)
+      }
+
       await rescanAllPackages()
+
+      try {
+        const [updateStatus, hashtabStatus, tzStatus] = await Promise.all([
+          window.go.main.App.GetUpdateServiceStatus(),
+          window.go.main.App.CheckHashtabVersion(),
+          window.go.main.App.GetTimezoneStatus(),
+        ])
+        setUpdateServiceStatus(updateStatus)
+        if (hashtabStatus.needsRebuild) {
+          setHashtabMismatch(hashtabStatus)
+        } else {
+          setHashtabMismatch(null)
+        }
+        if (tzStatus.needsUpdate) {
+          setTimezoneMismatch(tzStatus)
+        } else {
+          setTimezoneMismatch(null)
+        }
+      } catch (err) {
+        debugLog('Failed to refresh status on reconnect:', err)
+      }
     })
 
     const unsubscribeConnectionFailed = window.runtime.EventsOn('connection:failed', (...args: unknown[]) => {
@@ -3131,6 +3173,7 @@ export default function App() {
               <FileBrowser
                 isConnected={connectionStatus === 'connected'}
                 suppressSystemFileWarnings={suppressSystemFileWarnings}
+                isVisible={showFileBrowser}
               />
             </div>
           </div>

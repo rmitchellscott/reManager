@@ -80,6 +80,7 @@ interface TransferProgress {
 interface FileBrowserProps {
   isConnected: boolean
   suppressSystemFileWarnings: boolean
+  isVisible: boolean
 }
 
 interface SystemFileWarning {
@@ -134,8 +135,9 @@ function getFileIcon(file: FileInfo) {
   }
 }
 
-export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBrowserProps) {
+export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible }: FileBrowserProps) {
   const [showHidden, setShowHidden] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
   const [sortBy, setSortBy] = useState<'name' | 'size' | 'modTime'>('name')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
   const [currentPath, setCurrentPath] = useState('/home/root')
@@ -262,6 +264,74 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
       pathInputRef.current.select()
     }
   }, [isEditingPath])
+
+  useEffect(() => {
+    if (!isVisible) return
+
+    let dragCounter = 0
+
+    const handleDragEnter = (e: DragEvent) => {
+      e.preventDefault()
+      dragCounter++
+      if (e.dataTransfer?.types.includes('Files')) {
+        setIsDragging(true)
+      }
+    }
+
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault()
+      dragCounter--
+      if (dragCounter === 0) {
+        setIsDragging(false)
+      }
+    }
+
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault()
+    }
+
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault()
+      dragCounter = 0
+      setIsDragging(false)
+    }
+
+    const handleFileDrop = (...args: unknown[]) => {
+      dragCounter = 0
+      setIsDragging(false)
+      const paths = args[2] as string[]
+      if (!isConnected || !paths || paths.length === 0) return
+
+      const uploadFiles = () => {
+        window.go.main.App.UploadFilesFromPaths(paths, currentPath + '/')
+      }
+
+      if (isSystemPath(currentPath) && !suppressSystemFileWarnings) {
+        setSystemFileWarning({
+          action: 'upload',
+          path: currentPath,
+          onConfirm: uploadFiles,
+        })
+      } else {
+        uploadFiles()
+      }
+    }
+
+    window.addEventListener('dragenter', handleDragEnter)
+    window.addEventListener('dragleave', handleDragLeave)
+    window.addEventListener('dragover', handleDragOver)
+    window.addEventListener('drop', handleDrop)
+
+    const unsubFileDrop = window.runtime.EventsOn('wails:file-drop', handleFileDrop)
+
+    return () => {
+      window.removeEventListener('dragenter', handleDragEnter)
+      window.removeEventListener('dragleave', handleDragLeave)
+      window.removeEventListener('dragover', handleDragOver)
+      window.removeEventListener('drop', handleDrop)
+      unsubFileDrop()
+    }
+  }, [isVisible, isConnected, currentPath, suppressSystemFileWarnings])
 
   const handleNavigate = (file: FileInfo) => {
     if (file.isDir) {
@@ -404,7 +474,16 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings }: FileBro
   }, [files, showHidden, sortBy, sortOrder])
 
   return (
-    <div className="space-y-4" onClick={closeContextMenu}>
+    <div className="space-y-4 relative" onClick={closeContextMenu}>
+      {isDragging && (
+        <div className="absolute inset-0 z-40 bg-primary/10 border-2 border-dashed border-primary rounded-lg flex items-center justify-center pointer-events-none">
+          <div className="bg-background/95 px-6 py-4 rounded-lg shadow-lg text-center">
+            <Upload className="h-12 w-12 mx-auto mb-2 text-primary" />
+            <p className="text-lg font-medium">Drop files to upload</p>
+            <p className="text-sm text-muted-foreground">to {currentPath}</p>
+          </div>
+        </div>
+      )}
       {/* Breadcrumb / Path Editor */}
           <div className="flex items-center gap-2 overflow-x-auto p-2">
             <TooltipProvider>
