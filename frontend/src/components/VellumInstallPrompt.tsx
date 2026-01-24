@@ -36,35 +36,38 @@ export function VellumInstallPrompt({
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {bootstrapping ? (
-          <>
-            <div className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Installing...</span>
-            </div>
-            {bootstrapOutput && (
-              <div className="h-[300px] rounded-lg overflow-hidden">
-                <TerminalWithCopy output={bootstrapOutput} theme={terminalTheme} />
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <p className="text-sm text-muted-foreground">
-              Vellum is a lightweight package manager for reMarkable devices.
-              It enables easy installation and management of mods and extensions.
-            </p>
+        {bootstrapping && (
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="text-sm">Installing...</span>
+          </div>
+        )}
 
-            {bootstrapError && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>Installation failed: {bootstrapError}</AlertDescription>
-              </Alert>
+        {bootstrapError && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>Installation failed: {bootstrapError}</AlertDescription>
+          </Alert>
+        )}
+
+        {(bootstrapping || bootstrapError) && bootstrapOutput && (
+          <div className="h-[300px] rounded-lg overflow-hidden">
+            <TerminalWithCopy output={bootstrapOutput} theme={terminalTheme} />
+          </div>
+        )}
+
+        {!bootstrapping && (
+          <>
+            {!bootstrapError && (
+              <p className="text-sm text-muted-foreground">
+                Vellum is a lightweight package manager for reMarkable devices.
+                It enables easy installation and management of mods and extensions.
+              </p>
             )}
 
             <div className="flex justify-end pt-2">
               <Button onClick={onInstall}>
-                Install Vellum
+                {bootstrapError ? 'Retry Installation' : 'Install Vellum'}
               </Button>
             </div>
           </>

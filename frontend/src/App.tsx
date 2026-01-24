@@ -16,12 +16,15 @@ import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { ConsolidatedWarningBanner } from '@/components/ConsolidatedWarningBanner'
 import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
+import { VellumInstallSuccessDialog } from '@/components/VellumInstallSuccessDialog'
+import { VellumUninstallSuccessDialog } from '@/components/VellumUninstallSuccessDialog'
 import { SettingsDialog } from '@/components/SettingsDialog'
 import { InteractiveTerminal } from '@/components/InteractiveTerminal'
 import { FileBrowser } from '@/components/FileBrowser'
 import { ConfigEditor } from '@/components/ConfigEditor'
 import { BackupRestoreDialog } from '@/components/BackupRestore'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
+import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
@@ -215,6 +218,11 @@ declare global {
           RestoreDeviceBackup(archivePath: string): void
           CancelBackup(): void
           RevealInFileManager(path: string): void
+          RetryRestoreFilesystem(): Promise<void>
+          RebootDevice(): Promise<void>
+          IsSleepScreenSupported(): Promise<boolean>
+          SetSleepScreen(imagePath: string): Promise<void>
+          RestartXochitl(): Promise<void>
         }
       }
     }
@@ -247,6 +255,7 @@ export default function App() {
   const [bootstrapping, setBootstrapping] = useState(false)
   const [bootstrapOutput, setBootstrapOutput] = useState('')
   const [bootstrapError, setBootstrapError] = useState<string | null>(null)
+  const [bootstrapSuccess, setBootstrapSuccess] = useState(false)
   const [installing, setInstalling] = useState(false)
   const [output, setOutput] = useState('')
   const [currentComponent, setCurrentComponent] = useState('')
@@ -307,6 +316,8 @@ export default function App() {
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
   const [vellumUninstalling, setVellumUninstalling] = useState(false)
   const [vellumUninstallOutput, setVellumUninstallOutput] = useState('')
+  const [vellumUninstallError, setVellumUninstallError] = useState<string | null>(null)
+  const [vellumUninstallSuccess, setVellumUninstallSuccess] = useState(false)
 
   const [showProgressModal, setShowProgressModal] = useState(false)
   const [progressModalType, setProgressModalType] = useState<'install' | 'maintenance' | null>(null)
@@ -380,6 +391,9 @@ export default function App() {
   const [reconnectAttempt, setReconnectAttempt] = useState(0)
   const [reconnectMaxAttempts, setReconnectMaxAttempts] = useState(0)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+
+  const [showFilesystemRestoreError, setShowFilesystemRestoreError] = useState(false)
+  const [isRetryingFilesystemRestore, setIsRetryingFilesystemRestore] = useState(false)
 
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -882,6 +896,7 @@ export default function App() {
       setBootstrapping(true)
       setBootstrapOutput('')
       setBootstrapError(null)
+      setBootstrapSuccess(false)
     })
 
     const unsubscribeBootstrapOutput = window.runtime.EventsOn('vellum:bootstrap-output', (...args: unknown[]) => {
@@ -892,6 +907,7 @@ export default function App() {
     const unsubscribeBootstrapComplete = window.runtime.EventsOn('vellum:bootstrap-complete', () => {
       debugLog('Received vellum:bootstrap-complete')
       setBootstrapping(false)
+      setBootstrapSuccess(true)
       setVellumInstalled(true)
     })
 
@@ -911,6 +927,8 @@ export default function App() {
       debugLog('Received vellum:uninstall-start')
       setVellumUninstalling(true)
       setVellumUninstallOutput('')
+      setVellumUninstallError(null)
+      setVellumUninstallSuccess(false)
     })
 
     const unsubscribeVellumUninstallOutput = window.runtime.EventsOn('vellum:uninstall-output', (...args: unknown[]) => {
@@ -923,13 +941,14 @@ export default function App() {
       setVellumUninstalling(false)
       setVellumInstalled(false)
       setShowSettingsDialog(false)
+      setVellumUninstallSuccess(true)
     })
 
     const unsubscribeVellumUninstallError = window.runtime.EventsOn('vellum:uninstall-error', (...args: unknown[]) => {
       const errMsg = args[0] as string
       debugLog('Received vellum:uninstall-error:', errMsg)
       setVellumUninstalling(false)
-      setVellumUninstallOutput((prev) => prev + '\nError: ' + errMsg)
+      setVellumUninstallError(errMsg)
     })
 
     const unsubscribeHashtabMismatch = window.runtime.EventsOn('hashtab:version-mismatch', (...args: unknown[]) => {
@@ -1127,6 +1146,12 @@ export default function App() {
       setConnectionError(data.reason)
     })
 
+    const unsubscribeFilesystemRestoreError = window.runtime.EventsOn('filesystem:restore-error', (...args: unknown[]) => {
+      const data = args[0] as { message: string }
+      debugLog('Received filesystem:restore-error:', data)
+      setShowFilesystemRestoreError(true)
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
@@ -1160,6 +1185,7 @@ export default function App() {
       unsubscribeConnectionReconnecting()
       unsubscribeConnectionRestored()
       unsubscribeConnectionFailed()
+      unsubscribeFilesystemRestoreError()
     }
   }, [])
 
@@ -1306,6 +1332,35 @@ export default function App() {
 
     const devices = await window.go.main.App.GetSavedDevices()
     setSavedDevices(devices || [])
+  }
+
+  const handleSettingsDialogOpenChange = (open: boolean) => {
+    setShowSettingsDialog(open)
+    if (!open) {
+      setVellumUninstallOutput('')
+      setVellumUninstallError(null)
+      setVellumUninstallSuccess(false)
+    }
+  }
+
+  const handleFilesystemRestoreRetry = async () => {
+    setIsRetryingFilesystemRestore(true)
+    try {
+      await window.go.main.App.RetryRestoreFilesystem()
+      setShowFilesystemRestoreError(false)
+    } catch (err) {
+      debugLog('Filesystem restore retry failed:', err)
+    }
+    setIsRetryingFilesystemRestore(false)
+  }
+
+  const handleFilesystemRestoreReboot = async () => {
+    await window.go.main.App.RebootDevice()
+    setShowFilesystemRestoreError(false)
+  }
+
+  const handleFilesystemRestoreDismiss = () => {
+    setShowFilesystemRestoreError(false)
   }
 
   const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string) => {
@@ -2013,7 +2068,7 @@ export default function App() {
 
             {tabVisibility.mods && (
             <TabsContent value="mods">
-              {vellumInstalled === false ? (
+              {vellumInstalled === null ? null : vellumInstalled === false ? (
                 <VellumInstallPrompt
                   bootstrapping={bootstrapping}
                   bootstrapOutput={bootstrapOutput}
@@ -3105,7 +3160,7 @@ export default function App() {
 
       <SettingsDialog
         open={showSettingsDialog}
-        onOpenChange={setShowSettingsDialog}
+        onOpenChange={handleSettingsDialogOpenChange}
         isConnected={!!device}
         vellumInstalled={vellumInstalled}
         tabVisibility={tabVisibility}
@@ -3118,13 +3173,42 @@ export default function App() {
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
         uninstallOutput={vellumUninstallOutput}
+        uninstallError={vellumUninstallError}
         appVersion={appVersion}
+      />
+
+      <VellumInstallSuccessDialog
+        open={bootstrapSuccess}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBootstrapSuccess(false)
+            setBootstrapOutput('')
+          }
+        }}
+      />
+
+      <VellumUninstallSuccessDialog
+        open={vellumUninstallSuccess}
+        onOpenChange={(open) => {
+          if (!open) {
+            setVellumUninstallSuccess(false)
+            setVellumUninstallOutput('')
+          }
+        }}
       />
 
       <DnsErrorModal
         open={showDnsErrorModal}
         onClose={() => setShowDnsErrorModal(false)}
         onEnableProxyMode={handleEnableProxyModeFromModal}
+      />
+
+      <FilesystemRestoreErrorDialog
+        open={showFilesystemRestoreError}
+        onRetry={handleFilesystemRestoreRetry}
+        onReboot={handleFilesystemRestoreReboot}
+        onDismiss={handleFilesystemRestoreDismiss}
+        isRetrying={isRetryingFilesystemRestore}
       />
 
       {showFileBrowser && (

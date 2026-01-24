@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -2665,16 +2667,122 @@ func (a *App) restoreFilesystem(client *ssh.Client) error {
 		return nil
 	}
 
+	// Step 1: Restore /etc overlay (if workdir exists)
+	session1, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	session1.Run(`if [ -d /var/volatile/.etc-work ]; then rm -rf /var/volatile/.etc-work/* 2>/dev/null; mount -t overlay overlay -o rw,relatime,lowerdir=/etc,upperdir=/var/volatile/etc,workdir=/var/volatile/.etc-work /etc 2>/dev/null; fi`)
+	session1.Close()
+
+	// Step 2: Sync and remount root as ro
+	session2, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	session2.Run("sync && mount -o remount,ro /")
+	session2.Close()
+
+	// Step 3: Verify root is actually read-only
+	session3, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	output, _ := session3.CombinedOutput(`grep ' / ' /proc/mounts | grep -q '\bro\b' && echo "ro" || echo "rw"`)
+	session3.Close()
+
+	if strings.TrimSpace(string(output)) != "ro" {
+		return fmt.Errorf("failed to re-enable read-only root filesystem")
+	}
+
+	return nil
+}
+
+const (
+	restoreMaxRetries = 3
+	restoreRetryDelay = 1 * time.Second
+)
+
+// restoreFilesystemWithRetry attempts to restore the filesystem with automatic retries
+func (a *App) restoreFilesystemWithRetry(client *ssh.Client) error {
+	var lastErr error
+
+	for attempt := 1; attempt <= restoreMaxRetries; attempt++ {
+		lastErr = a.restoreFilesystem(client)
+		if lastErr == nil {
+			return nil
+		}
+
+		if attempt < restoreMaxRetries {
+			time.Sleep(restoreRetryDelay)
+		}
+	}
+
+	return lastErr
+}
+
+// restoreFilesystemDeferred wraps restore with retry logic and event emission for use in defer
+func (a *App) restoreFilesystemDeferred(client *ssh.Client) {
+	if err := a.restoreFilesystemWithRetry(client); err != nil {
+		runtime.EventsEmit(a.ctx, "filesystem:restore-error", map[string]interface{}{
+			"message": err.Error(),
+		})
+	}
+}
+
+// withWritableRoot wraps an operation that requires writable root, handling restore and error events
+func (a *App) withWritableRoot(client *ssh.Client, path string, operation func() error) error {
+	if !isSystemPath(path) {
+		return operation()
+	}
+
+	if err := a.makeFilesystemWritable(client); err != nil {
+		return err
+	}
+
+	opErr := operation()
+
+	restoreErr := a.restoreFilesystemWithRetry(client)
+	if restoreErr != nil {
+		runtime.EventsEmit(a.ctx, "filesystem:restore-error", map[string]interface{}{
+			"message":            restoreErr.Error(),
+			"operationSucceeded": opErr == nil,
+		})
+	}
+
+	return opErr
+}
+
+// RetryRestoreFilesystem attempts to restore the read-only filesystem state (called from frontend)
+func (a *App) RetryRestoreFilesystem() error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	return a.restoreFilesystem(client)
+}
+
+// RebootDevice triggers a device reboot
+func (a *App) RebootDevice() error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
 	}
 	defer session.Close()
 
-	// Restore /etc overlay and remount root as ro
-	cmd := `if [ -d /var/volatile/.etc-work ]; then rm -rf /var/volatile/.etc-work/* 2>/dev/null; mount -t overlay overlay -o rw,relatime,lowerdir=/etc,upperdir=/var/volatile/etc,workdir=/var/volatile/.etc-work /etc 2>/dev/null; fi; sync; mount -o remount,ro / 2>/dev/null`
-	session.Run(cmd) // Best effort, don't fail if this errors
-
+	session.Run("nohup sh -c 'sleep 1 && reboot' &>/dev/null &")
 	return nil
 }
 
@@ -2877,7 +2985,7 @@ func (a *App) UploadFile(remotePath string) {
 				})
 				return
 			}
-			defer a.restoreFilesystem(client)
+			defer a.restoreFilesystemDeferred(client)
 		}
 
 		sftpClient, err := sftp.NewClient(client)
@@ -3010,7 +3118,7 @@ func (a *App) uploadSingleFile(client *ssh.Client, sftpClient *sftp.Client, loca
 		if err := a.makeFilesystemWritable(client); err != nil {
 			return fmt.Errorf("failed to prepare filesystem: %v", err)
 		}
-		defer a.restoreFilesystem(client)
+		defer a.restoreFilesystemDeferred(client)
 	}
 
 	remoteFile, err := sftpClient.Create(destPath)
@@ -3068,7 +3176,7 @@ func (a *App) DeletePath(path string) error {
 		if err := a.makeFilesystemWritable(client); err != nil {
 			return err
 		}
-		defer a.restoreFilesystem(client)
+		defer a.restoreFilesystemDeferred(client)
 	}
 
 	sftpClient, err := sftp.NewClient(client)
@@ -3127,7 +3235,7 @@ func (a *App) RenamePath(oldPath, newPath string) error {
 		if err := a.makeFilesystemWritable(client); err != nil {
 			return err
 		}
-		defer a.restoreFilesystem(client)
+		defer a.restoreFilesystemDeferred(client)
 	}
 
 	sftpClient, err := sftp.NewClient(client)
@@ -3158,7 +3266,7 @@ func (a *App) CreateDirectory(path string) error {
 		if err := a.makeFilesystemWritable(client); err != nil {
 			return err
 		}
-		defer a.restoreFilesystem(client)
+		defer a.restoreFilesystemDeferred(client)
 	}
 
 	sftpClient, err := sftp.NewClient(client)
@@ -3585,4 +3693,136 @@ func (a *App) RevealInFileManager(path string) {
 	}
 
 	open.Start(dir)
+}
+
+func (a *App) IsSleepScreenSupported() bool {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return false
+	}
+
+	output, err := a.runCommand("grep REMARKABLE_RELEASE_VERSION /usr/share/remarkable/update.conf")
+	if err != nil {
+		output, err = a.runCommand("grep IMG_VERSION /etc/os-release")
+		if err != nil {
+			return false
+		}
+	}
+
+	parts := strings.SplitN(output, "=", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	version := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+
+	versionParts := strings.Split(version, ".")
+	if len(versionParts) < 2 {
+		return false
+	}
+
+	major, err := strconv.Atoi(versionParts[0])
+	if err != nil {
+		return false
+	}
+	minor, err := strconv.Atoi(versionParts[1])
+	if err != nil {
+		return false
+	}
+
+	// Supported: 3.2-3.13 or 3.20+
+	if major == 3 {
+		return (minor >= 2 && minor <= 13) || minor >= 20
+	}
+	return major > 3
+}
+
+func (a *App) SetSleepScreen(imagePath string) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	configPath := "/home/root/.config/remarkable/xochitl.conf"
+
+	file, err := sftpClient.Open(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to open config file: %w", err)
+	}
+	content, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	cfg, err := ini.Load(content)
+	if err != nil {
+		return fmt.Errorf("invalid config file syntax: %w", err)
+	}
+
+	section := cfg.Section("General")
+	section.Key("SleepScreenPath").SetValue(imagePath)
+
+	var buf bytes.Buffer
+	_, err = cfg.WriteTo(&buf)
+	if err != nil {
+		return fmt.Errorf("failed to serialize config: %w", err)
+	}
+
+	tmpPath := configPath + ".tmp"
+	tmpFile, err := sftpClient.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	_, err = tmpFile.Write(buf.Bytes())
+	if err != nil {
+		tmpFile.Close()
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	_ = sftpClient.Remove(configPath)
+	err = sftpClient.Rename(tmpPath, configPath)
+	if err != nil {
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	return nil
+}
+
+func (a *App) RestartXochitl() error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	_, err = session.CombinedOutput("systemctl restart xochitl")
+	if err != nil {
+		return fmt.Errorf("failed to restart xochitl: %w", err)
+	}
+
+	return nil
 }

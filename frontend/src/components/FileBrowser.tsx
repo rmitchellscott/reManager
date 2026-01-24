@@ -153,12 +153,18 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
   const [newFolderName, setNewFolderName] = useState('')
   const [contextMenu, setContextMenu] = useState<{ file: FileInfo; x: number; y: number } | null>(null)
   const [systemFileWarning, setSystemFileWarning] = useState<SystemFileWarning | null>(null)
+  const [sleepScreenSupported, setSleepScreenSupported] = useState(false)
+  const [restartXochitlDialog, setRestartXochitlDialog] = useState<{
+    message: string
+    onRestart: () => void
+  } | null>(null)
 
   const [isEditingPath, setIsEditingPath] = useState(false)
   const [editedPath, setEditedPath] = useState('')
   const pathInputRef = useRef<HTMLInputElement>(null)
 
   const isSystemPath = (path: string) => !path.startsWith('/home/root')
+  const isPngFile = (file: FileInfo) => !file.isDir && file.name.toLowerCase().endsWith('.png')
 
   const confirmSystemFileAction = (action: SystemFileWarning['action'], path: string, onConfirm: () => void) => {
     if (isSystemPath(path) && !suppressSystemFileWarnings) {
@@ -187,8 +193,10 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
   useEffect(() => {
     if (isConnected) {
       loadDirectory(currentPath)
+      window.go.main.App.IsSleepScreenSupported().then(setSleepScreenSupported).catch(() => setSleepScreenSupported(false))
     } else {
       setFiles([])
+      setSleepScreenSupported(false)
     }
   }, [isConnected])
 
@@ -441,6 +449,26 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
     closeContextMenu()
   }
 
+  const handleSetSleepScreen = async (file: FileInfo) => {
+    closeContextMenu()
+    try {
+      await window.go.main.App.SetSleepScreen(file.path)
+      setRestartXochitlDialog({
+        message: `Sleep screen set to "${file.name}". Restart reMarkable UI to apply the change?`,
+        onRestart: async () => {
+          try {
+            await window.go.main.App.RestartXochitl()
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to restart xochitl')
+          }
+          setRestartXochitlDialog(null)
+        }
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set sleep screen')
+    }
+  }
+
   const handleSort = (column: 'name' | 'size' | 'modTime') => {
     if (sortBy === column) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
@@ -673,7 +701,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
                             <MoreVertical className="h-4 w-4" />
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-40 p-1" align="end">
+                        <PopoverContent className={`${sleepScreenSupported && isPngFile(file) ? 'w-48' : 'w-40'} p-1`} align="end">
                           {!file.isDir && (
                             <Button
                               variant="ghost"
@@ -683,6 +711,17 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
                             >
                               <Download className="h-4 w-4 mr-2" />
                               Download
+                            </Button>
+                          )}
+                          {sleepScreenSupported && isPngFile(file) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-full justify-start font-normal"
+                              onClick={() => handleSetSleepScreen(file)}
+                            >
+                              <Image className="h-4 w-4 mr-2" />
+                              Set as sleep screen
                             </Button>
                           )}
                           <Button
@@ -730,10 +769,12 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
 
           {/* Context menu (positioned absolute) */}
           {contextMenu && (
-            <div
-              className="fixed bg-popover border rounded-md shadow-md p-1 z-50"
-              style={{ left: contextMenu.x, top: contextMenu.y }}
-            >
+            <>
+              <div className="fixed inset-0 z-40" onClick={closeContextMenu} />
+              <div
+                className={`fixed bg-popover border rounded-md shadow-md p-1 z-50 ${sleepScreenSupported && isPngFile(contextMenu.file) ? 'w-48' : 'w-40'}`}
+                style={{ left: contextMenu.x, top: contextMenu.y }}
+              >
               {!contextMenu.file.isDir && (
                 <Button
                   variant="ghost"
@@ -746,6 +787,20 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
                 >
                   <Download className="h-4 w-4 mr-2" />
                   Download
+                </Button>
+              )}
+              {sleepScreenSupported && isPngFile(contextMenu.file) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start font-normal"
+                  onClick={() => {
+                    handleSetSleepScreen(contextMenu.file)
+                    closeContextMenu()
+                  }}
+                >
+                  <Image className="h-4 w-4 mr-2" />
+                  Set as sleep screen
                 </Button>
               )}
               <Button
@@ -782,6 +837,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
                 Delete
               </Button>
             </div>
+            </>
           )}
 
       {/* Delete confirmation dialog */}
@@ -878,6 +934,26 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
               }}
             >
               Proceed Anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restart xochitl confirmation dialog */}
+      <Dialog open={restartXochitlDialog !== null} onOpenChange={(open) => !open && setRestartXochitlDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restart Required</DialogTitle>
+            <DialogDescription>
+              {restartXochitlDialog?.message}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={() => setRestartXochitlDialog(null)}>
+              Not Now
+            </Button>
+            <Button onClick={restartXochitlDialog?.onRestart}>
+              Restart Now
             </Button>
           </DialogFooter>
         </DialogContent>

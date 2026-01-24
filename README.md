@@ -47,6 +47,7 @@ Download and run the [latest release](https://github.com/rmitchellscott/reManage
 - Flatpak
 - Binaries
    - Requires GTK 3 and WebGTK 4.1
+   - Saving passwords requires GNOME keychain and the `login` collection available. [More info here](https://github.com/zalando/go-keyring?tab=readme-ov-file#linux-and-bsd).
  
 Built for x86_64 (amd64) and aarch64 (arm64)
 

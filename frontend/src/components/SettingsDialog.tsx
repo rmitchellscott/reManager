@@ -5,7 +5,8 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, AlertTriangle } from 'lucide-react'
+import { Loader2, AlertTriangle, AlertCircle } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 
 interface SettingsDialogProps {
@@ -23,6 +24,7 @@ interface SettingsDialogProps {
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
+  uninstallError: string | null
   appVersion: string
 }
 
@@ -41,6 +43,7 @@ export function SettingsDialog({
   onUninstallVellum,
   uninstalling,
   uninstallOutput,
+  uninstallError,
   appVersion,
 }: SettingsDialogProps) {
   const defaultTabVisibility = { mods: true, maintenance: true, utilities: true }
@@ -228,20 +231,38 @@ export function SettingsDialog({
                   reManager will no longer be able to install or manage packages unless Vellum is reinstalled.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                {uninstalling ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <span className="text-sm">Uninstalling Vellum...</span>
-                    </div>
-                    {uninstallOutput && (
-                      <div className="h-[200px] rounded-lg overflow-hidden">
-                        <TerminalWithCopy output={uninstallOutput} />
-                      </div>
-                    )}
+              <CardContent className="space-y-3">
+                {uninstalling && (
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="text-sm">Uninstalling Vellum...</span>
                   </div>
-                ) : !showUninstallConfirm ? (
+                )}
+
+                {uninstallError && (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>Uninstall failed: {uninstallError}</AlertDescription>
+                  </Alert>
+                )}
+
+                {(uninstalling || uninstallError) && uninstallOutput && (
+                  <div className="h-[200px] rounded-lg overflow-hidden">
+                    <TerminalWithCopy output={uninstallOutput} />
+                  </div>
+                )}
+
+                {uninstallError && (
+                  <Button
+                    variant="outline"
+                    onClick={() => onUninstallVellum(removePackages)}
+                    className="w-full"
+                  >
+                    Retry Uninstall
+                  </Button>
+                )}
+
+                {!uninstalling && !uninstallError && !showUninstallConfirm && (
                   <Button
                     variant="outline"
                     onClick={() => setShowUninstallConfirm(true)}
@@ -249,13 +270,10 @@ export function SettingsDialog({
                   >
                     Uninstall Vellum
                   </Button>
-                ) : (
-                  <div className="space-y-3">
-                    {uninstallOutput && (
-                      <div className="h-[100px] rounded-lg overflow-hidden">
-                        <TerminalWithCopy output={uninstallOutput} />
-                      </div>
-                    )}
+                )}
+
+                {!uninstalling && !uninstallError && showUninstallConfirm && (
+                  <>
                     <div className="flex items-center gap-2 text-sm text-destructive">
                       <AlertTriangle className="h-4 w-4" />
                       <span>This will remove Vellum from the device</span>
@@ -286,7 +304,7 @@ export function SettingsDialog({
                         Confirm Uninstall
                       </Button>
                     </div>
-                  </div>
+                  </>
                 )}
               </CardContent>
             </Card>
