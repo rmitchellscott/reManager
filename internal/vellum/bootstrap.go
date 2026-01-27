@@ -295,23 +295,13 @@ func (c *Client) BootstrapOfflineWithPackages(sshClient *ssh.Client, arch compon
 
 	proxy := NewProxy(c, sshClient, repoArch)
 
-	// 1. Upload APKINDEX first (needed for vellum update)
 	if err := proxy.UploadAPKINDEX(func(msg string) {
 		onOutput(msg + "\n")
 	}); err != nil {
 		return fmt.Errorf("failed to upload APKINDEX: %w", err)
 	}
-
-	// 2. Run vellum update to create virtual packages (remarkable-os, device type)
-	onOutput("Creating virtual packages...\n")
-	updateCmd := fmt.Sprintf("%s update", VellumBin)
-	if err := c.executor.ExecuteStreaming(updateCmd, onOutput); err != nil {
-		return fmt.Errorf("failed to create virtual packages: %w", err)
-	}
-
-	// 3. Install required packages
 	onOutput("Installing required packages...\n")
-	packages := []string{"mount-utils", "vellum-bash-completion"}
+	packages := []string{"vellum", "mount-utils", "vellum-bash-completion"}
 
 	_, err := proxy.ProxyDownload(packages, func(msg string) {
 		onOutput(msg + "\n")

@@ -14,6 +14,8 @@ const (
 	VellumBin  = "/home/root/.vellum/bin/vellum"
 )
 
+var CorePackages = []string{"vellum", "remarkable-os"}
+
 type Client struct {
 	executor executor.CommandExecutor
 }
@@ -31,6 +33,26 @@ func (c *Client) IsInstalled() (bool, error) {
 		return false, err
 	}
 	return strings.TrimSpace(output) == "yes", nil
+}
+
+func (c *Client) ValidateInstall() (valid bool, missing []string, err error) {
+	installed, err := c.List()
+	if err != nil {
+		return false, nil, err
+	}
+
+	installedSet := make(map[string]bool)
+	for _, pkg := range installed {
+		installedSet[pkg] = true
+	}
+
+	for _, core := range CorePackages {
+		if !installedSet[core] {
+			missing = append(missing, core)
+		}
+	}
+
+	return len(missing) == 0, missing, nil
 }
 
 func (c *Client) Add(packages ...string) error {

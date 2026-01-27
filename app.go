@@ -332,18 +332,17 @@ func (a *App) CheckVellumInstalled() bool {
 
 func (a *App) BootstrapVellum() {
 	go func() {
-		if a.vellumClient == nil {
-			runtime.EventsEmit(a.ctx, "vellum:bootstrap-error", "Not connected")
-			return
-		}
-
 		a.mu.Lock()
 		sshClient := a.client
 		a.mu.Unlock()
 
 		if sshClient == nil {
-			runtime.EventsEmit(a.ctx, "vellum:bootstrap-error", "SSH client not available")
+			runtime.EventsEmit(a.ctx, "vellum:bootstrap-error", "Not connected")
 			return
+		}
+
+		if a.vellumClient == nil {
+			a.vellumClient = vellum.NewClient(&wailsExecutor{app: a})
 		}
 
 		deviceType, err := a.detectDevice()
@@ -665,7 +664,13 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		if err == nil && !installed {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
 		} else if err == nil && installed {
+			valid, missing, verr := a.vellumClient.ValidateInstall()
+			debug.Printf("[DEBUG] Vellum validation: valid=%v, missing=%v, err=%v\n", valid, missing, verr)
 			runtime.EventsEmit(a.ctx, "vellum:ready", nil)
+			if verr == nil && !valid {
+				runtime.EventsEmit(a.ctx, "vellum:broken-install", missing)
+				return
+			}
 
 			osState, err := a.vellumClient.GetOSVersionState()
 			if err == nil && osState.Mismatch {
@@ -2536,7 +2541,7 @@ type SettingsInfo struct {
 	SuppressSystemFileWarnings bool            `json:"suppressSystemFileWarnings"`
 	Theme                      string          `json:"theme"`
 	TerminalTheme              string          `json:"terminalTheme"`
-	EditorTheme                string          `json:"editorTheme"`
+	EditorTheme string `json:"editorTheme"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
@@ -2621,6 +2626,39 @@ func (a *App) UninstallVellum(removeAllPackages bool) {
 
 		a.vellumClient = nil
 		runtime.EventsEmit(a.ctx, "vellum:uninstall-complete")
+	}()
+}
+
+func (a *App) CleanupBrokenVellum() {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "vellum:cleanup-error", "Not connected")
+			return
+		}
+
+		runtime.EventsEmit(a.ctx, "vellum:cleanup-start")
+
+		session, err := client.NewSession()
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "vellum:cleanup-error", err.Error())
+			return
+		}
+
+		err = session.Run("rm -rf " + vellum.VellumRoot)
+		session.Close()
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "vellum:cleanup-error", err.Error())
+			return
+		}
+
+		a.vellumClient = nil
+		runtime.EventsEmit(a.ctx, "vellum:cleanup-complete")
+		runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
 	}()
 }
 

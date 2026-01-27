@@ -28,7 +28,7 @@ import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErro
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -197,6 +197,7 @@ declare global {
           SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string, terminalTheme: string, editorTheme: string): Promise<void>
           GetSystemColorScheme(): Promise<string>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
+          CleanupBrokenVellum(): Promise<void>
           GetDeviceTimezone(): Promise<string>
           GetTimezoneStatus(): Promise<TimezoneStatus>
           SaveDeviceTimezone(timezone: string): Promise<void>
@@ -318,6 +319,8 @@ export default function App() {
   const [vellumUninstallOutput, setVellumUninstallOutput] = useState('')
   const [vellumUninstallError, setVellumUninstallError] = useState<string | null>(null)
   const [vellumUninstallSuccess, setVellumUninstallSuccess] = useState(false)
+  const [vellumBrokenInstall, setVellumBrokenInstall] = useState<string[] | null>(null)
+  const [vellumCleaning, setVellumCleaning] = useState(false)
 
   const [showProgressModal, setShowProgressModal] = useState(false)
   const [progressModalType, setProgressModalType] = useState<'install' | 'maintenance' | null>(null)
@@ -951,6 +954,29 @@ export default function App() {
       setVellumUninstallError(errMsg)
     })
 
+    const unsubscribeBrokenInstall = window.runtime.EventsOn('vellum:broken-install', (...args: unknown[]) => {
+      const missing = args[0] as string[]
+      debugLog('Received vellum:broken-install, missing:', missing)
+      setVellumBrokenInstall(missing)
+    })
+
+    const unsubscribeCleanupStart = window.runtime.EventsOn('vellum:cleanup-start', () => {
+      debugLog('Received vellum:cleanup-start')
+      setVellumCleaning(true)
+    })
+
+    const unsubscribeCleanupComplete = window.runtime.EventsOn('vellum:cleanup-complete', () => {
+      debugLog('Received vellum:cleanup-complete')
+      setVellumCleaning(false)
+      setVellumBrokenInstall(null)
+    })
+
+    const unsubscribeCleanupError = window.runtime.EventsOn('vellum:cleanup-error', (...args: unknown[]) => {
+      const errMsg = args[0] as string
+      debugLog('Received vellum:cleanup-error:', errMsg)
+      setVellumCleaning(false)
+    })
+
     const unsubscribeHashtabMismatch = window.runtime.EventsOn('hashtab:version-mismatch', (...args: unknown[]) => {
       const status = args[0] as HashtabVersionStatus
       debugLog('Received hashtab:version-mismatch:', status)
@@ -1169,6 +1195,10 @@ export default function App() {
       unsubscribeVellumUninstallOutput()
       unsubscribeVellumUninstallComplete()
       unsubscribeVellumUninstallError()
+      unsubscribeBrokenInstall()
+      unsubscribeCleanupStart()
+      unsubscribeCleanupComplete()
+      unsubscribeCleanupError()
       unsubscribeHashtabMismatch()
       unsubscribeTimezoneStatus()
       unsubscribeTimezoneMismatch()
@@ -1324,6 +1354,8 @@ export default function App() {
     setBootstrapError(null)
     setVellumUninstalling(false)
     setVellumUninstallOutput('')
+    setVellumBrokenInstall(null)
+    setVellumCleaning(false)
     setConnectionError(null)
     setConnectionStatus('connected')
     setReconnectAttempt(0)
@@ -2068,7 +2100,39 @@ export default function App() {
 
             {tabVisibility.mods && (
             <TabsContent value="mods">
-              {vellumInstalled === null ? null : vellumInstalled === false ? (
+              {vellumInstalled === null ? null : vellumBrokenInstall !== null ? (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="h-5 w-5 text-destructive" />
+                      <CardTitle>Vellum Installation Incomplete</CardTitle>
+                    </div>
+                    <CardDescription>
+                      Your Vellum installation is missing core packages and needs to be reinstalled.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <p className="text-sm text-muted-foreground">
+                      Missing packages: {vellumBrokenInstall.join(', ')}
+                    </p>
+                    <div className="flex justify-end pt-2">
+                      <Button
+                        onClick={() => window.go.main.App.CleanupBrokenVellum()}
+                        disabled={vellumCleaning}
+                      >
+                        {vellumCleaning ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Cleaning up...
+                          </>
+                        ) : (
+                          'Clean up and reinstall'
+                        )}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : vellumInstalled === false ? (
                 <VellumInstallPrompt
                   bootstrapping={bootstrapping}
                   bootstrapOutput={bootstrapOutput}
@@ -2145,7 +2209,7 @@ export default function App() {
                                 const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
                                 const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
                                 return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
                                     onClick={() => setSelectedPackage(pkg)}
@@ -2216,7 +2280,7 @@ export default function App() {
                                 const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
                                 const conflict = getConflict(pkg)
                                 return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 transition-colors ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
                                     onClick={() => setSelectedPackage(pkg)}

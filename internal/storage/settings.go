@@ -15,7 +15,7 @@ type Settings struct {
 	SuppressSystemFileWarnings bool          `json:"suppressSystemFileWarnings"`
 	Theme                      string        `json:"theme"`
 	TerminalTheme              string        `json:"terminalTheme"`
-	EditorTheme                string        `json:"editorTheme"`
+	EditorTheme string `json:"editorTheme"`
 }
 
 type SettingsStore struct {
