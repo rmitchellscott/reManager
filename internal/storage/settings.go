@@ -13,9 +13,10 @@ type Settings struct {
 	TabVisibility              TabVisibility `json:"tabVisibility"`
 	ProxyMode                  bool          `json:"proxyMode"`
 	SuppressSystemFileWarnings bool          `json:"suppressSystemFileWarnings"`
+	PreventSleep               bool          `json:"preventSleep"`
 	Theme                      string        `json:"theme"`
 	TerminalTheme              string        `json:"terminalTheme"`
-	EditorTheme string `json:"editorTheme"`
+	EditorTheme                string        `json:"editorTheme"`
 }
 
 type SettingsStore struct {
@@ -107,6 +108,7 @@ func (s *SettingsStore) defaultSettings() *Settings {
 		},
 		ProxyMode:                  true,
 		SuppressSystemFileWarnings: false,
+		PreventSleep:               true,
 		Theme:                      "system",
 		TerminalTheme:              "match",
 		EditorTheme:                "match",

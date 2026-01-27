@@ -17,10 +17,11 @@ interface SettingsDialogProps {
   tabVisibility: Record<string, boolean>
   proxyMode: boolean
   suppressSystemFileWarnings: boolean
+  preventSleep: boolean
   theme: string
   terminalTheme: string
   editorTheme: string
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string, terminalTheme: string, editorTheme: string) => void
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -36,6 +37,7 @@ export function SettingsDialog({
   tabVisibility,
   proxyMode,
   suppressSystemFileWarnings,
+  preventSleep,
   theme,
   terminalTheme,
   editorTheme,
@@ -51,6 +53,7 @@ export function SettingsDialog({
   const [localTabVisibility, setLocalTabVisibility] = useState({ ...defaultTabVisibility, ...tabVisibility })
   const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
   const [localSuppressSystemFileWarnings, setLocalSuppressSystemFileWarnings] = useState(suppressSystemFileWarnings)
+  const [localPreventSleep, setLocalPreventSleep] = useState(preventSleep)
   const [localTheme, setLocalTheme] = useState(theme)
   const [localTerminalTheme, setLocalTerminalTheme] = useState(terminalTheme)
   const [localEditorTheme, setLocalEditorTheme] = useState(editorTheme)
@@ -60,6 +63,7 @@ export function SettingsDialog({
   const hasChanges =
     localProxyMode !== proxyMode ||
     localSuppressSystemFileWarnings !== suppressSystemFileWarnings ||
+    localPreventSleep !== preventSleep ||
     localTheme !== theme ||
     localTerminalTheme !== terminalTheme ||
     localEditorTheme !== editorTheme ||
@@ -70,16 +74,18 @@ export function SettingsDialog({
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+      setLocalPreventSleep(preventSleep)
       setLocalTheme(theme)
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
     }
-  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, theme, terminalTheme, editorTheme])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme])
 
   const handleCancel = () => {
     setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
     setLocalProxyMode(proxyMode)
     setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+    setLocalPreventSleep(preventSleep)
     setLocalTheme(theme)
     setLocalTerminalTheme(terminalTheme)
     setLocalEditorTheme(editorTheme)
@@ -88,7 +94,7 @@ export function SettingsDialog({
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localTheme, localTerminalTheme, localEditorTheme)
+    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme)
     onOpenChange(false)
   }
 
@@ -98,6 +104,7 @@ export function SettingsDialog({
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+      setLocalPreventSleep(preventSleep)
       setLocalTheme(theme)
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
@@ -202,6 +209,20 @@ export function SettingsDialog({
                   id="proxy-mode"
                   checked={localProxyMode}
                   onCheckedChange={setLocalProxyMode}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="prevent-sleep" className="font-normal">Prevent Sleep</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Keep the device awake while connected by simulating periodic input.
+                  </p>
+                </div>
+                <Switch
+                  id="prevent-sleep"
+                  checked={localPreventSleep}
+                  onCheckedChange={setLocalPreventSleep}
+                  disabled={!isConnected}
                 />
               </div>
               <div className="flex items-center justify-between gap-4">

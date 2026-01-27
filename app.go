@@ -116,6 +116,9 @@ type App struct {
 	shellStdin   io.WriteCloser
 	shellMu      sync.Mutex
 	shellActive  bool
+
+	preventSleepStop chan struct{}
+	penInputDevice   string
 }
 
 func NewApp() *App {
@@ -314,6 +317,13 @@ func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
 		a.mu.Unlock()
 
 		a.startConnectionMonitor()
+
+		if settings, err := a.settingsStore.Load(); err == nil && settings.PreventSleep {
+			debug.Println("[DEBUG] ConnectToSavedDevice: auto-starting prevent sleep")
+			if err := a.StartPreventSleep(); err != nil {
+				debug.Printf("[DEBUG] ConnectToSavedDevice: StartPreventSleep failed: %v\n", err)
+			}
+		}
 	}
 
 	return result
@@ -756,6 +766,7 @@ func (a *App) Disconnect() {
 	a.reconnecting = false
 	a.reconnectMu.Unlock()
 
+	a.StopPreventSleep()
 	a.StopShell()
 
 	a.mu.Lock()
@@ -2539,17 +2550,20 @@ type SettingsInfo struct {
 	TabVisibility              map[string]bool `json:"tabVisibility"`
 	ProxyMode                  bool            `json:"proxyMode"`
 	SuppressSystemFileWarnings bool            `json:"suppressSystemFileWarnings"`
+	PreventSleep               bool            `json:"preventSleep"`
 	Theme                      string          `json:"theme"`
 	TerminalTheme              string          `json:"terminalTheme"`
-	EditorTheme string `json:"editorTheme"`
+	EditorTheme                string          `json:"editorTheme"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
 	if a.settingsStore == nil {
+		debug.Println("[DEBUG] GetSettings: settingsStore is nil")
 		return SettingsInfo{
 			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			ProxyMode:                  true,
 			SuppressSystemFileWarnings: false,
+			PreventSleep:               true,
 			Theme:                      "system",
 			TerminalTheme:              "match",
 			EditorTheme:                "match",
@@ -2557,26 +2571,31 @@ func (a *App) GetSettings() SettingsInfo {
 	}
 	settings, err := a.settingsStore.Load()
 	if err != nil {
+		debug.Printf("[DEBUG] GetSettings: failed to load: %v\n", err)
 		return SettingsInfo{
 			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			ProxyMode:                  true,
 			SuppressSystemFileWarnings: false,
+			PreventSleep:               true,
 			Theme:                      "system",
 			TerminalTheme:              "match",
 			EditorTheme:                "match",
 		}
 	}
+	debug.Printf("[DEBUG] GetSettings: loaded PreventSleep=%v\n", settings.PreventSleep)
 	return SettingsInfo{
 		TabVisibility:              settings.TabVisibility,
 		ProxyMode:                  settings.ProxyMode,
 		SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
+		PreventSleep:               settings.PreventSleep,
 		Theme:                      settings.Theme,
 		TerminalTheme:              settings.TerminalTheme,
 		EditorTheme:                settings.EditorTheme,
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, theme string, terminalTheme string, editorTheme string) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, preventSleep bool, theme string, terminalTheme string, editorTheme string) error {
+	debug.Printf("[DEBUG] SaveSettings: preventSleep=%v, isConnected=%v\n", preventSleep, a.IsConnected())
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
@@ -2584,10 +2603,22 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		TabVisibility:              storage.TabVisibility(tabVisibility),
 		ProxyMode:                  proxyMode,
 		SuppressSystemFileWarnings: suppressSystemFileWarnings,
+		PreventSleep:               preventSleep,
 		Theme:                      theme,
 		TerminalTheme:              terminalTheme,
 		EditorTheme:                editorTheme,
 	}
+
+	if preventSleep && a.IsConnected() {
+		debug.Println("[DEBUG] SaveSettings: starting prevent sleep")
+		if err := a.StartPreventSleep(); err != nil {
+			debug.Printf("[DEBUG] SaveSettings: StartPreventSleep failed: %v\n", err)
+		}
+	} else {
+		debug.Println("[DEBUG] SaveSettings: stopping prevent sleep")
+		a.StopPreventSleep()
+	}
+
 	return a.settingsStore.Save(settings)
 }
 
@@ -3863,4 +3894,169 @@ func (a *App) RestartXochitl() error {
 	}
 
 	return nil
+}
+
+// Input event bytes for BTN_TOUCH (arm64: 24 bytes per event)
+// Layout: time_sec(8) + time_usec(8) + type(2) + code(2) + value(4)
+var (
+	btnTouchDown = []byte{
+		0, 0, 0, 0, 0, 0, 0, 0, // time_sec
+		0, 0, 0, 0, 0, 0, 0, 0, // time_usec
+		0x01, 0x00, // type = EV_KEY (1)
+		0x4a, 0x01, // code = BTN_TOUCH (330 = 0x14a)
+		0x01, 0x00, 0x00, 0x00, // value = 1 (pressed)
+	}
+	btnTouchUp = []byte{
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0x01, 0x00,
+		0x4a, 0x01,
+		0x00, 0x00, 0x00, 0x00, // value = 0 (released)
+	}
+	synReport = []byte{
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0x00, 0x00, // type = EV_SYN (0)
+		0x00, 0x00, // code = SYN_REPORT (0)
+		0x00, 0x00, 0x00, 0x00,
+	}
+)
+
+func (a *App) findPenInputDevice() (string, error) {
+	debug.Println("[DEBUG] findPenInputDevice: searching for pen input device via BTN_STYLUS capability")
+	// Detect pen device by checking for BTN_STYLUS (331) capability
+	// BTN_STYLUS is bit 11 in the first word of key capabilities
+	// Pen devices have >= 6 words (64-bit) or >= 11 words (32-bit)
+	// Both architectures have BTN_STYLUS in the first printed word
+	cmd := `for ev in /sys/class/input/event*; do
+		caps=$(cat "$ev/device/capabilities/key" 2>/dev/null)
+		[ -z "$caps" ] && continue
+		count=$(echo "$caps" | wc -w)
+		[ "$count" -lt 6 ] && continue
+		first=$(echo "$caps" | awk '{print $1}')
+		if [ $((0x$first & 0x800)) -ne 0 ]; then
+			echo "/dev/input/$(basename $ev)"
+			exit 0
+		fi
+	done`
+	output, err := a.runCommand(cmd)
+	if err != nil {
+		debug.Printf("[DEBUG] findPenInputDevice: runCommand failed: %v\n", err)
+		return "", err
+	}
+	device := strings.TrimSpace(output)
+	debug.Printf("[DEBUG] findPenInputDevice: raw output=%q, device=%q\n", output, device)
+	if device == "" {
+		return "", fmt.Errorf("pen input device not found (no device with BTN_STYLUS capability)")
+	}
+	debug.Printf("[DEBUG] findPenInputDevice: found device: %s\n", device)
+	return device, nil
+}
+
+func (a *App) pokePenDevice(devicePath string) error {
+	debug.Printf("[DEBUG] pokePenDevice: poking device %s\n", devicePath)
+
+	// Detect architecture to use correct input_event size
+	// 32-bit ARM (RM1/RM2): 16 bytes, 64-bit ARM (Paper Pro): 24 bytes
+	// Use uname -m to detect: armv7l = 32-bit, aarch64 = 64-bit
+	cmd := fmt.Sprintf(`arch=$(uname -m)
+if [ "$arch" = "aarch64" ]; then
+  # 64-bit: 24-byte events (8+8+2+2+4)
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001\000\112\001\001\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001\000\112\001\000\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
+else
+  # 32-bit: 16-byte events (4+4+2+2+4)
+  printf '\000\000\000\000\000\000\000\000\001\000\112\001\001\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\001\000\112\001\000\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
+fi`,
+		devicePath, devicePath, devicePath, devicePath,
+		devicePath, devicePath, devicePath, devicePath)
+
+	_, err := a.runCommand(cmd)
+	if err != nil {
+		debug.Printf("[DEBUG] pokePenDevice: command failed: %v\n", err)
+		return err
+	}
+	debug.Println("[DEBUG] pokePenDevice: successfully wrote all events")
+	return nil
+}
+
+func (a *App) StartPreventSleep() error {
+	debug.Println("[DEBUG] StartPreventSleep: called")
+	a.mu.Lock()
+	if a.preventSleepStop != nil {
+		a.mu.Unlock()
+		debug.Println("[DEBUG] StartPreventSleep: already running, skipping")
+		return nil
+	}
+	a.mu.Unlock()
+
+	penDevice, err := a.findPenInputDevice()
+	if err != nil {
+		debug.Printf("[DEBUG] StartPreventSleep: findPenInputDevice failed: %v\n", err)
+		return fmt.Errorf("failed to find pen input device: %w", err)
+	}
+
+	a.mu.Lock()
+	a.penInputDevice = penDevice
+	a.preventSleepStop = make(chan struct{})
+	stopCh := a.preventSleepStop
+	a.mu.Unlock()
+
+	debug.Printf("[DEBUG] StartPreventSleep: starting goroutine for device %s\n", penDevice)
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+
+		debug.Println("[DEBUG] StartPreventSleep goroutine: performing initial poke")
+		if err := a.pokePenDevice(penDevice); err != nil {
+			debug.Printf("[DEBUG] StartPreventSleep goroutine: initial poke failed: %v\n", err)
+		}
+
+		for {
+			select {
+			case <-ticker.C:
+				debug.Println("[DEBUG] StartPreventSleep goroutine: ticker fired, poking device")
+				if err := a.pokePenDevice(penDevice); err != nil {
+					debug.Printf("[DEBUG] StartPreventSleep goroutine: poke failed: %v\n", err)
+				}
+			case <-stopCh:
+				debug.Println("[DEBUG] StartPreventSleep goroutine: stop channel closed, exiting")
+				return
+			}
+		}
+	}()
+
+	runtime.EventsEmit(a.ctx, "prevent-sleep-changed", true)
+	debug.Println("[DEBUG] StartPreventSleep: completed successfully")
+	return nil
+}
+
+func (a *App) StopPreventSleep() error {
+	debug.Println("[DEBUG] StopPreventSleep: called")
+	a.mu.Lock()
+	if a.preventSleepStop != nil {
+		debug.Println("[DEBUG] StopPreventSleep: closing stop channel")
+		close(a.preventSleepStop)
+		a.preventSleepStop = nil
+	} else {
+		debug.Println("[DEBUG] StopPreventSleep: not running, nothing to stop")
+	}
+	a.penInputDevice = ""
+	a.mu.Unlock()
+
+	runtime.EventsEmit(a.ctx, "prevent-sleep-changed", false)
+	return nil
+}
+
+func (a *App) IsPreventingSleep() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	running := a.preventSleepStop != nil
+	debug.Printf("[DEBUG] IsPreventingSleep: %v\n", running)
+	return running
 }
