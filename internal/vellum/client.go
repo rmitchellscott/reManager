@@ -288,7 +288,7 @@ func (c *Client) FetchURLs(packages ...string) ([]string, error) {
 		return nil, nil
 	}
 	args := strings.Join(packages, " ")
-	cmd := fmt.Sprintf("%s fetch --url --simulate -R %s", VellumBin, args)
+	cmd := fmt.Sprintf("%s fetch --url --simulate %s", VellumBin, args)
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		return nil, err
