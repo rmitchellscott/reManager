@@ -165,7 +165,7 @@ declare global {
           BootstrapVellum(): Promise<void>
           CheckPackageInstalled(pkgName: string): Promise<boolean>
           CheckHashtabVersion(): Promise<HashtabVersionStatus>
-          GetPackages(deviceType: string): Promise<PackageInfo[]>
+          GetPackages(deviceType: string, firmware: string, arch: string): Promise<PackageInfo[]>
           GetInstalledPackages(): Promise<string[]>
           GetInstalledPackagesWithOsCheck(): Promise<InstalledPackagesResult>
           RunReenable(): Promise<void>
@@ -507,7 +507,7 @@ export default function App() {
         debugLog('[DEBUG] loadInitialData: starting')
         const [keys, pkgs, tasks, devices, version, settings] = await Promise.all([
           window.go.main.App.GetDefaultSSHKeys(),
-          window.go.main.App.GetPackages(''),
+          window.go.main.App.GetPackages('', '', ''),
           window.go.main.App.GetSystemTasksInfo(),
           window.go.main.App.GetSavedDevices(),
           window.go.main.App.GetAppVersion(),
@@ -621,7 +621,8 @@ export default function App() {
         setDevice(deviceType)
         setDeviceInfo(info)
 
-        const filteredPkgs = await window.go.main.App.GetPackages(deviceType)
+        const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
+        const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
         setPackages(filteredPkgs || [])
 
         debugLog('[DEBUG] handleConnectToSavedDevice: calling GetInstalledPackagesWithOsCheck')
@@ -1254,7 +1255,8 @@ export default function App() {
         setDevice(deviceType)
         setDeviceInfo(info)
 
-        const filteredPkgs = await window.go.main.App.GetPackages(deviceType)
+        const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
+        const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
         setPackages(filteredPkgs || [])
 
         debugLog('[DEBUG] handleConnect: calling GetInstalledPackagesWithOsCheck')

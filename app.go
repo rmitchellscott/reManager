@@ -1543,17 +1543,14 @@ func containsString(slice []string, s string) bool {
 	return false
 }
 
-func (a *App) GetPackages(deviceType string) []PackageInfo {
-	debug.Printf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s\n", a.metadata, deviceType)
-	packages := a.metadata.GetAllPackages()
+func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
+	debug.Printf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s, firmware=%s, arch=%s\n", a.metadata, deviceType, firmware, arch)
+	packages := a.metadata.GetAllPackagesForDevice(deviceType, firmware, arch)
 	debug.Printf("[DEBUG] GetPackages got %d packages\n", len(packages))
 	var result []PackageInfo
 
 	for _, pkg := range packages {
 		if hiddenPackages[pkg.Name] {
-			continue
-		}
-		if len(pkg.Devices) > 0 && !containsString(pkg.Devices, deviceType) {
 			continue
 		}
 		var visibleDepends []string

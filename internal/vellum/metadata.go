@@ -308,3 +308,155 @@ func (m *MetadataStore) GetHooks(name string) *PackageHooks {
 	}
 	return nil
 }
+
+func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch string) []Package {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var packages []Package
+
+	for name, versions := range m.packages.Packages {
+		var bestVersion string
+		var bestInfo PackageVersion
+
+		for version, info := range versions {
+			if !isVersionCompatible(info, deviceType, firmware, arch) {
+				continue
+			}
+			if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+				bestVersion = version
+				bestInfo = info
+			}
+		}
+
+		if bestVersion == "" {
+			continue
+		}
+
+		pkg := Package{
+			Name:           name,
+			Version:        bestVersion,
+			Description:    bestInfo.Pkgdesc,
+			UpstreamAuthor: bestInfo.UpstreamAuthor,
+			Categories:     bestInfo.Categories,
+			License:        bestInfo.License,
+			URL:            bestInfo.URL,
+			OSMin:          bestInfo.OSMin,
+			OSMax:          bestInfo.OSMax,
+			Devices:        bestInfo.Devices,
+			Depends:        bestInfo.Depends,
+			Conflicts:      bestInfo.Conflicts,
+			Arch:           bestInfo.Arch,
+		}
+
+		if rmInfo, ok := m.remanager.Packages[name]; ok {
+			pkg.MaintenanceCommands = rmInfo.MaintenanceCommands
+			pkg.Hooks = rmInfo.Hooks
+		}
+
+		packages = append(packages, pkg)
+	}
+
+	return packages
+}
+
+func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string) bool {
+	if deviceType != "" && len(info.Devices) > 0 {
+		found := false
+		for _, d := range info.Devices {
+			if d == deviceType {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	if arch != "" && len(info.Arch) > 0 {
+		found := false
+		for _, a := range info.Arch {
+			if a == arch {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	if firmware != "" {
+		if info.OSMin != nil && *info.OSMin != "" {
+			if compareVersions(firmware, *info.OSMin) < 0 {
+				return false
+			}
+		}
+		if info.OSMax != nil && *info.OSMax != "" {
+			if compareVersions(firmware, *info.OSMax) >= 0 {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func compareVersions(a, b string) int {
+	aParts := parseVersionParts(a)
+	bParts := parseVersionParts(b)
+
+	maxLen := len(aParts)
+	if len(bParts) > maxLen {
+		maxLen = len(bParts)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var aNum, bNum int
+		if i < len(aParts) {
+			aNum = aParts[i]
+		}
+		if i < len(bParts) {
+			bNum = bParts[i]
+		}
+		if aNum > bNum {
+			return 1
+		}
+		if aNum < bNum {
+			return -1
+		}
+	}
+	return 0
+}
+
+func parseVersionParts(v string) []int {
+	var parts []int
+	var current string
+	for _, c := range v {
+		if c == '.' || c == '-' {
+			if current != "" {
+				parts = append(parts, parseNum(current))
+				current = ""
+			}
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		parts = append(parts, parseNum(current))
+	}
+	return parts
+}
+
+func parseNum(s string) int {
+	num := 0
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			num = num*10 + int(c-'0')
+		} else {
+			break
+		}
+	}
+	return num
+}
