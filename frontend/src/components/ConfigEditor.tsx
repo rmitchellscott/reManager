@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { handleError } from '@/lib/errorMessages'
 import Editor from '@monaco-editor/react'
 import ini from 'ini'
 import { Button } from '@/components/ui/button'
@@ -77,8 +78,7 @@ export function ConfigEditor({ isConnected, theme }: ConfigEditorProps) {
       setIsDirty(false)
       validateContent(fileContent)
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load config'
-      setErrorMessage(message)
+      setErrorMessage(handleError(err, 'Load config'))
       setShowError(true)
     }
   }, [isConnected, validateContent])
@@ -98,8 +98,7 @@ export function ConfigEditor({ isConnected, theme }: ConfigEditorProps) {
       setShowSuccess(true)
       setTimeout(() => setShowSuccess(false), 3000)
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to save config'
-      setErrorMessage(message)
+      setErrorMessage(handleError(err, 'Save config'))
       setShowError(true)
     } finally {
       setIsSaving(false)
@@ -115,8 +114,7 @@ export function ConfigEditor({ isConnected, theme }: ConfigEditorProps) {
       setShowSuccess(true)
       setTimeout(() => setShowSuccess(false), 3000)
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create backup'
-      setErrorMessage(message)
+      setErrorMessage(handleError(err, 'Create backup'))
       setShowError(true)
     }
   }, [isConnected])
@@ -129,8 +127,7 @@ export function ConfigEditor({ isConnected, theme }: ConfigEditorProps) {
       setShowSuccess(true)
       setTimeout(() => setShowSuccess(false), 3000)
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to restore backup'
-      setErrorMessage(message)
+      setErrorMessage(handleError(err, 'Restore backup'))
       setShowError(true)
     }
   }, [loadConfig])

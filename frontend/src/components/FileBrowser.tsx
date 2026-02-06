@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { handleError } from '@/lib/errorMessages'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
@@ -183,7 +184,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
       setFiles(result || [])
       setCurrentPath(path)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load directory')
+      setError(handleError(err, 'File browser'))
       throw err
     } finally {
       setLoading(false)
@@ -210,16 +211,16 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
       loadDirectory(currentPath)
     }
 
-    const handleError = (err: unknown) => {
-      const errorObj = err as { message: string }
-      setError(errorObj.message)
+    const handleFileBrowserError = (err: unknown) => {
+      const errorObj = err as { message: string; code?: string }
+      setError(errorObj.code ? handleError(errorObj, 'File transfer') : handleError(errorObj.message, 'File transfer'))
       setTransferProgress(null)
     }
 
     const unsubProgress = window.runtime.EventsOn('filebrowser:progress', handleProgress)
     const unsubDownload = window.runtime.EventsOn('filebrowser:download-complete', handleComplete)
     const unsubUpload = window.runtime.EventsOn('filebrowser:upload-complete', handleComplete)
-    const unsubError = window.runtime.EventsOn('filebrowser:error', handleError)
+    const unsubError = window.runtime.EventsOn('filebrowser:error', handleFileBrowserError)
 
     return () => {
       unsubProgress()
@@ -255,8 +256,8 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
     try {
       await loadDirectory(trimmedPath)
       setIsEditingPath(false)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid or inaccessible path')
+    } catch {
+      // Error already set by loadDirectory
     }
   }
 
@@ -385,7 +386,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
         loadDirectory(currentPath)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete')
+      setError(handleError(err, 'Delete'))
     }
   }
 
@@ -410,7 +411,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
       setRenameName('')
       loadDirectory(currentPath)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to rename')
+      setError(handleError(err, 'Rename'))
     }
   }
 
@@ -425,7 +426,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
         setNewFolderName('')
         loadDirectory(currentPath)
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to create folder')
+        setError(handleError(err, 'Create folder'))
       }
     }
 
@@ -459,13 +460,13 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
           try {
             await window.go.main.App.RestartXochitl()
           } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to restart xochitl')
+            setError(handleError(err, 'Restart UI'))
           }
           setRestartXochitlDialog(null)
         }
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to set sleep screen')
+      setError(handleError(err, 'Set sleep screen'))
     }
   }
 

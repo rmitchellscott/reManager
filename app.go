@@ -32,6 +32,7 @@ import (
 	"reManager/internal/component"
 	"reManager/internal/debug"
 	"reManager/internal/device"
+	apperrors "reManager/internal/errors"
 	"reManager/internal/executor"
 	"reManager/internal/installer"
 	"reManager/internal/platform"
@@ -167,9 +168,11 @@ func (a *App) shutdown(ctx context.Context) {
 }
 
 type ConnectionResult struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	Device  string `json:"device,omitempty"`
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
+	Code      string `json:"code,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
+	Device    string `json:"device,omitempty"`
 }
 
 type SSHKey struct {
@@ -278,16 +281,20 @@ func (a *App) UpdateDeviceName(id string, name string) error {
 func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
 	if a.deviceStore == nil {
 		return ConnectionResult{
-			Success: false,
-			Message: "Device store not initialized",
+			Success:   false,
+			Message:   "Device store not initialized.",
+			Code:      apperrors.ErrStorageFailed,
+			Retryable: false,
 		}
 	}
 
 	device, err := a.deviceStore.Get(id)
 	if err != nil {
 		return ConnectionResult{
-			Success: false,
-			Message: fmt.Sprintf("Device not found: %v", err),
+			Success:   false,
+			Message:   "Saved device not found. It may have been deleted.",
+			Code:      apperrors.ErrDeviceNotFound,
+			Retryable: false,
 		}
 	}
 
@@ -299,8 +306,10 @@ func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
 		password, err := a.deviceStore.GetPassword(id)
 		if err != nil {
 			return ConnectionResult{
-				Success: false,
-				Message: "Could not retrieve password. Please reconnect and save the device again.",
+				Success:   false,
+				Message:   "Could not retrieve password. Please reconnect and save the device again.",
+				Code:      apperrors.ErrKeyringFailed,
+				Retryable: false,
 			}
 		}
 		result = a.ConnectWithAuth(device.Host, "password", password, "")
@@ -551,9 +560,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	if authType == "key" {
 		keyData, err := os.ReadFile(keyPath)
 		if err != nil {
+			ue := apperrors.Classify(err)
 			return ConnectionResult{
-				Success: false,
-				Message: fmt.Sprintf("Failed to read key file: %v", err),
+				Success:   false,
+				Message:   ue.Message,
+				Code:      ue.Code,
+				Retryable: ue.Retryable,
 			}
 		}
 
@@ -564,15 +576,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			signer, err = ssh.ParsePrivateKey(keyData)
 		}
 		if err != nil {
-			if strings.Contains(err.Error(), "passphrase") {
-				return ConnectionResult{
-					Success: false,
-					Message: "Key requires a passphrase",
-				}
-			}
+			ue := apperrors.Classify(err)
 			return ConnectionResult{
-				Success: false,
-				Message: fmt.Sprintf("Failed to parse key: %v", err),
+				Success:   false,
+				Message:   ue.Message,
+				Code:      ue.Code,
+				Retryable: ue.Retryable,
 			}
 		}
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
@@ -625,13 +634,18 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	if err != nil {
 		if ctx.Err() == context.Canceled {
 			return ConnectionResult{
-				Success: false,
-				Message: "Connection cancelled",
+				Success:   false,
+				Message:   "Connection cancelled.",
+				Code:      apperrors.ErrOperationCancelled,
+				Retryable: false,
 			}
 		}
+		ue := apperrors.Classify(err)
 		return ConnectionResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to connect: %v", err),
+			Success:   false,
+			Message:   ue.Message,
+			Code:      ue.Code,
+			Retryable: ue.Retryable,
 		}
 	}
 
@@ -874,8 +888,10 @@ func (a *App) handleConnectionLost(err error) {
 	runtime.EventsEmit(a.ctx, "command:output", "\nConnection lost.\n")
 	runtime.EventsEmit(a.ctx, "command:done", false)
 
+	ue := apperrors.Classify(err)
 	runtime.EventsEmit(a.ctx, "connection:lost", map[string]interface{}{
-		"reason":   err.Error(),
+		"reason":   ue.Message,
+		"code":     ue.Code,
 		"deviceId": deviceID,
 	})
 
@@ -884,6 +900,7 @@ func (a *App) handleConnectionLost(err error) {
 	} else {
 		runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
 			"reason":   "Connection lost. Manual reconnection required.",
+			"code":     apperrors.ErrHostDown,
 			"deviceId": "",
 		})
 	}
@@ -942,6 +959,7 @@ func (a *App) attemptReconnect(deviceID string) {
 		if !isRetryableError(errors.New(result.Message)) {
 			runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
 				"reason":   result.Message,
+				"code":     result.Code,
 				"deviceId": deviceID,
 			})
 			return
@@ -960,7 +978,8 @@ func (a *App) attemptReconnect(deviceID string) {
 
 	debug.Printf("[%s] All reconnect attempts exhausted\n", time.Now().Format("15:04:05.000"))
 	runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
-		"reason":   "Maximum reconnection attempts exceeded",
+		"reason":   "Could not reconnect after multiple attempts. Please check your connection and try again.",
+		"code":     apperrors.ErrTimeout,
 		"deviceId": deviceID,
 	})
 }
@@ -2878,8 +2897,9 @@ func (a *App) DownloadFile(remotePath string) {
 		a.mu.Unlock()
 
 		if client == nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": "Not connected",
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
+				"message": "Not connected.",
+				"code":    apperrors.ErrHostDown,
 			})
 			return
 		}
@@ -2892,8 +2912,10 @@ func (a *App) DownloadFile(remotePath string) {
 
 		sftpClient, err := sftp.NewClient(client)
 		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			ue := apperrors.Classify(err)
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
+				"message": ue.Message,
+				"code":    ue.Code,
 			})
 			return
 		}
@@ -2901,8 +2923,10 @@ func (a *App) DownloadFile(remotePath string) {
 
 		remoteFile, err := sftpClient.Open(remotePath)
 		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to open remote file: %v", err),
+			ue := apperrors.Classify(err)
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
+				"message": ue.Message,
+				"code":    ue.Code,
 			})
 			return
 		}
@@ -2910,8 +2934,10 @@ func (a *App) DownloadFile(remotePath string) {
 
 		stat, err := remoteFile.Stat()
 		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to stat remote file: %v", err),
+			ue := apperrors.Classify(err)
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
+				"message": ue.Message,
+				"code":    ue.Code,
 			})
 			return
 		}

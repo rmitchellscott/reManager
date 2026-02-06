@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { handleError } from '@/lib/errorMessages'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -161,19 +162,19 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
     setSuccess(data.message)
   }, [startTime])
 
-  const handleError = useCallback((...args: unknown[]) => {
-    const data = args[0] as ErrorData
+  const handleBackupError = useCallback((...args: unknown[]) => {
+    const data = args[0] as ErrorData & { code?: string }
     setProgress(null)
-    setError(data.message)
+    setError(data.code ? handleError(data, 'Backup') : handleError(data.message, 'Backup'))
   }, [])
 
   useEffect(() => {
     const unsubBackupProgress = window.runtime.EventsOn('backup:progress', handleProgress)
     const unsubBackupComplete = window.runtime.EventsOn('backup:complete', handleComplete)
-    const unsubBackupError = window.runtime.EventsOn('backup:error', handleError)
+    const unsubBackupError = window.runtime.EventsOn('backup:error', handleBackupError)
     const unsubRestoreProgress = window.runtime.EventsOn('restore:progress', handleProgress)
     const unsubRestoreComplete = window.runtime.EventsOn('restore:complete', handleComplete)
-    const unsubRestoreError = window.runtime.EventsOn('restore:error', handleError)
+    const unsubRestoreError = window.runtime.EventsOn('restore:error', handleBackupError)
     const unsubDeviceMismatch = window.runtime.EventsOn('restore:device-mismatch', (...args: unknown[]) => {
       const data = args[0] as { backupDevice: string; currentDevice: string }
       setDeviceMismatch({ backup: data.backupDevice, current: data.currentDevice })
@@ -188,7 +189,7 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
       unsubRestoreError()
       unsubDeviceMismatch()
     }
-  }, [handleProgress, handleComplete, handleError])
+  }, [handleProgress, handleComplete, handleBackupError])
 
   // Start backup immediately when mode changes to 'backup'
   // For restore, prompt for file first, then show confirmation

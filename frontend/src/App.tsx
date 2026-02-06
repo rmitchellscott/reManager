@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { applyThemeWithPortal } from './main'
 import { debugLog } from '@/lib/utils'
+import { handleError, getUserFriendlyMessage } from '@/lib/errorMessages'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -139,8 +140,8 @@ declare global {
     go: {
       main: {
         App: {
-          Connect(host: string, password: string): Promise<{ success: boolean; message: string; device?: string }>
-          ConnectWithKey(host: string, keyPath: string, passphrase: string): Promise<{ success: boolean; message: string; device?: string }>
+          Connect(host: string, password: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
+          ConnectWithKey(host: string, keyPath: string, passphrase: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
           CancelConnect(): Promise<void>
           Disconnect(): Promise<void>
           IsConnected(): Promise<boolean>
@@ -159,7 +160,7 @@ declare global {
           GetSavedDevices(): Promise<SavedDevice[]>
           SaveDevice(id: string, name: string, host: string, authType: string, password: string, keyPath: string, keyPassphrase: string): Promise<string>
           DeleteSavedDevice(id: string): Promise<void>
-          ConnectToSavedDevice(id: string): Promise<{ success: boolean; message: string; device?: string }>
+          ConnectToSavedDevice(id: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
           UpdateDeviceName(id: string, name: string): Promise<void>
           CheckVellumInstalled(): Promise<boolean>
           BootstrapVellum(): Promise<void>
@@ -645,11 +646,11 @@ export default function App() {
         setMaintenanceCommands(maintCmds)
         setStep('select')
       } else {
-        setError(result.message)
+        setError(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
       }
     } catch (err) {
       if (thisAttempt !== connectAttemptRef.current) return
-      setError(String(err))
+      setError(handleError(err, 'Connection'))
     } finally {
       if (thisAttempt === connectAttemptRef.current) {
         setConnecting(false)
@@ -1110,10 +1111,10 @@ export default function App() {
     })
 
     const unsubscribeConnectionLost = window.runtime.EventsOn('connection:lost', (...args: unknown[]) => {
-      const data = args[0] as { reason: string; deviceId: string }
+      const data = args[0] as { reason: string; code?: string; deviceId: string }
       debugLog('Received connection:lost:', data)
       setConnectionStatus('lost')
-      setConnectionError(data.reason)
+      setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
     })
 
     const unsubscribeConnectionReconnecting = window.runtime.EventsOn('connection:reconnecting', (...args: unknown[]) => {
@@ -1167,10 +1168,10 @@ export default function App() {
     })
 
     const unsubscribeConnectionFailed = window.runtime.EventsOn('connection:failed', (...args: unknown[]) => {
-      const data = args[0] as { reason: string; deviceId: string }
+      const data = args[0] as { reason: string; code?: string; deviceId: string }
       debugLog('Received connection:failed:', data)
       setConnectionStatus('failed')
-      setConnectionError(data.reason)
+      setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
     })
 
     const unsubscribeFilesystemRestoreError = window.runtime.EventsOn('filesystem:restore-error', (...args: unknown[]) => {
@@ -1287,13 +1288,13 @@ export default function App() {
         setStep('select')
         setShowAddForm(false)
       } else {
-        setError(result.message)
+        setError(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
       }
     } catch (err) {
       if (thisAttempt !== connectAttemptRef.current) {
         return
       }
-      setError(String(err))
+      setError(handleError(err, 'Connection'))
     } finally {
       if (thisAttempt === connectAttemptRef.current) {
         setConnecting(false)
@@ -1315,14 +1316,12 @@ export default function App() {
 
       setShowSaveDeviceDialog(false)
     } catch (err) {
-      const errorMsg = String(err)
-      if (errorMsg.includes('failed to store password') || errorMsg.includes('failed to store key passphrase')) {
-        setSaveDeviceError('Device saved, but password could not be stored in system keyring. You may need to re-enter it on next connection.')
+      const friendlyMessage = handleError(err, 'Save device')
+      if (friendlyMessage.includes('keyring')) {
         const devices = await window.go.main.App.GetSavedDevices()
         setSavedDevices(devices || [])
-      } else {
-        setSaveDeviceError(`Failed to save device: ${errorMsg}`)
       }
+      setSaveDeviceError(friendlyMessage)
     }
   }
 
