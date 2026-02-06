@@ -1547,7 +1547,7 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 	debug.Printf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s, firmware=%s, arch=%s\n", a.metadata, deviceType, firmware, arch)
 	packages := a.metadata.GetAllPackagesForDevice(deviceType, firmware, arch)
 	debug.Printf("[DEBUG] GetPackages got %d packages\n", len(packages))
-	var result []PackageInfo
+	result := []PackageInfo{}
 
 	for _, pkg := range packages {
 		if hiddenPackages[pkg.Name] {

@@ -3,7 +3,7 @@ package component
 type DeviceArchitecture string
 
 const (
-	ArchArm32   DeviceArchitecture = "arm32"
+	ArchArm32   DeviceArchitecture = "armv7"
 	ArchAarch64 DeviceArchitecture = "aarch64"
 )
 
