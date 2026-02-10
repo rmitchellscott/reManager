@@ -1049,23 +1049,37 @@ export default function App() {
       setChecklistLoading(false)
     })
 
-    const unsubscribeUpgradeComplete = window.runtime.EventsOn('upgrade:complete', (...args: unknown[]) => {
-      const success = args[0] as boolean
-      debugLog('Received upgrade:complete:', success)
+    const unsubscribeUpgradeComplete = window.runtime.EventsOn('upgrade:complete', async (...args: unknown[]) => {
+      const result = args[0] as { success: boolean; dnsError: boolean }
+      debugLog('Received upgrade:complete:', result)
       setChecklistLoading(false)
-      if (success) {
+      if (result.success) {
         setOsMismatchDetected(false)
         setCompatibilityStatus(null)
+      }
+      if (result.dnsError && !dnsErrorShown) {
+        const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
+        if (!currentProxyMode) {
+          setShowDnsErrorModal(true)
+          setDnsErrorShown(true)
+        }
       }
     })
 
     const unsubscribePackageUpgradeComplete = window.runtime.EventsOn('package-upgrade:complete', async (...args: unknown[]) => {
-      const success = args[0] as boolean
-      debugLog('Received package-upgrade:complete:', success)
+      const result = args[0] as { success: boolean; dnsError: boolean }
+      debugLog('Received package-upgrade:complete:', result)
       setCommandRunning(false)
       setCommandContext(null)
-      if (success) {
+      if (result.success) {
         await rescanAllPackages()
+      }
+      if (result.dnsError && !dnsErrorShown) {
+        const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
+        if (!currentProxyMode) {
+          setShowDnsErrorModal(true)
+          setDnsErrorShown(true)
+        }
       }
     })
 

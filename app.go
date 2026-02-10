@@ -1693,8 +1693,12 @@ func (a *App) RunPackageUpgrade() {
 		runtime.EventsEmit(a.ctx, "terminal:clear")
 		runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum upgrade...\n")
 
+		var dnsError bool
 		err := a.vellumClient.UpgradeStreaming(func(line string) {
 			runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+			if strings.Contains(strings.ToLower(line), "dns:") {
+				dnsError = true
+			}
 		})
 
 		success := err == nil
@@ -1703,7 +1707,10 @@ func (a *App) RunPackageUpgrade() {
 		} else {
 			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
 		}
-		runtime.EventsEmit(a.ctx, "package-upgrade:complete", success)
+		runtime.EventsEmit(a.ctx, "package-upgrade:complete", map[string]interface{}{
+			"success":  success,
+			"dnsError": dnsError,
+		})
 	}()
 }
 
@@ -1868,18 +1875,28 @@ func (a *App) RunUpgrade() {
 		runtime.EventsEmit(a.ctx, "terminal:clear")
 		runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum upgrade...\n")
 
+		var dnsError bool
 		err = a.vellumClient.UpgradeStreaming(func(line string) {
 			runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+			if strings.Contains(strings.ToLower(line), "dns:") {
+				dnsError = true
+			}
 		})
 
 		if err != nil {
 			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
-			runtime.EventsEmit(a.ctx, "upgrade:complete", false)
+			runtime.EventsEmit(a.ctx, "upgrade:complete", map[string]interface{}{
+				"success":  false,
+				"dnsError": dnsError,
+			})
 			return
 		}
 
 		runtime.EventsEmit(a.ctx, "terminal:output", "\nUpgrade completed successfully.\n")
-		runtime.EventsEmit(a.ctx, "upgrade:complete", true)
+		runtime.EventsEmit(a.ctx, "upgrade:complete", map[string]interface{}{
+			"success":  true,
+			"dnsError": dnsError,
+		})
 	}()
 }
 

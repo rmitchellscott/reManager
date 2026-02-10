@@ -72,7 +72,8 @@ func Classify(err error) *UserError {
 	// DNS errors
 	if strings.Contains(errStr, "no such host") ||
 		(strings.Contains(errStr, "lookup") && strings.Contains(errStr, "failed")) ||
-		strings.Contains(errStr, "could not resolve") {
+		strings.Contains(errStr, "could not resolve") ||
+		strings.Contains(errStr, "dns:") {
 		return New(ErrDNSFailed, "Could not resolve hostname. Check the address or try using an IP address.", err, false)
 	}
 

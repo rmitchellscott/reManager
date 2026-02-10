@@ -75,7 +75,7 @@ func (i *Installer) Install(
 		lastOutput = line
 		debug.Printf("[DEBUG] vellum output: %s\n", line)
 
-		if strings.Contains(line, "DNS:") {
+		if strings.Contains(strings.ToLower(line), "dns:") {
 			dnsError = true
 		}
 
