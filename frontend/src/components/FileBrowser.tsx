@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dialog'
 import {
   Popover,
+  PopoverClose,
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
@@ -440,7 +441,11 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
 
   const handleContextMenu = (e: React.MouseEvent, file: FileInfo) => {
     e.preventDefault()
-    setContextMenu({ file, x: e.clientX, y: e.clientY })
+    const menuWidth = 192
+    const menuHeight = 200
+    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8)
+    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8)
+    setContextMenu({ file, x, y })
   }
 
   const closeContextMenu = () => setContextMenu(null)
@@ -704,54 +709,64 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
                         </PopoverTrigger>
                         <PopoverContent className={`${sleepScreenSupported && isPngFile(file) ? 'w-48' : 'w-40'} p-1`} align="end">
                           {!file.isDir && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="w-full justify-start font-normal"
-                              onClick={() => handleDownload(file)}
-                            >
-                              <Download className="h-4 w-4 mr-2" />
-                              Download
-                            </Button>
+                            <PopoverClose asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full justify-start font-normal"
+                                onClick={() => handleDownload(file)}
+                              >
+                                <Download className="h-4 w-4 mr-2" />
+                                Download
+                              </Button>
+                            </PopoverClose>
                           )}
                           {sleepScreenSupported && isPngFile(file) && (
+                            <PopoverClose asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full justify-start font-normal"
+                                onClick={() => handleSetSleepScreen(file)}
+                              >
+                                <Image className="h-4 w-4 mr-2" />
+                                Set as sleep screen
+                              </Button>
+                            </PopoverClose>
+                          )}
+                          <PopoverClose asChild>
                             <Button
                               variant="ghost"
                               size="sm"
                               className="w-full justify-start font-normal"
-                              onClick={() => handleSetSleepScreen(file)}
+                              onClick={() => initiateRename(file)}
                             >
-                              <Image className="h-4 w-4 mr-2" />
-                              Set as sleep screen
+                              <Pencil className="h-4 w-4 mr-2" />
+                              Rename
                             </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start font-normal"
-                            onClick={() => initiateRename(file)}
-                          >
-                            <Pencil className="h-4 w-4 mr-2" />
-                            Rename
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start font-normal"
-                            onClick={() => copyPath(file.path)}
-                          >
-                            <Copy className="h-4 w-4 mr-2" />
-                            Copy Path
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start font-normal"
-                            onClick={() => initiateDelete(file)}
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete
-                          </Button>
+                          </PopoverClose>
+                          <PopoverClose asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-full justify-start font-normal"
+                              onClick={() => copyPath(file.path)}
+                            >
+                              <Copy className="h-4 w-4 mr-2" />
+                              Copy Path
+                            </Button>
+                          </PopoverClose>
+                          <PopoverClose asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-full justify-start font-normal"
+                              onClick={() => initiateDelete(file)}
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete
+                            </Button>
+                          </PopoverClose>
                         </PopoverContent>
                       </Popover>
                     </TableCell>
@@ -941,7 +956,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
       </Dialog>
 
       {/* Restart xochitl confirmation dialog */}
-      <Dialog open={restartXochitlDialog !== null} onOpenChange={(open) => !open && setRestartXochitlDialog(null)}>
+      <Dialog open={restartXochitlDialog !== null} onOpenChange={(open) => !open && setRestartXochitlDialog(null)} priority>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Restart Required</DialogTitle>
