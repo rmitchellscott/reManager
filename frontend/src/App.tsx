@@ -215,7 +215,8 @@ declare global {
           BackupConfigFile(): Promise<string>
           ListConfigBackups(): Promise<Array<{name: string; timestamp: number; size: number}>>
           RestoreConfigBackup(backupName: string): Promise<void>
-          CreateDeviceBackup(): void
+          SelectBackupFile(): Promise<string>
+          CreateDeviceBackup(destPath: string): void
           SelectRestoreFile(): Promise<string>
           RestoreDeviceBackup(archivePath: string): void
           CancelBackup(): void

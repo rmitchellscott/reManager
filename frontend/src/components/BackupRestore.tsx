@@ -191,8 +191,7 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
     }
   }, [handleProgress, handleComplete, handleBackupError])
 
-  // Start backup immediately when mode changes to 'backup'
-  // For restore, prompt for file first, then show confirmation
+  // Prompt for file first for both backup and restore
   useEffect(() => {
     if (mode === 'backup') {
       setError(null)
@@ -205,8 +204,20 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
       samplesRef.current = []
       lastThroughputUpdateRef.current = 0
       progressRef.current = null
-      setStage('progress')
-      window.go.main.App.CreateDeviceBackup()
+      const selectFile = async () => {
+        try {
+          const filePath = await window.go.main.App.SelectBackupFile()
+          if (filePath) {
+            setStage('progress')
+            window.go.main.App.CreateDeviceBackup(filePath)
+          } else {
+            onClose()
+          }
+        } catch (err) {
+          onClose()
+        }
+      }
+      selectFile()
     } else if (mode === 'restore') {
       setError(null)
       setSuccess(null)

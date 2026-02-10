@@ -3564,7 +3564,30 @@ func (a *App) RestoreConfigBackup(backupName string) error {
 	return err
 }
 
-func (a *App) CreateDeviceBackup() {
+func (a *App) SelectBackupFile() string {
+	a.mu.Lock()
+	deviceID := a.connectedDeviceID
+	a.mu.Unlock()
+
+	rawDeviceName := ""
+	if savedDevice, err := a.deviceStore.Get(deviceID); err == nil && savedDevice.Name != "" {
+		rawDeviceName = savedDevice.Name
+	}
+	deviceName := "device"
+	if rawDeviceName != "" {
+		deviceName = sanitizeFilename(rawDeviceName)
+	}
+
+	timestamp := time.Now().Format("2006-01-02-150405")
+	defaultName := fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp)
+	destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName)
+	if err != nil || destPath == "" {
+		return ""
+	}
+	return destPath
+}
+
+func (a *App) CreateDeviceBackup(destPath string) {
 	go func() {
 		a.mu.Lock()
 		client := a.client
@@ -3581,17 +3604,6 @@ func (a *App) CreateDeviceBackup() {
 		rawDeviceName := ""
 		if savedDevice, err := a.deviceStore.Get(deviceID); err == nil && savedDevice.Name != "" {
 			rawDeviceName = savedDevice.Name
-		}
-		deviceName := "device"
-		if rawDeviceName != "" {
-			deviceName = sanitizeFilename(rawDeviceName)
-		}
-
-		timestamp := time.Now().Format("2006-01-02-150405")
-		defaultName := fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp)
-		destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName)
-		if err != nil || destPath == "" {
-			return
 		}
 
 		sftpClient, err := sftp.NewClient(client)
