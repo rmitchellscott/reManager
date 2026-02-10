@@ -30,7 +30,7 @@ import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErro
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -168,6 +168,7 @@ declare global {
           CheckPackageInstalled(pkgName: string): Promise<boolean>
           CheckHashtabVersion(): Promise<HashtabVersionStatus>
           GetPackages(deviceType: string, firmware: string, arch: string): Promise<PackageInfo[]>
+          RefreshMetadata(): Promise<void>
           GetInstalledPackages(): Promise<string[]>
           GetInstalledPackagesWithOsCheck(): Promise<InstalledPackagesResult>
           RunReenable(): Promise<void>
@@ -254,6 +255,7 @@ export default function App() {
   const [device, setDevice] = useState<string>('')
   const [deviceInfo, setDeviceInfo] = useState<Record<string, string>>({})
   const [installedPackages, setInstalledPackages] = useState<Set<string>>(new Set())
+  const [refreshingPackages, setRefreshingPackages] = useState(false)
   const [vellumInstalled, setVellumInstalled] = useState<boolean | null>(null)
   const [bootstrapping, setBootstrapping] = useState(false)
   const [bootstrapOutput, setBootstrapOutput] = useState('')
@@ -1574,6 +1576,29 @@ export default function App() {
     }
   }
 
+  const handleRefreshPackages = async () => {
+    setRefreshingPackages(true)
+    try {
+      await window.go.main.App.RefreshMetadata()
+      if (device && deviceInfo.firmware) {
+        const arch = await window.go.main.App.GetDeviceArchitecture(device)
+        const filteredPkgs = await window.go.main.App.GetPackages(device, deviceInfo.firmware, arch)
+        setPackages(filteredPkgs || [])
+      }
+      await rescanAllPackages()
+    } catch (err) {
+      console.error('Failed to refresh packages:', err)
+    }
+    setRefreshingPackages(false)
+  }
+
+  const handleTabChange = async (value: 'mods' | 'maintenance' | 'utilities') => {
+    setActiveTab(value)
+    if (value === 'mods') {
+      await rescanAllPackages()
+    }
+  }
+
   const handleRunReenable = async () => {
     setRunningReenable(true)
     setShowProgressModal(true)
@@ -2087,7 +2112,7 @@ export default function App() {
         )}
 
         {step !== 'connect' && (
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'mods' | 'maintenance' | 'utilities')}>
+          <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as 'mods' | 'maintenance' | 'utilities')}>
             <TabsList className={`grid w-full mb-4 grid-cols-${[tabVisibility.mods, true, tabVisibility.utilities].filter(Boolean).length}`}>
               {tabVisibility.mods && <TabsTrigger value="mods">Mods</TabsTrigger>}
               <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
@@ -2188,6 +2213,19 @@ export default function App() {
                         <SelectItem value="compact">Compact</SelectItem>
                       </SelectContent>
                     </Select>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={handleRefreshPackages}
+                      disabled={refreshingPackages}
+                      title="Refresh package list"
+                    >
+                      {refreshingPackages ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                    </Button>
                   </div>
 
                   {/* Installed Section */}

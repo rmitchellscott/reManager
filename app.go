@@ -1573,6 +1573,10 @@ func containsString(slice []string, s string) bool {
 	return false
 }
 
+func (a *App) RefreshMetadata() error {
+	return a.metadata.Refresh()
+}
+
 func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 	debug.Printf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s, firmware=%s, arch=%s\n", a.metadata, deviceType, firmware, arch)
 	packages := a.metadata.GetAllPackagesForDevice(deviceType, firmware, arch)
