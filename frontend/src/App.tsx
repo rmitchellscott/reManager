@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { Toaster, toast } from 'sonner'
 import { applyThemeWithPortal } from './main'
 import { debugLog } from '@/lib/utils'
 import { handleError, getUserFriendlyMessage } from '@/lib/errorMessages'
@@ -249,7 +250,6 @@ export default function App() {
   const [customKeyName, setCustomKeyName] = useState<string>('')
   const [keyPassphrase, setKeyPassphrase] = useState('')
   const [connecting, setConnecting] = useState(false)
-  const [error, setError] = useState('')
   const [device, setDevice] = useState<string>('')
   const [deviceInfo, setDeviceInfo] = useState<Record<string, string>>({})
   const [installedPackages, setInstalledPackages] = useState<Set<string>>(new Set())
@@ -609,7 +609,6 @@ export default function App() {
     const thisAttempt = ++connectAttemptRef.current
     setConnecting(true)
     setConnectingDeviceId(id)
-    setError('')
 
     try {
       const result = await window.go.main.App.ConnectToSavedDevice(id)
@@ -646,11 +645,11 @@ export default function App() {
         setMaintenanceCommands(maintCmds)
         setStep('select')
       } else {
-        setError(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
+        toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
       }
     } catch (err) {
       if (thisAttempt !== connectAttemptRef.current) return
-      setError(handleError(err, 'Connection'))
+      toast.error(handleError(err, 'Connection'))
     } finally {
       if (thisAttempt === connectAttemptRef.current) {
         setConnecting(false)
@@ -720,7 +719,6 @@ export default function App() {
     if (availableKeys.length > 0) {
       setSelectedKey(availableKeys[0].path)
     }
-    setError('')
   }
 
   useEffect(() => {
@@ -1236,7 +1234,6 @@ export default function App() {
   const handleConnect = async (saveAfterConnect: boolean) => {
     const thisAttempt = ++connectAttemptRef.current
     setConnecting(true)
-    setError('')
 
     try {
       let result
@@ -1288,13 +1285,13 @@ export default function App() {
         setStep('select')
         setShowAddForm(false)
       } else {
-        setError(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
+        toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
       }
     } catch (err) {
       if (thisAttempt !== connectAttemptRef.current) {
         return
       }
-      setError(handleError(err, 'Connection'))
+      toast.error(handleError(err, 'Connection'))
     } finally {
       if (thisAttempt === connectAttemptRef.current) {
         setConnecting(false)
@@ -1329,7 +1326,6 @@ export default function App() {
     connectAttemptRef.current++
     await window.go.main.App.CancelConnect()
     setConnecting(false)
-    setError('')
   }
 
   const handleDisconnect = async () => {
@@ -1348,7 +1344,6 @@ export default function App() {
     setStoredOsVersion('')
     setCurrentOsVersion('')
     setChecklistLoading(false)
-    setError('')
     setVellumInstalled(null)
     setBootstrapping(false)
     setBootstrapOutput('')
@@ -1846,9 +1841,6 @@ export default function App() {
                           )}
                         </div>
                       </div>
-                      {error && connectingDeviceId === savedDevice.id && (
-                        <p className="text-sm text-destructive mt-2">{error}</p>
-                      )}
                     </CardContent>
                   </Card>
                 ))}
@@ -1996,7 +1988,6 @@ export default function App() {
                     </>
                   )}
 
-                  {error && <p className="text-sm text-destructive">{error}</p>}
                   <div className="flex justify-between">
                     <div>
                       {savedDevices.length > 0 && (
@@ -3381,6 +3372,7 @@ export default function App() {
         </div>
       )}
 
+      <Toaster position="bottom-right" richColors />
     </div>
   )
 }

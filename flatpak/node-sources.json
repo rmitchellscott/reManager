@@ -1476,6 +1476,13 @@
     },
     {
         "type": "file",
+        "url": "https://registry.npmjs.org/sonner/-/sonner-2.0.7.tgz",
+        "sha512": "5ba64de29e7c93c683280e173dcc768692105c14408328965646214fb0af2ba0f7880bbbc63bd5ca1407836fe268a259d57549e2bed7bb018bf961842b7ee2f7",
+        "dest-filename": "4de29e7c93c683280e173dcc768692105c14408328965646214fb0af2ba0f7880bbbc63bd5ca1407836fe268a259d57549e2bed7bb018bf961842b7ee2f7",
+        "dest": "flatpak-node/npm-cache/_cacache/content-v2/sha512/5b/a6"
+    },
+    {
+        "type": "file",
         "url": "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.1.tgz",
         "sha512": "51758c2a12cec1529bef6f0852d40f5f17d853ebac7726ed52b2bff2e184f0240cbeb84ea70bf30c1c23d108522fb31073bbc8b084811bc550f3e203431a5f40",
         "dest-filename": "8c2a12cec1529bef6f0852d40f5f17d853ebac7726ed52b2bff2e184f0240cbeb84ea70bf30c1c23d108522fb31073bbc8b084811bc550f3e203431a5f40",
@@ -2405,6 +2412,12 @@
         "contents": "a6bcc4fabe2786242c40f4f6fffa843236ddf2f6\t{\"key\": \"make-fetch-happen:request-cache:https://registry.npmjs.org/@radix-ui/react-popover/-/react-popover-1.1.15.tgz\", \"integrity\": \"sha512-kr0X2+6Yy/vJzLYJUPCZEc8SfQcf+1COFoAqauJm74umQhta9M7lNJHP7QQS3vkvcGLQUbWpMzwrXYwrYztHKA==\", \"time\": 0, \"size\": 13283, \"metadata\": {\"url\": \"https://registry.npmjs.org/@radix-ui/react-popover/-/react-popover-1.1.15.tgz\", \"reqHeaders\": {}, \"resHeaders\": {}}}",
         "dest-filename": "1de8ff1c9230508fdf1c71b3faa1a9d2aade80a7e0b0d4daa6f4040d8ba2",
         "dest": "flatpak-node/npm-cache/_cacache/index-v5/f1/a1"
+    },
+    {
+        "type": "inline",
+        "contents": "a731f1987f97f8e033c7bcb2f5557e5c1ed294c2\t{\"key\": \"make-fetch-happen:request-cache:https://registry.npmjs.org/sonner/-/sonner-2.0.7.tgz\", \"integrity\": \"sha512-W6ZN4p58k8aDKA4XPcx2hpIQXBRAgyiWVkYhT7CvK6D3iAu7xjvVyhQHg2/iaKJZ1XVJ4r7XuwGL+WGEK37i9w==\", \"time\": 0, \"size\": 32474, \"metadata\": {\"url\": \"https://registry.npmjs.org/sonner/-/sonner-2.0.7.tgz\", \"reqHeaders\": {}, \"resHeaders\": {}}}",
+        "dest-filename": "2575f6e362d99fefa8ad350168077a96eab21579e2e58c928e9d5b5a066a",
+        "dest": "flatpak-node/npm-cache/_cacache/index-v5/a9/16"
     },
     {
         "type": "inline",
