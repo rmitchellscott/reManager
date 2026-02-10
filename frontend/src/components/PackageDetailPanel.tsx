@@ -56,9 +56,11 @@ export function PackageDetailPanel({
 }: PackageDetailPanelProps) {
   const formatOsRange = () => {
     if (!pkg.osMin && !pkg.osMax) return null
-    if (pkg.osMin && pkg.osMax) return `${pkg.osMin} – ${pkg.osMax}`
+    if (pkg.osMin && pkg.osMax) {
+      return pkg.osMin === pkg.osMax ? pkg.osMin : `${pkg.osMin} – ${pkg.osMax}`
+    }
     if (pkg.osMin) return `${pkg.osMin}+`
-    return `Up to ${pkg.osMax}`
+    return `≤ ${pkg.osMax}`
   }
 
   const osRange = formatOsRange()

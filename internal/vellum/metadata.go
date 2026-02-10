@@ -394,7 +394,7 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 			}
 		}
 		if info.OSMax != nil && *info.OSMax != "" {
-			if compareVersions(firmware, *info.OSMax) >= 0 {
+			if compareVersions(firmware, *info.OSMax) > 0 {
 				return false
 			}
 		}

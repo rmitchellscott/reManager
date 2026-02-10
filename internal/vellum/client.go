@@ -234,7 +234,7 @@ func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, er
 }
 
 func (c *Client) UpgradeStreaming(onOutput func(line string)) error {
-	cmd := fmt.Sprintf("%s upgrade", VellumBin)
+	cmd := fmt.Sprintf("%s upgrade -y", VellumBin)
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
 
@@ -256,7 +256,7 @@ func (c *Client) SimulateUpgrade() (*UpgradeSimulationResult, error) {
 	}, nil
 }
 
-var upgradeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+Upgrading\s+([^\s]+)\s+\(`)
+var upgradeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Upgrading|Installing)\s+([^\s]+)\s+\(`)
 
 func parseUpgradeSimulationOutput(output string) []string {
 	var packages []string
