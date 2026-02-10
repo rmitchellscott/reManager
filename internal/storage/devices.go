@@ -135,6 +135,18 @@ func (ds *DeviceStore) Save(device SavedDevice, password string, keyPassphrase s
 		device.ID = generateID()
 	}
 
+	if device.AuthType == "password" && password != "" {
+		if err := ds.secretStore.Set("device:"+device.ID, password); err != nil {
+			return "", fmt.Errorf("failed to store password: %w", err)
+		}
+	}
+
+	if device.AuthType == "key" && keyPassphrase != "" {
+		if err := ds.secretStore.Set("device:"+device.ID+":passphrase", keyPassphrase); err != nil {
+			return "", fmt.Errorf("failed to store key passphrase: %w", err)
+		}
+	}
+
 	found := false
 	for i, d := range devices {
 		if d.ID == device.ID {
@@ -149,18 +161,6 @@ func (ds *DeviceStore) Save(device SavedDevice, password string, keyPassphrase s
 
 	if err := ds.writeDevices(devices); err != nil {
 		return "", err
-	}
-
-	if device.AuthType == "password" && password != "" {
-		if err := ds.secretStore.Set("device:"+device.ID, password); err != nil {
-			return device.ID, fmt.Errorf("saved device but failed to store password: %w", err)
-		}
-	}
-
-	if device.AuthType == "key" && keyPassphrase != "" {
-		if err := ds.secretStore.Set("device:"+device.ID+":passphrase", keyPassphrase); err != nil {
-			return device.ID, fmt.Errorf("saved device but failed to store key passphrase: %w", err)
-		}
 	}
 
 	return device.ID, nil
