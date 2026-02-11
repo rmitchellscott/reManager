@@ -209,6 +209,9 @@ declare global {
           DownloadFile(remotePath: string): void
           UploadFile(remotePath: string): void
           UploadFilesFromPaths(localPaths: string[], remotePath: string): void
+          DownloadFolder(remotePath: string): void
+          UploadFolder(remotePath: string): void
+          CancelFolderTransfer(): void
           DeletePath(path: string): Promise<void>
           RenamePath(oldPath: string, newPath: string): Promise<void>
           CreateDirectory(path: string): Promise<void>
