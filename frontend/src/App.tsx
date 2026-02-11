@@ -405,6 +405,7 @@ export default function App() {
 
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
+  const [developerFilter, setDeveloperFilter] = useState('all')
   const [viewMode, setViewMode] = useState<'full' | 'compact'>(() => {
     const saved = localStorage.getItem('packageViewMode')
     return saved === 'compact' ? 'compact' : 'full'
@@ -422,6 +423,11 @@ export default function App() {
   const categories = useMemo(() => {
     const cats = new Set(packages.flatMap(p => p.categories || []))
     return Array.from(cats).sort()
+  }, [packages])
+
+  const developers = useMemo(() => {
+    const devs = new Set(packages.map(p => p.upstreamAuthor).filter(Boolean))
+    return Array.from(devs).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
   }, [packages])
 
   const resolvedAppTheme = useMemo((): 'dark' | 'light' => {
@@ -480,9 +486,12 @@ export default function App() {
         if (categoryFilter !== 'all' && !(pkg.categories || []).includes(categoryFilter)) {
           return false
         }
+        if (developerFilter !== 'all' && pkg.upstreamAuthor !== developerFilter) {
+          return false
+        }
         return true
       })
-  }, [packages, search, categoryFilter, deviceInfo.firmware])
+  }, [packages, search, categoryFilter, developerFilter, deviceInfo.firmware])
 
   const installedFiltered = useMemo(() =>
     filteredPackages.filter(pkg => installedPackages.has(pkg.name)),
@@ -2215,6 +2224,17 @@ export default function App() {
                         <SelectItem value="all">All Categories</SelectItem>
                         {categories.map((cat) => (
                           <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select value={developerFilter} onValueChange={setDeveloperFilter}>
+                      <SelectTrigger className="w-[160px]">
+                        <SelectValue placeholder="Developer" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Developers</SelectItem>
+                        {developers.map((dev) => (
+                          <SelectItem key={dev} value={dev}>{dev}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
