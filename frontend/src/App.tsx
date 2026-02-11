@@ -2462,17 +2462,24 @@ export default function App() {
                             setSimulatingInstall(true)
                             try {
                               const sim = await window.go.main.App.SimulateInstall([...installQueue], device)
-                              if (sim.packages.length === 0) {
+                              const filteredPackages = sim.packages.filter((name: string) => !installedPackages.has(name))
+                              if (filteredPackages.length === 0) {
                                 setQueueError('All packages are already installed')
                                 setTimeout(() => setQueueError(null), 4000)
                                 setInstallQueue(new Set())
                               } else {
-                                setPendingInstallConfirm({ packages: sim.packages, requested: sim.requested })
+                                setPendingInstallConfirm({ packages: filteredPackages, requested: sim.requested })
                               }
                             } catch (err) {
                               console.error('SimulateInstall failed:', err)
-                              const pkgs = [...installQueue]
-                              setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
+                              const pkgs = [...installQueue].filter((name) => !installedPackages.has(name))
+                              if (pkgs.length === 0) {
+                                setQueueError('All packages are already installed')
+                                setTimeout(() => setQueueError(null), 4000)
+                                setInstallQueue(new Set())
+                              } else {
+                                setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
+                              }
                             } finally {
                               setSimulatingInstall(false)
                             }
@@ -3026,7 +3033,7 @@ export default function App() {
         }}
         closable={!installing && !uninstalling && !commandRunning}
       >
-        <DialogContent className="max-w-6xl w-full">
+        <DialogContent className="w-[90vw] max-w-none">
           {/* Confirmation step for install */}
           {pendingInstallConfirm !== null && !installing && !uninstalling && (() => {
             const requestedSet = new Set(pendingInstallConfirm.requested)
