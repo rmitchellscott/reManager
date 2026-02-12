@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -1543,18 +1545,19 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 }
 
 type PackageInfo struct {
-	Name           string   `json:"name"`
-	Version        string   `json:"version"`
-	Description    string   `json:"description"`
-	UpstreamAuthor string   `json:"upstreamAuthor"`
-	Categories     []string `json:"categories"`
-	URL            string   `json:"url"`
-	License        string   `json:"license"`
-	Devices        []string `json:"devices"`
-	Depends        []string `json:"depends"`
-	Conflicts      []string `json:"conflicts"`
-	OSMin          *string  `json:"osMin"`
-	OSMax          *string  `json:"osMax"`
+	Name           string              `json:"name"`
+	Version        string              `json:"version"`
+	Description    string              `json:"description"`
+	UpstreamAuthor string              `json:"upstreamAuthor"`
+	Categories     []string            `json:"categories"`
+	URL            string              `json:"url"`
+	License        string              `json:"license"`
+	Devices        []string            `json:"devices"`
+	Depends        []string            `json:"depends"`
+	Conflicts      []string            `json:"conflicts"`
+	OSMin          *string             `json:"osMin"`
+	OSMax          *string             `json:"osMax"`
+	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
 }
 
 var hiddenPackages = map[string]bool{
@@ -1606,6 +1609,7 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 			Conflicts:      pkg.Conflicts,
 			OSMin:          pkg.OSMin,
 			OSMax:          pkg.OSMax,
+			OSConstraints:  pkg.OSConstraints,
 		})
 	}
 
@@ -2583,6 +2587,103 @@ func (a *App) GetAppVersion() string {
 	return version
 }
 
+type UpdateCheckResult struct {
+	UpdateAvailable bool   `json:"updateAvailable"`
+	LatestVersion   string `json:"latestVersion"`
+	CurrentVersion  string `json:"currentVersion"`
+	ReleaseURL      string `json:"releaseURL"`
+	Error           string `json:"error,omitempty"`
+}
+
+func (a *App) CheckForAppUpdate() UpdateCheckResult {
+	result := UpdateCheckResult{
+		CurrentVersion: version,
+	}
+
+	if version == "dev" {
+		return result
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("https://api.github.com/repos/rmitchellscott/remanager/releases/latest")
+	if err != nil {
+		debug.Printf("[DEBUG] CheckForAppUpdate: request failed: %v\n", err)
+		result.Error = "network_error"
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		debug.Printf("[DEBUG] CheckForAppUpdate: HTTP %d\n", resp.StatusCode)
+		result.Error = "api_error"
+		return result
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		result.Error = "read_error"
+		return result
+	}
+
+	if err := json.Unmarshal(body, &release); err != nil {
+		result.Error = "parse_error"
+		return result
+	}
+
+	result.LatestVersion = release.TagName
+	result.ReleaseURL = release.HTMLURL
+	result.UpdateAvailable = isNewerVersion(version, release.TagName)
+
+	debug.Printf("[DEBUG] CheckForAppUpdate: current=%s, latest=%s, updateAvailable=%v\n",
+		version, release.TagName, result.UpdateAvailable)
+
+	return result
+}
+
+func isNewerVersion(current, latest string) bool {
+	current = strings.TrimPrefix(current, "v")
+	latest = strings.TrimPrefix(latest, "v")
+
+	currentParts := strings.Split(current, ".")
+	latestParts := strings.Split(latest, ".")
+
+	for len(currentParts) < 3 {
+		currentParts = append(currentParts, "0")
+	}
+	for len(latestParts) < 3 {
+		latestParts = append(latestParts, "0")
+	}
+
+	for i := 0; i < 3; i++ {
+		currNum, err1 := strconv.Atoi(currentParts[i])
+		latestNum, err2 := strconv.Atoi(latestParts[i])
+
+		if err1 != nil || err2 != nil {
+			if latestParts[i] > currentParts[i] {
+				return true
+			}
+			if latestParts[i] < currentParts[i] {
+				return false
+			}
+			continue
+		}
+
+		if latestNum > currNum {
+			return true
+		}
+		if latestNum < currNum {
+			return false
+		}
+	}
+
+	return false
+}
+
 type SettingsInfo struct {
 	TabVisibility              map[string]bool `json:"tabVisibility"`
 	ProxyMode                  bool            `json:"proxyMode"`
@@ -2591,6 +2692,7 @@ type SettingsInfo struct {
 	Theme                      string          `json:"theme"`
 	TerminalTheme              string          `json:"terminalTheme"`
 	EditorTheme                string          `json:"editorTheme"`
+	CheckForUpdates            bool            `json:"checkForUpdates"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
@@ -2604,6 +2706,7 @@ func (a *App) GetSettings() SettingsInfo {
 			Theme:                      "system",
 			TerminalTheme:              "match",
 			EditorTheme:                "match",
+			CheckForUpdates:            true,
 		}
 	}
 	settings, err := a.settingsStore.Load()
@@ -2617,6 +2720,7 @@ func (a *App) GetSettings() SettingsInfo {
 			Theme:                      "system",
 			TerminalTheme:              "match",
 			EditorTheme:                "match",
+			CheckForUpdates:            true,
 		}
 	}
 	debug.Printf("[DEBUG] GetSettings: loaded PreventSleep=%v\n", settings.PreventSleep)
@@ -2628,10 +2732,11 @@ func (a *App) GetSettings() SettingsInfo {
 		Theme:                      settings.Theme,
 		TerminalTheme:              settings.TerminalTheme,
 		EditorTheme:                settings.EditorTheme,
+		CheckForUpdates:            settings.CheckForUpdates,
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, preventSleep bool, theme string, terminalTheme string, editorTheme string) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, preventSleep bool, theme string, terminalTheme string, editorTheme string, checkForUpdates bool) error {
 	debug.Printf("[DEBUG] SaveSettings: preventSleep=%v, isConnected=%v\n", preventSleep, a.IsConnected())
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
@@ -2644,6 +2749,7 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		Theme:                      theme,
 		TerminalTheme:              terminalTheme,
 		EditorTheme:                editorTheme,
+		CheckForUpdates:            checkForUpdates,
 	}
 
 	if preventSleep && a.IsConnected() {

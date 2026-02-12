@@ -17,6 +17,7 @@ type Settings struct {
 	Theme                      string        `json:"theme"`
 	TerminalTheme              string        `json:"terminalTheme"`
 	EditorTheme                string        `json:"editorTheme"`
+	CheckForUpdates            bool          `json:"checkForUpdates"`
 }
 
 type SettingsStore struct {
@@ -56,7 +57,7 @@ func (s *SettingsStore) Load() (*Settings, error) {
 		return s.defaultSettings(), nil
 	}
 
-	// Check if proxyMode was present in JSON (default to true if missing)
+	// Check if fields were present in JSON (default to true/match if missing)
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err == nil {
 		if _, exists := raw["proxyMode"]; !exists {
@@ -70,6 +71,9 @@ func (s *SettingsStore) Load() (*Settings, error) {
 		}
 		if _, exists := raw["editorTheme"]; !exists {
 			settings.EditorTheme = "match"
+		}
+		if _, exists := raw["checkForUpdates"]; !exists {
+			settings.CheckForUpdates = true
 		}
 	}
 
@@ -112,5 +116,6 @@ func (s *SettingsStore) defaultSettings() *Settings {
 		Theme:                      "system",
 		TerminalTheme:              "match",
 		EditorTheme:                "match",
+		CheckForUpdates:            true,
 	}
 }

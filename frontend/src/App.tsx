@@ -45,6 +45,7 @@ interface PackageInfo {
   conflicts: string[]
   osMin: string | null
   osMax: string | null
+  osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
 }
 
 interface MaintenanceCommandInfo {
@@ -196,8 +197,9 @@ declare global {
           RespondToDialog(confirmed: boolean): Promise<void>
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string): Promise<void>
+          CheckForAppUpdate(): Promise<{ updateAvailable: boolean; latestVersion: string; currentVersion: string; releaseURL: string; error?: string }>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean): Promise<void>
           GetSystemColorScheme(): Promise<string>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           CleanupBrokenVellum(): Promise<void>
@@ -317,6 +319,7 @@ export default function App() {
   const [theme, setTheme] = useState('system')
   const [terminalTheme, setTerminalTheme] = useState('match')
   const [editorTheme, setEditorTheme] = useState('match')
+  const [checkForUpdates, setCheckForUpdates] = useState(true)
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
@@ -540,6 +543,25 @@ export default function App() {
         localStorage.setItem('theme', loadedTheme)
         setTerminalTheme(settings?.terminalTheme || 'match')
         setEditorTheme(settings?.editorTheme || 'match')
+        const shouldCheckUpdates = settings?.checkForUpdates ?? true
+        setCheckForUpdates(shouldCheckUpdates)
+
+        if (shouldCheckUpdates) {
+          window.go.main.App.CheckForAppUpdate().then((result) => {
+            if (result.updateAvailable && result.latestVersion) {
+              toast.info(`Update available: ${result.latestVersion}`, {
+                description: `You're running ${result.currentVersion}`,
+                action: {
+                  label: 'View Release',
+                  onClick: () => window.runtime.BrowserOpenURL(result.releaseURL)
+                },
+                duration: 6000,
+              })
+            }
+          }).catch((err) => {
+            debugLog('[DEBUG] Update check failed:', err)
+          })
+        }
       } catch (err) {
         debugLog('Could not load initial data:', err)
         setSelectedKey('__other__')
@@ -1410,7 +1432,8 @@ export default function App() {
     setShowFilesystemRestoreError(false)
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newPreventSleep: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newPreventSleep: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string, newCheckForUpdates: boolean) => {
+    const wasCheckForUpdatesOff = !checkForUpdates
     setTabVisibility(newTabVisibility)
     setProxyMode(newProxyMode)
     setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
@@ -1420,12 +1443,28 @@ export default function App() {
     await applyThemeWithPortal(newTheme)
     setTerminalTheme(newTerminalTheme)
     setEditorTheme(newEditorTheme)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newPreventSleep, newTheme, newTerminalTheme, newEditorTheme)
+    setCheckForUpdates(newCheckForUpdates)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newPreventSleep, newTheme, newTerminalTheme, newEditorTheme, newCheckForUpdates)
+
+    if (wasCheckForUpdatesOff && newCheckForUpdates) {
+      window.go.main.App.CheckForAppUpdate().then((result) => {
+        if (result.updateAvailable && result.latestVersion) {
+          toast.info(`Update available: ${result.latestVersion}`, {
+            description: `You're running ${result.currentVersion}`,
+            action: {
+              label: 'View Release',
+              onClick: () => window.runtime.BrowserOpenURL(result.releaseURL)
+            },
+            duration: 6000,
+          })
+        }
+      }).catch(() => {})
+    }
   }
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme)
+    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates)
     setShowDnsErrorModal(false)
   }
 
@@ -3282,6 +3321,7 @@ export default function App() {
         theme={theme}
         terminalTheme={terminalTheme}
         editorTheme={editorTheme}
+        checkForUpdates={checkForUpdates}
         onSaveSettings={handleSaveSettings}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}

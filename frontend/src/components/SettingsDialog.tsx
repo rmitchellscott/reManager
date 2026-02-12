@@ -21,7 +21,8 @@ interface SettingsDialogProps {
   theme: string
   terminalTheme: string
   editorTheme: string
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string) => void
+  checkForUpdates: boolean
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -41,6 +42,7 @@ export function SettingsDialog({
   theme,
   terminalTheme,
   editorTheme,
+  checkForUpdates,
   onSaveSettings,
   onUninstallVellum,
   uninstalling,
@@ -57,6 +59,7 @@ export function SettingsDialog({
   const [localTheme, setLocalTheme] = useState(theme)
   const [localTerminalTheme, setLocalTerminalTheme] = useState(terminalTheme)
   const [localEditorTheme, setLocalEditorTheme] = useState(editorTheme)
+  const [localCheckForUpdates, setLocalCheckForUpdates] = useState(checkForUpdates)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
 
@@ -67,6 +70,7 @@ export function SettingsDialog({
     localTheme !== theme ||
     localTerminalTheme !== terminalTheme ||
     localEditorTheme !== editorTheme ||
+    localCheckForUpdates !== checkForUpdates ||
     JSON.stringify(localTabVisibility) !== JSON.stringify({ ...defaultTabVisibility, ...tabVisibility })
 
   useEffect(() => {
@@ -78,8 +82,9 @@ export function SettingsDialog({
       setLocalTheme(theme)
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
+      setLocalCheckForUpdates(checkForUpdates)
     }
-  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates])
 
   const handleCancel = () => {
     setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
@@ -89,12 +94,13 @@ export function SettingsDialog({
     setLocalTheme(theme)
     setLocalTerminalTheme(terminalTheme)
     setLocalEditorTheme(editorTheme)
+    setLocalCheckForUpdates(checkForUpdates)
     setShowUninstallConfirm(false)
     onOpenChange(false)
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme)
+    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme, localCheckForUpdates)
     onOpenChange(false)
   }
 
@@ -108,6 +114,7 @@ export function SettingsDialog({
       setLocalTheme(theme)
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
+      setLocalCheckForUpdates(checkForUpdates)
     }
     onOpenChange(newOpen)
   }
@@ -222,7 +229,19 @@ export function SettingsDialog({
                   id="prevent-sleep"
                   checked={localPreventSleep}
                   onCheckedChange={setLocalPreventSleep}
-                  disabled={!isConnected}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="check-updates" className="font-normal">Check for Updates</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Notify when a new version of reManager is available.
+                  </p>
+                </div>
+                <Switch
+                  id="check-updates"
+                  checked={localCheckForUpdates}
+                  onCheckedChange={setLocalCheckForUpdates}
                 />
               </div>
               <div className="flex items-center justify-between gap-4">
@@ -230,7 +249,7 @@ export function SettingsDialog({
                   <Label htmlFor="suppress-sys-warnings" className="font-normal">Suppress Filesystem Warnings</Label>
                   <p className="text-xs text-muted-foreground mt-1">
                     Skip confirmation dialogs when modifying system partition files.
-                    Only disable if you are experienced with Linux systems.
+                    Only suppress if you are experienced with Linux systems.
                   </p>
                 </div>
                 <Switch

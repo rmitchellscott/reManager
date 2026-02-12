@@ -3,6 +3,11 @@ import { Button } from '@/components/ui/button'
 import { SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { ExternalLink, Plus, Trash2, Check, AlertTriangle } from 'lucide-react'
 
+interface OSConstraint {
+  version: string
+  operator: '>=' | '<' | '>' | '<=' | '='
+}
+
 interface PackageInfo {
   name: string
   version: string
@@ -16,6 +21,7 @@ interface PackageInfo {
   conflicts: string[]
   osMin: string | null
   osMax: string | null
+  osConstraints: OSConstraint[] | null
 }
 
 interface PackageDetailPanelProps {
@@ -55,12 +61,36 @@ export function PackageDetailPanel({
   isOsCompatible = true,
 }: PackageDetailPanelProps) {
   const formatOsRange = () => {
+    if (pkg.osConstraints && pkg.osConstraints.length > 0) {
+      const minC = pkg.osConstraints.find(c => c.operator === '>=')
+      const maxC = pkg.osConstraints.find(c => c.operator === '<')
+      const exactC = pkg.osConstraints.find(c => c.operator === '=')
+
+      if (exactC) return exactC.version
+
+      if (minC && maxC) {
+        const maxInclusive = (parseFloat(maxC.version) - 0.01).toFixed(2)
+        return minC.version === maxInclusive ? minC.version : `${minC.version} – ${maxInclusive}`
+      }
+
+      if (minC) return `${minC.version}+`
+      if (maxC) {
+        const maxInclusive = (parseFloat(maxC.version) - 0.01).toFixed(2)
+        return `≤ ${maxInclusive}`
+      }
+    }
+
     if (!pkg.osMin && !pkg.osMax) return null
     if (pkg.osMin && pkg.osMax) {
-      return pkg.osMin === pkg.osMax ? pkg.osMin : `${pkg.osMin} – ${pkg.osMax}`
+      const maxInclusive = (parseFloat(pkg.osMax) - 0.01).toFixed(2)
+      return pkg.osMin === maxInclusive ? pkg.osMin : `${pkg.osMin} – ${maxInclusive}`
     }
     if (pkg.osMin) return `${pkg.osMin}+`
-    return `≤ ${pkg.osMax}`
+    if (pkg.osMax) {
+      const maxInclusive = (parseFloat(pkg.osMax) - 0.01).toFixed(2)
+      return `≤ ${maxInclusive}`
+    }
+    return null
   }
 
   const osRange = formatOsRange()
