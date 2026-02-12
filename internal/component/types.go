@@ -33,6 +33,7 @@ type DialogConfig struct {
 	Steps             []string
 	ConfirmText       string
 	InProgressMessage string
+	InfoOnly          bool
 }
 
 type HookExecutionResult struct {

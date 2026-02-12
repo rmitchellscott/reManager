@@ -5,11 +5,28 @@ import "reManager/internal/component"
 type HookFunc func(ctx component.CommandContext) (*component.HookExecutionResult, error)
 
 var hookRegistry = map[string]HookFunc{
-	"rebuild_hashtable_dialog": RebuildHashtableDialog,
+	"rebuild_hashtable_dialog":  RebuildHashtableDialog,
+	"xovi_post_install_info":    XoviPostInstallInfo,
 }
 
 func GetHook(name string) HookFunc {
 	return hookRegistry[name]
+}
+
+func XoviPostInstallInfo(ctx component.CommandContext) (*component.HookExecutionResult, error) {
+	return &component.HookExecutionResult{
+		DialogConfig: &component.DialogConfig{
+			Title:   "Xovi Does Not Auto-Start",
+			Message: "For technical reasons, xovi does not auto-start after reboots. Each time your device restarts, you will need to manually start xovi using one of the following methods:",
+			Steps: []string{
+				"(Recommended) Install the tripletap package, then triple-press the power button on every boot",
+				"Use the xovi Start maintenance command in reManager",
+				"Connect via SSH and run: /home/root/xovi/start",
+			},
+			InfoOnly:    true,
+			ConfirmText: "Got it",
+		},
+	}, nil
 }
 
 func RebuildHashtableDialog(ctx component.CommandContext) (*component.HookExecutionResult, error) {

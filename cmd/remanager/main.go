@@ -350,6 +350,7 @@ func uninstallCmd() *cobra.Command {
 				args,
 				allPackages,
 				useRecursive,
+				false,
 				ctx,
 				func(progress executor.ProgressInfo) {
 					fmt.Printf("[%d/%d] %s: %s\n", progress.CurrentIndex+1, progress.TotalComponents, progress.CurrentComponent, progress.Message)

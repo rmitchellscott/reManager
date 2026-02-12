@@ -429,6 +429,65 @@ func parseBlockedPackages(output string) map[string][]string {
 	return blocked
 }
 
+func (c *Client) GetWorldPackages() ([]string, error) {
+	cmd := fmt.Sprintf("cat %s/etc/apk/world 2>/dev/null", VellumRoot)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	var packages []string
+	for _, line := range strings.Split(output, "\n") {
+		pkg := strings.TrimSpace(line)
+		if pkg == "" {
+			continue
+		}
+		if idx := strings.Index(pkg, "@"); idx > 0 {
+			pkg = pkg[:idx]
+		}
+		packages = append(packages, pkg)
+	}
+	return packages, nil
+}
+
+func (c *Client) GetReverseDeps(pkg string) ([]string, error) {
+	cmd := fmt.Sprintf("%s info -r %s 2>/dev/null", VellumBin, pkg)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	var deps []string
+	inDepList := false
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(trimmed, "is required by:") {
+			inDepList = true
+			continue
+		}
+		if inDepList {
+			name := parsePackageNameFromInfo(trimmed)
+			if name != "" {
+				deps = append(deps, name)
+			}
+		}
+	}
+	return deps, nil
+}
+
+var infoPackageRegex = regexp.MustCompile(`^(.+)-\d+[\d.]*`)
+
+func parsePackageNameFromInfo(line string) string {
+	matches := infoPackageRegex.FindStringSubmatch(line)
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
+}
+
 func (c *Client) UninstallVellum(removeAllPackages bool, onOutput func(line string)) error {
 	var cmd string
 	if removeAllPackages {

@@ -2047,11 +2047,7 @@ type DialogRequest struct {
 	Steps             []string `json:"steps"`
 	ConfirmText       string   `json:"confirmText"`
 	InProgressMessage string   `json:"inProgressMessage"`
-}
-
-type BlockedUninstallInfo struct {
-	RequestedPackages []string            `json:"requestedPackages"`
-	BlockedBy         map[string][]string `json:"blockedBy"`
+	InfoOnly          bool     `json:"infoOnly"`
 }
 
 // InstallSimulationResult contains the result of simulating an install
@@ -2065,6 +2061,8 @@ type UninstallSimulationResult struct {
 	Packages          []string            `json:"packages"`          // Packages that will be removed
 	Blocked           map[string][]string `json:"blocked"`           // Packages blocked by dependents
 	RecursivePackages []string            `json:"recursivePackages"` // All packages if recursive removal is needed
+	WorldDeps         []string            `json:"worldDeps"`         // World packages that must be removed
+	AllAffected       []string            `json:"allAffected"`       // Complete list that will be purged
 }
 
 // SimulateInstall returns all packages that will be installed (including dependencies)
@@ -2100,8 +2098,13 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 		return &UninstallSimulationResult{Packages: packageNames}, nil
 	}
 
+	packages := simResult.Packages
+	if packages == nil {
+		packages = []string{}
+	}
+
 	result := &UninstallSimulationResult{
-		Packages: simResult.Packages,
+		Packages: packages,
 		Blocked:  simResult.Blocked,
 	}
 
@@ -2110,12 +2113,105 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 		recursiveList, err := a.vellumClient.SimulateDelRecursive(packageNames...)
 		if err != nil {
 			debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
-		} else {
+		} else if len(recursiveList) > 0 {
 			result.RecursivePackages = recursiveList
+		}
+
+		// If recursive simulation didn't return packages, build list from blocked info
+		if len(result.RecursivePackages) == 0 {
+			seen := make(map[string]bool)
+			for _, name := range packageNames {
+				seen[name] = true
+			}
+			for _, dependents := range simResult.Blocked {
+				for _, dep := range dependents {
+					seen[dep] = true
+				}
+			}
+			all := make([]string, 0, len(seen))
+			for name := range seen {
+				all = append(all, name)
+			}
+			result.RecursivePackages = all
+		}
+	}
+
+	// If nothing would be removed or packages are blocked, resolve world deps
+	if a.vellumClient != nil && (len(result.Packages) == 0 || len(result.Blocked) > 0) {
+		worldToRemove, allAffected, err := a.resolveWorldDeps(packageNames)
+		if err != nil {
+			debug.Printf("[DEBUG] resolveWorldDeps failed: %v\n", err)
+		} else if len(worldToRemove) > 0 {
+			result.WorldDeps = worldToRemove
+			result.AllAffected = allAffected
 		}
 	}
 
 	return result, nil
+}
+
+func (a *App) resolveWorldDeps(targets []string) (worldToRemove []string, allAffected []string, err error) {
+	worldPkgs, err := a.vellumClient.GetWorldPackages()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read world file: %w", err)
+	}
+
+	worldSet := make(map[string]bool, len(worldPkgs))
+	for _, pkg := range worldPkgs {
+		worldSet[pkg] = true
+	}
+
+	visited := make(map[string]bool)
+	queue := make([]string, len(targets))
+	copy(queue, targets)
+	for _, t := range targets {
+		visited[t] = true
+	}
+
+	for len(queue) > 0 {
+		pkg := queue[0]
+		queue = queue[1:]
+
+		rdeps, err := a.vellumClient.GetReverseDeps(pkg)
+		if err != nil {
+			debug.Printf("[DEBUG] GetReverseDeps(%s) failed: %v\n", pkg, err)
+			continue
+		}
+
+		for _, rdep := range rdeps {
+			if !visited[rdep] {
+				visited[rdep] = true
+				queue = append(queue, rdep)
+			}
+		}
+	}
+
+	for pkg := range visited {
+		allAffected = append(allAffected, pkg)
+		if worldSet[pkg] {
+			worldToRemove = append(worldToRemove, pkg)
+		}
+	}
+
+	if len(worldToRemove) == 0 {
+		return nil, nil, nil
+	}
+
+	// Simulate deleting the world packages to get the full cascade list
+	simResult, err := a.vellumClient.SimulateDel(worldToRemove...)
+	if err != nil {
+		debug.Printf("[DEBUG] SimulateDel for world deps failed: %v\n", err)
+		return worldToRemove, allAffected, nil
+	}
+
+	for _, pkg := range simResult.Packages {
+		if !visited[pkg] {
+			visited[pkg] = true
+			allAffected = append(allAffected, pkg)
+		}
+	}
+
+	return worldToRemove, allAffected, nil
 }
 
 func (a *App) RespondToDialog(confirmed bool) {
@@ -2240,6 +2336,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 						Steps:             hookResult.DialogConfig.Steps,
 						ConfirmText:       hookResult.DialogConfig.ConfirmText,
 						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
+						InfoOnly:          hookResult.DialogConfig.InfoOnly,
 					})
 
 					confirmed := <-a.dialogResponse
@@ -2310,35 +2407,27 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		// Simulate uninstall to check for blockers and get full package list
 		var allPackages []string
 		useRecursive := false
+		useBatch := false
 
 		if a.vellumClient != nil {
 			simResult, err := a.vellumClient.SimulateDel(packageNames...)
 			if err != nil {
 				debug.Printf("[DEBUG] SimulateDel failed: %v, using packageNames only\n", err)
 				allPackages = packageNames
-			} else if len(simResult.Blocked) > 0 {
-				// Packages are blocked by dependents - prompt user
-				debug.Printf("[DEBUG] Packages blocked: %v\n", simResult.Blocked)
-				runtime.EventsEmit(a.ctx, "uninstall:blocked", BlockedUninstallInfo{
-					RequestedPackages: packageNames,
-					BlockedBy:         simResult.Blocked,
-				})
-
-				confirmed := <-a.dialogResponse
-				if !confirmed {
-					runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
-						Success: false,
-						Errors:  []string{"Uninstall cancelled by user"},
-					})
-					return
-				}
-
-				// User confirmed - use recursive deletion
-				useRecursive = true
-				allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
-				if err != nil {
-					debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
-					allPackages = packageNames
+			} else if len(simResult.Blocked) > 0 || len(simResult.Packages) == 0 {
+				worldToRemove, allAffected, wErr := a.resolveWorldDeps(packageNames)
+				if wErr != nil || len(worldToRemove) == 0 {
+					debug.Printf("[DEBUG] resolveWorldDeps failed or empty: %v\n", wErr)
+					useRecursive = true
+					allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
+					if err != nil {
+						debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
+						allPackages = packageNames
+					}
+				} else {
+					packageNames = worldToRemove
+					allPackages = allAffected
+					useBatch = true
 				}
 			} else {
 				allPackages = simResult.Packages
@@ -2365,6 +2454,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 			packageNames,
 			allPackages,
 			useRecursive,
+			useBatch,
 			ctx,
 			func(progress executor.ProgressInfo) {
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
@@ -2383,6 +2473,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 						Steps:             hookResult.DialogConfig.Steps,
 						ConfirmText:       hookResult.DialogConfig.ConfirmText,
 						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
+						InfoOnly:          hookResult.DialogConfig.InfoOnly,
 					})
 
 					confirmed := <-a.dialogResponse
@@ -2460,6 +2551,7 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 						Steps:             hookResult.DialogConfig.Steps,
 						ConfirmText:       hookResult.DialogConfig.ConfirmText,
 						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
+						InfoOnly:          hookResult.DialogConfig.InfoOnly,
 					})
 
 					confirmed := <-a.dialogResponse

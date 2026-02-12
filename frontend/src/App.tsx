@@ -25,12 +25,13 @@ import { InteractiveTerminal } from '@/components/InteractiveTerminal'
 import { FileBrowser } from '@/components/FileBrowser'
 import { ConfigEditor } from '@/components/ConfigEditor'
 import { BackupRestoreDialog } from '@/components/BackupRestore'
+import { CheckOSDialog } from '@/components/CheckOSDialog'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -103,6 +104,7 @@ interface DialogRequest {
   steps: string[]
   confirmText: string
   inProgressMessage: string
+  infoOnly: boolean
 }
 
 interface InstallSimulationResult {
@@ -114,6 +116,8 @@ interface UninstallSimulationResult {
   packages: string[]
   blocked: Record<string, string[]> | null
   recursivePackages: string[] | null
+  worldDeps: string[] | null
+  allAffected: string[] | null
 }
 
 interface InstalledPackagesResult {
@@ -365,6 +369,7 @@ export default function App() {
     packages: string[]
     blocked: Record<string, string[]> | null
     useRecursive: boolean
+    worldDeps?: string[]
   } | null>(null)
   const [simulatingInstall, setSimulatingInstall] = useState(false)
   const [simulatingUninstall, setSimulatingUninstall] = useState(false)
@@ -376,6 +381,7 @@ export default function App() {
   const [pendingPackageUpgrade, setPendingPackageUpgrade] = useState<string[] | null>(null)
   const [simulatingUpgrade, setSimulatingUpgrade] = useState(false)
   const [showNoUpgradesDialog, setShowNoUpgradesDialog] = useState(false)
+  const [showCheckOSDialog, setShowCheckOSDialog] = useState(false)
 
   const [osMismatchDetected, setOsMismatchDetected] = useState(false)
   const [storedOsVersion, setStoredOsVersion] = useState('')
@@ -2216,8 +2222,16 @@ export default function App() {
                         placeholder="Search mods..."
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        className="pl-9"
+                        className={`pl-9 ${search ? 'pr-8' : ''}`}
                       />
+                      {search && (
+                        <button
+                          onClick={() => setSearch('')}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
                     </div>
                     <Select value={categoryFilter} onValueChange={setCategoryFilter}>
                       <SelectTrigger className="w-[160px]">
@@ -2573,17 +2587,25 @@ export default function App() {
                             try {
                               const selected = [...uninstallQueue]
                               const sim = await window.go.main.App.SimulateUninstall(selected)
-                              if (sim.blocked && Object.keys(sim.blocked).length > 0) {
+                              if (sim.worldDeps && sim.worldDeps.length > 0) {
                                 setPendingUninstallConfirm({
                                   selected,
-                                  packages: sim.recursivePackages || sim.packages,
+                                  packages: sim.allAffected || selected,
+                                  blocked: null,
+                                  useRecursive: false,
+                                  worldDeps: sim.worldDeps
+                                })
+                              } else if (sim.blocked && Object.keys(sim.blocked).length > 0) {
+                                setPendingUninstallConfirm({
+                                  selected,
+                                  packages: sim.recursivePackages || sim.packages || selected,
                                   blocked: sim.blocked,
                                   useRecursive: true
                                 })
                               } else {
                                 setPendingUninstallConfirm({
                                   selected,
-                                  packages: sim.packages.length > 0 ? sim.packages : selected,
+                                  packages: (sim.packages && sim.packages.length > 0) ? sim.packages : selected,
                                   blocked: null,
                                   useRecursive: false
                                 })
@@ -2740,6 +2762,20 @@ export default function App() {
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>Check for and install package updates</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={() => setShowCheckOSDialog(true)}
+                                disabled={connectionStatus !== 'connected'}
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                              >
+                                Check OS
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Check package compatibility with a target OS version</TooltipContent>
                           </Tooltip>
                         </div>
                       </div>
@@ -2994,14 +3030,17 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              {dialogRequest?.infoOnly
+                ? <Info className="h-5 w-5 text-blue-500" />
+                : <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              }
               {dialogRequest?.title || 'Confirmation Required'}
             </DialogTitle>
             <DialogDescription>
               <div className="space-y-4 pt-4">
                 <p>{dialogRequest?.message}</p>
                 {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
-                  <ol className="list-decimal list-inside space-y-1 text-sm">
+                  <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
                     {dialogRequest.steps.map((step, idx) => (
                       <li key={idx}>{step}</li>
                     ))}
@@ -3011,25 +3050,39 @@ export default function App() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowRebuildDialog(false)
-                setDialogRequest(null)
-                window.go.main.App.RespondToDialog(false)
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                setShowRebuildDialog(false)
-                setDialogRequest(null)
-                window.go.main.App.RespondToDialog(true)
-              }}
-            >
-              {dialogRequest?.confirmText || 'Proceed'}
-            </Button>
+            {dialogRequest?.infoOnly ? (
+              <Button
+                onClick={() => {
+                  setShowRebuildDialog(false)
+                  setDialogRequest(null)
+                  window.go.main.App.RespondToDialog(true)
+                }}
+              >
+                {dialogRequest?.confirmText || 'Got it'}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowRebuildDialog(false)
+                    setDialogRequest(null)
+                    window.go.main.App.RespondToDialog(false)
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    setShowRebuildDialog(false)
+                    setDialogRequest(null)
+                    window.go.main.App.RespondToDialog(true)
+                  }}
+                >
+                  {dialogRequest?.confirmText || 'Proceed'}
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -3113,7 +3166,7 @@ export default function App() {
 
           {/* Confirmation step for uninstall */}
           {pendingUninstallConfirm !== null && !installing && !uninstalling && (() => {
-            // Build a map: dependent -> what it requires
+            const worldDeps = pendingUninstallConfirm.worldDeps
             const dependsOn: Record<string, string[]> = {}
             if (pendingUninstallConfirm.blocked) {
               for (const [pkg, dependents] of Object.entries(pendingUninstallConfirm.blocked)) {
@@ -3131,7 +3184,7 @@ export default function App() {
               <>
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
-                    {additional.length > 0 && (
+                    {(additional.length > 0 || (worldDeps && worldDeps.length > 0)) && (
                       <AlertTriangle className="h-5 w-5 text-yellow-500" />
                     )}
                     Uninstall Packages
@@ -3141,29 +3194,43 @@ export default function App() {
                   </DialogDescription>
                 </DialogHeader>
                 <div className="max-h-[40vh] overflow-y-auto overscroll-y-contain space-y-4">
-                  <div>
-                    <p className="font-medium text-sm mb-2">Selected for removal:</p>
-                    <ul className="space-y-1 text-sm">
-                      {[...selected].sort().map((name) => (
-                        <li key={name}>{name}</li>
-                      ))}
-                    </ul>
-                  </div>
+                  {worldDeps && worldDeps.length > 0 ? (
+                    <>
+                      <div>
+                        <ul className="space-y-1 text-sm">
+                          {[...pendingUninstallConfirm.packages].sort().map((name) => (
+                            <li key={name}>{name}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <p className="font-medium text-sm mb-2">Selected for removal:</p>
+                        <ul className="space-y-1 text-sm">
+                          {[...selected].sort().map((name) => (
+                            <li key={name}>{name}</li>
+                          ))}
+                        </ul>
+                      </div>
 
-                  {additional.length > 0 && (
-                    <div>
-                      <p className="font-medium text-sm mb-2">Will also be removed:</p>
-                      <ul className="space-y-1 text-sm">
-                        {[...additional].sort().map((name) => (
-                          <li key={name}>
-                            {name}
-                            {dependsOn[name] && (
-                              <span className="text-muted-foreground"> (requires {dependsOn[name].join(', ')})</span>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                      {additional.length > 0 && (
+                        <div>
+                          <p className="font-medium text-sm mb-2">Will also be removed:</p>
+                          <ul className="space-y-1 text-sm">
+                            {[...additional].sort().map((name) => (
+                              <li key={name}>
+                                {name}
+                                {dependsOn[name] && (
+                                  <span className="text-muted-foreground"> (requires {dependsOn[name].join(', ')})</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
                 <DialogFooter>
@@ -3171,9 +3238,9 @@ export default function App() {
                     Cancel
                   </Button>
                   <Button variant="destructive" onClick={() => {
-                    const packages = pendingUninstallConfirm.packages
+                    const selected = pendingUninstallConfirm.selected
                     setPendingUninstallConfirm(null)
-                    handleUninstallQueue(packages)
+                    handleUninstallQueue(selected)
                   }}>
                     Uninstall ({pendingUninstallConfirm.packages.length})
                   </Button>
@@ -3352,6 +3419,12 @@ export default function App() {
         onReboot={handleFilesystemRestoreReboot}
         onDismiss={handleFilesystemRestoreDismiss}
         isRetrying={isRetryingFilesystemRestore}
+      />
+
+      <CheckOSDialog
+        open={showCheckOSDialog}
+        onOpenChange={setShowCheckOSDialog}
+        isConnected={connectionStatus === 'connected'}
       />
 
       {showFileBrowser && (

@@ -161,13 +161,14 @@ func (i *Installer) Uninstall(
 	packageNames []string,
 	allPackages []string,
 	useRecursive bool,
+	batch bool,
 	ctx component.CommandContext,
 	onProgress executor.ProgressCallback,
 	onHook HookCallback,
 ) InstallResult {
 	var errors []string
 
-	debug.Printf("[DEBUG] Uninstall starting for packages: %v (all: %v, recursive: %v)\n", packageNames, allPackages, useRecursive)
+	debug.Printf("[DEBUG] Uninstall starting for packages: %v (all: %v, recursive: %v, batch: %v)\n", packageNames, allPackages, useRecursive, batch)
 
 	// Run preUninstall hooks for ALL packages first (before any actual uninstall)
 	for _, pkgName := range allPackages {
@@ -191,66 +192,105 @@ func (i *Installer) Uninstall(
 		}
 	}
 
-	// Perform actual uninstall for requested packages
-	for idx, pkgName := range packageNames {
-		pkg := i.metadata.GetPackage(pkgName)
-		displayName := pkgName
-		if pkg != nil {
-			displayName = pkg.Name
-		}
-
+	if batch {
+		label := strings.Join(packageNames, ", ")
 		if onProgress != nil {
 			onProgress(executor.ProgressInfo{
-				CurrentComponent: displayName,
-				TotalComponents:  len(packageNames),
-				CurrentIndex:     idx,
+				CurrentComponent: label,
+				TotalComponents:  1,
+				CurrentIndex:     0,
 				Status:           executor.StatusInstalling,
-				Message:          fmt.Sprintf("Uninstalling %s...", displayName),
+				Message:          fmt.Sprintf("Uninstalling %d packages...", len(packageNames)),
 			})
 		}
 
-		var err error
-		if useRecursive {
-			err = i.vellum.DelRecursiveStreaming(func(line string) {
-				if onProgress != nil {
-					onProgress(executor.ProgressInfo{
-						CurrentComponent: displayName,
-						TotalComponents:  len(packageNames),
-						CurrentIndex:     idx,
-						Status:           executor.StatusInstalling,
-						Message:          line,
-					})
-				}
-			}, pkgName)
-		} else {
-			err = i.vellum.DelStreaming(func(line string) {
-				if onProgress != nil {
-					onProgress(executor.ProgressInfo{
-						CurrentComponent: displayName,
-						TotalComponents:  len(packageNames),
-						CurrentIndex:     idx,
-						Status:           executor.StatusInstalling,
-						Message:          line,
-					})
-				}
-			}, pkgName)
-		}
+		err := i.vellum.DelStreaming(func(line string) {
+			if onProgress != nil {
+				onProgress(executor.ProgressInfo{
+					CurrentComponent: label,
+					TotalComponents:  1,
+					CurrentIndex:     0,
+					Status:           executor.StatusInstalling,
+					Message:          line,
+				})
+			}
+		}, packageNames...)
 
 		if err != nil {
-			errMsg := fmt.Sprintf("Uninstall failed for %s: %v", displayName, err)
+			errMsg := fmt.Sprintf("Uninstall failed: %v", err)
 			errors = append(errors, errMsg)
-			reportError(onProgress, displayName, len(packageNames), idx, errMsg)
-			continue
-		}
-
-		if onProgress != nil {
+			reportError(onProgress, label, 1, 0, errMsg)
+		} else if onProgress != nil {
 			onProgress(executor.ProgressInfo{
-				CurrentComponent: displayName,
-				TotalComponents:  len(packageNames),
-				CurrentIndex:     idx,
+				CurrentComponent: label,
+				TotalComponents:  1,
+				CurrentIndex:     0,
 				Status:           executor.StatusCompleted,
-				Message:          fmt.Sprintf("%s uninstalled successfully", displayName),
+				Message:          "Packages uninstalled successfully",
 			})
+		}
+	} else {
+		// Perform actual uninstall for requested packages one at a time
+		for idx, pkgName := range packageNames {
+			pkg := i.metadata.GetPackage(pkgName)
+			displayName := pkgName
+			if pkg != nil {
+				displayName = pkg.Name
+			}
+
+			if onProgress != nil {
+				onProgress(executor.ProgressInfo{
+					CurrentComponent: displayName,
+					TotalComponents:  len(packageNames),
+					CurrentIndex:     idx,
+					Status:           executor.StatusInstalling,
+					Message:          fmt.Sprintf("Uninstalling %s...", displayName),
+				})
+			}
+
+			var err error
+			if useRecursive {
+				err = i.vellum.DelRecursiveStreaming(func(line string) {
+					if onProgress != nil {
+						onProgress(executor.ProgressInfo{
+							CurrentComponent: displayName,
+							TotalComponents:  len(packageNames),
+							CurrentIndex:     idx,
+							Status:           executor.StatusInstalling,
+							Message:          line,
+						})
+					}
+				}, pkgName)
+			} else {
+				err = i.vellum.DelStreaming(func(line string) {
+					if onProgress != nil {
+						onProgress(executor.ProgressInfo{
+							CurrentComponent: displayName,
+							TotalComponents:  len(packageNames),
+							CurrentIndex:     idx,
+							Status:           executor.StatusInstalling,
+							Message:          line,
+						})
+					}
+				}, pkgName)
+			}
+
+			if err != nil {
+				errMsg := fmt.Sprintf("Uninstall failed for %s: %v", displayName, err)
+				errors = append(errors, errMsg)
+				reportError(onProgress, displayName, len(packageNames), idx, errMsg)
+				continue
+			}
+
+			if onProgress != nil {
+				onProgress(executor.ProgressInfo{
+					CurrentComponent: displayName,
+					TotalComponents:  len(packageNames),
+					CurrentIndex:     idx,
+					Status:           executor.StatusCompleted,
+					Message:          fmt.Sprintf("%s uninstalled successfully", displayName),
+				})
+			}
 		}
 	}
 
