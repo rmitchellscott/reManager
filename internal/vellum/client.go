@@ -127,6 +127,25 @@ type CompatibilityResult struct {
 }
 
 var osUpgradeRegex = regexp.MustCompile(`OS updated \(([^\s]+) → ([^\s]+)\)`)
+var installedPkgRegex = regexp.MustCompile(`^(.+)-(\d+(?:\.\d+)+-r\d+)\s+\S+\s+\{`)
+
+func (c *Client) ListInstalledWithVersions() (map[string]string, error) {
+	cmd := fmt.Sprintf("%s list -I", VellumBin)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]string)
+	for _, line := range strings.Split(output, "\n") {
+		if matches := installedPkgRegex.FindStringSubmatch(line); len(matches) >= 3 {
+			pkgName := matches[1]
+			version := matches[2]
+			result[pkgName] = version
+		}
+	}
+	return result, nil
+}
 
 func (c *Client) ListWithOsCheck() (*ListResult, error) {
 	cmd := fmt.Sprintf("%s info -q", VellumBin)
@@ -151,6 +170,23 @@ func (c *Client) ListWithOsCheck() (*ListResult, error) {
 		}
 	}
 	return result, nil
+}
+
+func (c *Client) ReenableStatus() (string, error) {
+	cmd := fmt.Sprintf("%s reenable status", VellumBin)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+
+	for _, line := range strings.Split(output, "\n") {
+		switch strings.TrimSpace(line) {
+		case "needed", "ok", "unneeded":
+			return strings.TrimSpace(line), nil
+		}
+	}
+
+	if err != nil {
+		return "", err
+	}
+	return "", nil
 }
 
 func (c *Client) ReenableStreaming(onOutput func(line string)) error {
@@ -234,7 +270,7 @@ func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, er
 }
 
 func (c *Client) UpgradeStreaming(onOutput func(line string)) error {
-	cmd := fmt.Sprintf("%s upgrade", VellumBin)
+	cmd := fmt.Sprintf("%s upgrade -y", VellumBin)
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
 
@@ -256,7 +292,7 @@ func (c *Client) SimulateUpgrade() (*UpgradeSimulationResult, error) {
 	}, nil
 }
 
-var upgradeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+Upgrading\s+([^\s]+)\s+\(`)
+var upgradeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Upgrading|Installing)\s+([^\s]+)\s+\(`)
 
 func parseUpgradeSimulationOutput(output string) []string {
 	var packages []string
@@ -427,6 +463,65 @@ func parseBlockedPackages(output string) map[string][]string {
 		}
 	}
 	return blocked
+}
+
+func (c *Client) GetWorldPackages() ([]string, error) {
+	cmd := fmt.Sprintf("cat %s/etc/apk/world 2>/dev/null", VellumRoot)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	var packages []string
+	for _, line := range strings.Split(output, "\n") {
+		pkg := strings.TrimSpace(line)
+		if pkg == "" {
+			continue
+		}
+		if idx := strings.Index(pkg, "@"); idx > 0 {
+			pkg = pkg[:idx]
+		}
+		packages = append(packages, pkg)
+	}
+	return packages, nil
+}
+
+func (c *Client) GetReverseDeps(pkg string) ([]string, error) {
+	cmd := fmt.Sprintf("%s info -r %s 2>/dev/null", VellumBin, pkg)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	var deps []string
+	inDepList := false
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(trimmed, "is required by:") {
+			inDepList = true
+			continue
+		}
+		if inDepList {
+			name := parsePackageNameFromInfo(trimmed)
+			if name != "" {
+				deps = append(deps, name)
+			}
+		}
+	}
+	return deps, nil
+}
+
+var infoPackageRegex = regexp.MustCompile(`^(.+)-\d+[\d.]*`)
+
+func parsePackageNameFromInfo(line string) string {
+	matches := infoPackageRegex.FindStringSubmatch(line)
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
 }
 
 func (c *Client) UninstallVellum(removeAllPackages bool, onOutput func(line string)) error {

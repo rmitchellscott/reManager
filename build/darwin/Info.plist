@@ -59,5 +59,12 @@
           {{end}}
         </array>
         {{end}}
+        <key>NSAppTransportSecurity</key>
+        <dict>
+            <key>NSAllowsLocalNetworking</key>
+            <true/>
+        </dict>
+        <key>NSLocalNetworkUsageDescription</key>
+        <string>reManager needs access to your local network to communicate with your reMarkable tablet.</string>
     </dict>
 </plist>

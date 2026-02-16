@@ -1,7 +1,12 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
-import { ExternalLink, Plus, Trash2, Check, AlertTriangle } from 'lucide-react'
+import { ExternalLink, Plus, Trash2, Check, AlertTriangle, ArrowRight, X } from 'lucide-react'
+
+interface OSConstraint {
+  version: string
+  operator: '>=' | '<' | '>' | '<=' | '='
+}
 
 interface PackageInfo {
   name: string
@@ -16,12 +21,14 @@ interface PackageInfo {
   conflicts: string[]
   osMin: string | null
   osMax: string | null
+  osConstraints: OSConstraint[] | null
 }
 
 interface PackageDetailPanelProps {
   pkg: PackageInfo
   isInstalled: boolean
-  installedPackages: Set<string>
+  installedPackages: Map<string, string>
+  installedVersion?: string
   onInstall: () => void
   onUninstall: () => void
   isQueued: boolean
@@ -31,6 +38,8 @@ interface PackageDetailPanelProps {
   firmware?: string
   conflict?: string | null
   isOsCompatible?: boolean
+  viewOnly?: boolean
+  showIncompatible?: boolean
 }
 
 const deviceLabels: Record<string, string> = {
@@ -44,6 +53,7 @@ export function PackageDetailPanel({
   pkg,
   isInstalled,
   installedPackages,
+  installedVersion,
   onInstall,
   onUninstall,
   isQueued,
@@ -53,12 +63,40 @@ export function PackageDetailPanel({
   firmware,
   conflict,
   isOsCompatible = true,
+  viewOnly = false,
+  showIncompatible = false,
 }: PackageDetailPanelProps) {
   const formatOsRange = () => {
+    if (pkg.osConstraints && pkg.osConstraints.length > 0) {
+      const minC = pkg.osConstraints.find(c => c.operator === '>=')
+      const maxC = pkg.osConstraints.find(c => c.operator === '<')
+      const exactC = pkg.osConstraints.find(c => c.operator === '=')
+
+      if (exactC) return exactC.version
+
+      if (minC && maxC) {
+        const maxInclusive = (parseFloat(maxC.version) - 0.01).toFixed(2)
+        return minC.version === maxInclusive ? minC.version : `${minC.version} – ${maxInclusive}`
+      }
+
+      if (minC) return `${minC.version}+`
+      if (maxC) {
+        const maxInclusive = (parseFloat(maxC.version) - 0.01).toFixed(2)
+        return `≤ ${maxInclusive}`
+      }
+    }
+
     if (!pkg.osMin && !pkg.osMax) return null
-    if (pkg.osMin && pkg.osMax) return `${pkg.osMin} – ${pkg.osMax}`
+    if (pkg.osMin && pkg.osMax) {
+      const maxInclusive = (parseFloat(pkg.osMax) - 0.01).toFixed(2)
+      return pkg.osMin === maxInclusive ? pkg.osMin : `${pkg.osMin} – ${maxInclusive}`
+    }
     if (pkg.osMin) return `${pkg.osMin}+`
-    return `Up to ${pkg.osMax}`
+    if (pkg.osMax) {
+      const maxInclusive = (parseFloat(pkg.osMax) - 0.01).toFixed(2)
+      return `≤ ${maxInclusive}`
+    }
+    return null
   }
 
   const osRange = formatOsRange()
@@ -68,7 +106,11 @@ export function PackageDetailPanel({
       <SheetHeader className="pb-4">
         <SheetTitle className="text-xl pr-8 flex items-center gap-2">
           {pkg.name}
-          {isInstalled && <Check className="h-5 w-5 text-green-600" />}
+          {showIncompatible ? (
+            <X className="h-5 w-5 text-destructive" />
+          ) : isInstalled ? (
+            <Check className="h-5 w-5 text-green-600" />
+          ) : null}
         </SheetTitle>
         <SheetDescription className="mt-1">{pkg.description}</SheetDescription>
       </SheetHeader>
@@ -76,7 +118,17 @@ export function PackageDetailPanel({
       <div className="flex-1 overflow-y-auto">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
           <dt className="text-muted-foreground">Version</dt>
-          <dd className="font-medium">{pkg.version}</dd>
+          <dd className={`font-medium ${showIncompatible ? 'text-destructive' : ''}`}>
+            {viewOnly && installedVersion && installedVersion !== pkg.version ? (
+              <span className="flex items-center gap-2">
+                <span className="text-muted-foreground">{installedVersion}</span>
+                <ArrowRight className="h-3 w-3" />
+                <span className={showIncompatible ? 'text-destructive' : 'text-green-600'}>{pkg.version}</span>
+              </span>
+            ) : (
+              isInstalled && installedVersion ? installedVersion : pkg.version
+            )}
+          </dd>
 
           {pkg.upstreamAuthor && (
             <>
@@ -193,7 +245,7 @@ export function PackageDetailPanel({
 
           {pkg.url && (
             <>
-              <dt className="text-muted-foreground col-span-2 mt-2 border-t pt-3">Source</dt>
+              <dt className="text-muted-foreground col-span-2 mt-2 border-t pt-3">Project</dt>
               <dd className="col-span-2">
                 <button
                   onClick={() => window.runtime.BrowserOpenURL(pkg.url)}
@@ -208,39 +260,41 @@ export function PackageDetailPanel({
         </dl>
       </div>
 
-      <div className="pt-4 mt-4 border-t">
-        {isQueued ? (
-          <Button variant="outline" className="w-full" disabled>
-            <Check className="h-4 w-4 mr-2" />
-            Queued for {queueType === 'install' ? 'Installation' : 'Removal'}
-          </Button>
-        ) : isInstalled ? (
-          <Button
-            variant="destructive"
-            className="w-full"
-            onClick={onUninstall}
-            disabled={disabled}
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            Remove
-          </Button>
-        ) : !isOsCompatible ? (
-          <Button className="w-full" disabled>
-            <AlertTriangle className="h-4 w-4 mr-2" />
-            Not compatible with {firmware}
-          </Button>
-        ) : conflict ? (
-          <Button className="w-full" disabled>
-            <AlertTriangle className="h-4 w-4 mr-2" />
-            {conflict}
-          </Button>
-        ) : (
-          <Button className="w-full" onClick={onInstall} disabled={disabled}>
-            <Plus className="h-4 w-4 mr-2" />
-            Add to Queue
-          </Button>
-        )}
-      </div>
+      {(!viewOnly || (showIncompatible && isInstalled)) && (
+        <div className="pt-4 mt-4 border-t">
+          {isQueued ? (
+            <Button variant="outline" className="w-full" disabled>
+              <Check className="h-4 w-4 mr-2" />
+              Queued for {queueType === 'install' ? 'Installation' : 'Removal'}
+            </Button>
+          ) : isInstalled ? (
+            <Button
+              variant="destructive"
+              className="w-full"
+              onClick={onUninstall}
+              disabled={disabled}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Remove
+            </Button>
+          ) : !isOsCompatible ? (
+            <Button className="w-full" disabled>
+              <AlertTriangle className="h-4 w-4 mr-2" />
+              Not compatible with {firmware}
+            </Button>
+          ) : conflict ? (
+            <Button className="w-full" disabled>
+              <AlertTriangle className="h-4 w-4 mr-2" />
+              {conflict}
+            </Button>
+          ) : (
+            <Button className="w-full" onClick={onInstall} disabled={disabled}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add to Queue
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

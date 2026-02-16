@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { Toaster, toast } from 'sonner'
 import { applyThemeWithPortal } from './main'
 import { debugLog } from '@/lib/utils'
 import { handleError, getUserFriendlyMessage } from '@/lib/errorMessages'
@@ -24,12 +25,14 @@ import { InteractiveTerminal } from '@/components/InteractiveTerminal'
 import { FileBrowser } from '@/components/FileBrowser'
 import { ConfigEditor } from '@/components/ConfigEditor'
 import { BackupRestoreDialog } from '@/components/BackupRestore'
+import { CheckOSDialog } from '@/components/CheckOSDialog'
+import { SupportBundlePage } from '@/components/SupportBundlePage'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -44,6 +47,7 @@ interface PackageInfo {
   conflicts: string[]
   osMin: string | null
   osMax: string | null
+  osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
 }
 
 interface MaintenanceCommandInfo {
@@ -102,6 +106,7 @@ interface DialogRequest {
   steps: string[]
   confirmText: string
   inProgressMessage: string
+  infoOnly: boolean
 }
 
 interface InstallSimulationResult {
@@ -113,6 +118,8 @@ interface UninstallSimulationResult {
   packages: string[]
   blocked: Record<string, string[]> | null
   recursivePackages: string[] | null
+  worldDeps: string[] | null
+  allAffected: string[] | null
 }
 
 interface InstalledPackagesResult {
@@ -167,8 +174,11 @@ declare global {
           CheckPackageInstalled(pkgName: string): Promise<boolean>
           CheckHashtabVersion(): Promise<HashtabVersionStatus>
           GetPackages(deviceType: string, firmware: string, arch: string): Promise<PackageInfo[]>
+          RefreshMetadata(): Promise<void>
           GetInstalledPackages(): Promise<string[]>
           GetInstalledPackagesWithOsCheck(): Promise<InstalledPackagesResult>
+          GetInstalledPackagesWithVersions(): Promise<Record<string, string>>
+          GetPackageForOS(name: string, targetOS: string, deviceType: string, arch: string): Promise<PackageInfo | null>
           RunReenable(): Promise<void>
           SimulatePackageUpgrade(): Promise<{ packages: string[]; hasUpgrades: boolean }>
           RunPackageUpgrade(): Promise<void>
@@ -194,8 +204,9 @@ declare global {
           RespondToDialog(confirmed: boolean): Promise<void>
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; theme: string; terminalTheme: string; editorTheme: string }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string, terminalTheme: string, editorTheme: string): Promise<void>
+          CheckForAppUpdate(): Promise<{ updateAvailable: boolean; latestVersion: string; currentVersion: string; releaseURL: string; error?: string }>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean): Promise<void>
           GetSystemColorScheme(): Promise<string>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           CleanupBrokenVellum(): Promise<void>
@@ -207,6 +218,9 @@ declare global {
           DownloadFile(remotePath: string): void
           UploadFile(remotePath: string): void
           UploadFilesFromPaths(localPaths: string[], remotePath: string): void
+          DownloadFolder(remotePath: string): void
+          UploadFolder(remotePath: string): void
+          CancelFolderTransfer(): void
           DeletePath(path: string): Promise<void>
           RenamePath(oldPath: string, newPath: string): Promise<void>
           CreateDirectory(path: string): Promise<void>
@@ -215,7 +229,8 @@ declare global {
           BackupConfigFile(): Promise<string>
           ListConfigBackups(): Promise<Array<{name: string; timestamp: number; size: number}>>
           RestoreConfigBackup(backupName: string): Promise<void>
-          CreateDeviceBackup(): void
+          SelectBackupFile(): Promise<string>
+          CreateDeviceBackup(destPath: string): void
           SelectRestoreFile(): Promise<string>
           RestoreDeviceBackup(archivePath: string): void
           CancelBackup(): void
@@ -225,6 +240,16 @@ declare global {
           IsSleepScreenSupported(): Promise<boolean>
           SetSleepScreen(imagePath: string): Promise<void>
           RestartXochitl(): Promise<void>
+          DeleteAllLogs(): Promise<void>
+          GetSupportBundlePreview(): Promise<{ included: string[]; excluded: string[] }>
+          GenerateSupportBundle(deviceID: string): void
+          UploadSupportBundle(deviceID: string): void
+          AppendSupportBundle(remoteID: string, deviceID: string): void
+          DeleteSupportBundle(remoteID: string): Promise<void>
+          GetBundleHistory(): Promise<{ id: string; remoteId: string; url: string; deviceName: string; deviceId: string; uploadedAt: number; lastAppended?: number; expiresAt?: number }[]>
+          CopyToClipboard(text: string): void
+          GetSupportBundleSessionID(): Promise<string>
+          ResetSupportBundleSession(): Promise<void>
         }
       }
     }
@@ -249,10 +274,10 @@ export default function App() {
   const [customKeyName, setCustomKeyName] = useState<string>('')
   const [keyPassphrase, setKeyPassphrase] = useState('')
   const [connecting, setConnecting] = useState(false)
-  const [error, setError] = useState('')
   const [device, setDevice] = useState<string>('')
   const [deviceInfo, setDeviceInfo] = useState<Record<string, string>>({})
-  const [installedPackages, setInstalledPackages] = useState<Set<string>>(new Set())
+  const [installedPackages, setInstalledPackages] = useState<Map<string, string>>(new Map())
+  const [refreshingPackages, setRefreshingPackages] = useState(false)
   const [vellumInstalled, setVellumInstalled] = useState<boolean | null>(null)
   const [bootstrapping, setBootstrapping] = useState(false)
   const [bootstrapOutput, setBootstrapOutput] = useState('')
@@ -264,6 +289,7 @@ export default function App() {
   const [progressStatus, setProgressStatus] = useState('')
   const [showRebuildDialog, setShowRebuildDialog] = useState(false)
   const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
+  const dialogRespondedRef = useRef(false)
   const [runningHookTitle, setRunningHookTitle] = useState<string | null>(null)
   const connectAttemptRef = useRef(0)
 
@@ -282,6 +308,7 @@ export default function App() {
   const [uninstalling, setUninstalling] = useState(false)
   const [maintenanceOutput, setMaintenanceOutput] = useState('')
   const [commandRunning, setCommandRunning] = useState(false)
+  const [rescanning, setRescanning] = useState(false)
   const [currentRunningCommand, setCurrentRunningCommand] = useState<{
     componentId: string
     commandId: string
@@ -298,6 +325,7 @@ export default function App() {
   const manuallyStoppedRef = useRef(false)
 
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
+  const [showSupportBundles, setShowSupportBundles] = useState(false)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
   const [showConfigEditor, setShowConfigEditor] = useState(false)
   const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
@@ -310,9 +338,11 @@ export default function App() {
   })
   const [proxyMode, setProxyMode] = useState(true)
   const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
+  const [preventSleep, setPreventSleep] = useState(true)
   const [theme, setTheme] = useState('system')
   const [terminalTheme, setTerminalTheme] = useState('match')
   const [editorTheme, setEditorTheme] = useState('match')
+  const [checkForUpdates, setCheckForUpdates] = useState(true)
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
@@ -345,10 +375,13 @@ export default function App() {
   const [deviceToDelete, setDeviceToDelete] = useState<string | null>(null)
   const [editingDevice, setEditingDevice] = useState<SavedDevice | null>(null)
   const [connectingDeviceId, setConnectingDeviceId] = useState<string | null>(null)
+  const [connectedDeviceId, setConnectedDeviceId] = useState('')
   const [queueError, setQueueError] = useState<string | null>(null)
   const [lastInstallSuccess, setLastInstallSuccess] = useState<boolean | null>(null)
   const [lastOperationType, setLastOperationType] = useState<'install' | 'uninstall' | null>(null)
   const [selectedPackage, setSelectedPackage] = useState<PackageInfo | null>(null)
+  const [sidebarViewOnly, setSidebarViewOnly] = useState(false)
+  const [sidebarIncompatible, setSidebarIncompatible] = useState(false)
   const [pendingInstallConfirm, setPendingInstallConfirm] = useState<{
     packages: string[]
     requested: string[]
@@ -358,6 +391,7 @@ export default function App() {
     packages: string[]
     blocked: Record<string, string[]> | null
     useRecursive: boolean
+    worldDeps?: string[]
   } | null>(null)
   const [simulatingInstall, setSimulatingInstall] = useState(false)
   const [simulatingUninstall, setSimulatingUninstall] = useState(false)
@@ -366,9 +400,11 @@ export default function App() {
   const [prevOsVersion, setPrevOsVersion] = useState('')
   const [newOsVersion, setNewOsVersion] = useState('')
   const [runningReenable, setRunningReenable] = useState(false)
+  const [reenableStatus, setReenableStatus] = useState('')
   const [pendingPackageUpgrade, setPendingPackageUpgrade] = useState<string[] | null>(null)
   const [simulatingUpgrade, setSimulatingUpgrade] = useState(false)
   const [showNoUpgradesDialog, setShowNoUpgradesDialog] = useState(false)
+  const [showCheckOSDialog, setShowCheckOSDialog] = useState(false)
 
   const [osMismatchDetected, setOsMismatchDetected] = useState(false)
   const [storedOsVersion, setStoredOsVersion] = useState('')
@@ -398,9 +434,11 @@ export default function App() {
 
   const [showFilesystemRestoreError, setShowFilesystemRestoreError] = useState(false)
   const [isRetryingFilesystemRestore, setIsRetryingFilesystemRestore] = useState(false)
+  const [writeableRootBusy, setWriteableRootBusy] = useState(false)
 
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
+  const [developerFilter, setDeveloperFilter] = useState('all')
   const [viewMode, setViewMode] = useState<'full' | 'compact'>(() => {
     const saved = localStorage.getItem('packageViewMode')
     return saved === 'compact' ? 'compact' : 'full'
@@ -418,6 +456,11 @@ export default function App() {
   const categories = useMemo(() => {
     const cats = new Set(packages.flatMap(p => p.categories || []))
     return Array.from(cats).sort()
+  }, [packages])
+
+  const developers = useMemo(() => {
+    const devs = new Set(packages.map(p => p.upstreamAuthor).filter(Boolean))
+    return Array.from(devs).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
   }, [packages])
 
   const resolvedAppTheme = useMemo((): 'dark' | 'light' => {
@@ -476,9 +519,12 @@ export default function App() {
         if (categoryFilter !== 'all' && !(pkg.categories || []).includes(categoryFilter)) {
           return false
         }
+        if (developerFilter !== 'all' && pkg.upstreamAuthor !== developerFilter) {
+          return false
+        }
         return true
       })
-  }, [packages, search, categoryFilter, deviceInfo.firmware])
+  }, [packages, search, categoryFilter, developerFilter, deviceInfo.firmware])
 
   const installedFiltered = useMemo(() =>
     filteredPackages.filter(pkg => installedPackages.has(pkg.name)),
@@ -489,6 +535,15 @@ export default function App() {
     filteredPackages.filter(pkg => !installedPackages.has(pkg.name)),
     [filteredPackages, installedPackages]
   )
+
+  useEffect(() => {
+    if (selectedPackage) {
+      const updated = packages.find(p => p.name === selectedPackage.name)
+      if (updated && updated !== selectedPackage) {
+        setSelectedPackage(updated)
+      }
+    }
+  }, [packages])
 
   useEffect(() => {
     commandContextRef.current = commandContext
@@ -530,11 +585,31 @@ export default function App() {
         setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true, utilities: true })
         setProxyMode(settings?.proxyMode ?? true)
         setSuppressSystemFileWarnings(settings?.suppressSystemFileWarnings ?? false)
+        setPreventSleep(settings?.preventSleep ?? true)
         const loadedTheme = settings?.theme || 'system'
         setTheme(loadedTheme)
         localStorage.setItem('theme', loadedTheme)
         setTerminalTheme(settings?.terminalTheme || 'match')
         setEditorTheme(settings?.editorTheme || 'match')
+        const shouldCheckUpdates = settings?.checkForUpdates ?? true
+        setCheckForUpdates(shouldCheckUpdates)
+
+        if (shouldCheckUpdates) {
+          window.go.main.App.CheckForAppUpdate().then((result) => {
+            if (result.updateAvailable && result.latestVersion) {
+              toast.info(`Update available: ${result.latestVersion}`, {
+                description: `You're running ${result.currentVersion}`,
+                action: {
+                  label: 'View Release',
+                  onClick: () => window.runtime.BrowserOpenURL(result.releaseURL)
+                },
+                duration: 6000,
+              })
+            }
+          }).catch((err) => {
+            debugLog('[DEBUG] Update check failed:', err)
+          })
+        }
       } catch (err) {
         debugLog('Could not load initial data:', err)
         setSelectedKey('__other__')
@@ -609,7 +684,6 @@ export default function App() {
     const thisAttempt = ++connectAttemptRef.current
     setConnecting(true)
     setConnectingDeviceId(id)
-    setError('')
 
     try {
       const result = await window.go.main.App.ConnectToSavedDevice(id)
@@ -617,6 +691,7 @@ export default function App() {
       if (thisAttempt !== connectAttemptRef.current) return
 
       if (result.success) {
+        setConnectedDeviceId(id)
         const info = await window.go.main.App.GetDeviceInfo()
         const deviceType = result.device || 'unknown'
         setDevice(deviceType)
@@ -629,7 +704,8 @@ export default function App() {
         debugLog('[DEBUG] handleConnectToSavedDevice: calling GetInstalledPackagesWithOsCheck')
         const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
         debugLog('[DEBUG] handleConnectToSavedDevice: result =', installedResult)
-        setInstalledPackages(new Set(installedResult.packages || []))
+        const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
+        setInstalledPackages(new Map(Object.entries(installedVersions || {})))
         if (installedResult.osUpgraded) {
           setOsUpgradeDetected(true)
           setPrevOsVersion(installedResult.prevVersion)
@@ -646,11 +722,11 @@ export default function App() {
         setMaintenanceCommands(maintCmds)
         setStep('select')
       } else {
-        setError(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
+        toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
       }
     } catch (err) {
       if (thisAttempt !== connectAttemptRef.current) return
-      setError(handleError(err, 'Connection'))
+      toast.error(handleError(err, 'Connection'))
     } finally {
       if (thisAttempt === connectAttemptRef.current) {
         setConnecting(false)
@@ -720,7 +796,6 @@ export default function App() {
     if (availableKeys.length > 0) {
       setSelectedKey(availableKeys[0].path)
     }
-    setError('')
   }
 
   useEffect(() => {
@@ -760,7 +835,18 @@ export default function App() {
         return
       }
 
-      if (!success && !manuallyStoppedRef.current) {
+      if (!success && manuallyStoppedRef.current) {
+        manuallyStoppedRef.current = false
+        setShowProgressModal(false)
+        setMaintenanceOutput('')
+        setProgressModalType(null)
+        setCommandRunning(false)
+        setRunningSystemTask(null)
+        setSettingTimezone(false)
+        setCommandContext(null)
+        return
+      }
+      if (!success) {
         if (commandContextRef.current === 'maintenance') {
           setMaintenanceOutput((prev) => prev + '\n[Command failed]\n')
           setShowProgressModal(true)
@@ -768,7 +854,6 @@ export default function App() {
           setOutput((prev) => prev + '\n[Command failed]\n')
         }
       }
-      manuallyStoppedRef.current = false
       // Refresh status after maintenance commands
       if (commandContextRef.current === 'maintenance') {
         const [hashtabStatus, tzStatus] = await Promise.all([
@@ -801,10 +886,12 @@ export default function App() {
         setCommandRunning(false)
         setRunningSystemTask(null)
         setSettingTimezone(false)
+        setCommandContext(null)
       } else {
         setCommandRunning(false)
         setRunningSystemTask(null)
         setSettingTimezone(false)
+        setCommandContext(null)
       }
     })
 
@@ -882,6 +969,7 @@ export default function App() {
     const unsubscribeDialog = window.runtime.EventsOn('hook:dialog', (...args: unknown[]) => {
       const dialog = args[0] as DialogRequest
       debugLog('Received hook:dialog:', dialog)
+      dialogRespondedRef.current = false
       setDialogRequest(dialog)
       setShowRebuildDialog(true)
     })
@@ -1032,6 +1120,11 @@ export default function App() {
       setCurrentOsVersion(data.newVersion)
     })
 
+    const unsubscribeReenableStatus = window.runtime.EventsOn('reenable:status', (...args: unknown[]) => {
+      debugLog('Received reenable:status:', args[0])
+      setReenableStatus(args[0] as string)
+    })
+
     const unsubscribeUpgradeBlocked = window.runtime.EventsOn('upgrade:blocked', (...args: unknown[]) => {
       const compat = args[0] as {
         compatible: string[]
@@ -1049,23 +1142,62 @@ export default function App() {
       setChecklistLoading(false)
     })
 
-    const unsubscribeUpgradeComplete = window.runtime.EventsOn('upgrade:complete', (...args: unknown[]) => {
-      const success = args[0] as boolean
-      debugLog('Received upgrade:complete:', success)
+    const unsubscribeUpgradeComplete = window.runtime.EventsOn('upgrade:complete', async (...args: unknown[]) => {
+      const result = args[0] as { success: boolean; dnsError: boolean }
+      debugLog('Received upgrade:complete:', result)
       setChecklistLoading(false)
-      if (success) {
+      if (result.success) {
         setOsMismatchDetected(false)
         setCompatibilityStatus(null)
+        setRescanning(true)
+        try {
+          const info = await window.go.main.App.GetDeviceInfo()
+          setDeviceInfo(info)
+          const arch = await window.go.main.App.GetDeviceArchitecture(device)
+          const filteredPkgs = await window.go.main.App.GetPackages(device, info.firmware || '', arch)
+          setPackages(filteredPkgs || [])
+        } catch (err) {
+          debugLog('Failed to refresh device info after upgrade:', err)
+        }
+        await rescanAllPackages()
+        setRescanning(false)
+      }
+      setCommandRunning(false)
+      setCommandContext(null)
+      if (result.dnsError && !dnsErrorShown) {
+        const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
+        if (!currentProxyMode) {
+          setShowDnsErrorModal(true)
+          setDnsErrorShown(true)
+        }
       }
     })
 
     const unsubscribePackageUpgradeComplete = window.runtime.EventsOn('package-upgrade:complete', async (...args: unknown[]) => {
-      const success = args[0] as boolean
-      debugLog('Received package-upgrade:complete:', success)
+      const result = args[0] as { success: boolean; dnsError: boolean }
+      debugLog('Received package-upgrade:complete:', result)
+      if (result.success) {
+        setRescanning(true)
+        try {
+          const info = await window.go.main.App.GetDeviceInfo()
+          setDeviceInfo(info)
+          const arch = await window.go.main.App.GetDeviceArchitecture(device)
+          const filteredPkgs = await window.go.main.App.GetPackages(device, info.firmware || '', arch)
+          setPackages(filteredPkgs || [])
+        } catch (err) {
+          debugLog('Failed to refresh device info after package upgrade:', err)
+        }
+        await rescanAllPackages()
+        setRescanning(false)
+      }
       setCommandRunning(false)
       setCommandContext(null)
-      if (success) {
-        await rescanAllPackages()
+      if (result.dnsError && !dnsErrorShown) {
+        const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
+        if (!currentProxyMode) {
+          setShowDnsErrorModal(true)
+          setDnsErrorShown(true)
+        }
       }
     })
 
@@ -1180,6 +1312,10 @@ export default function App() {
       setShowFilesystemRestoreError(true)
     })
 
+    const unsubscribeWriteableRootBusy = window.runtime.EventsOn('writeable-root:busy', (...args: unknown[]) => {
+      setWriteableRootBusy(args[0] as boolean)
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
@@ -1207,6 +1343,7 @@ export default function App() {
       unsubscribeTimezoneComplete()
       unsubscribeTimezoneError()
       unsubscribeOsMismatch()
+      unsubscribeReenableStatus()
       unsubscribeUpgradeBlocked()
       unsubscribeUpgradeError()
       unsubscribeUpgradeComplete()
@@ -1218,6 +1355,7 @@ export default function App() {
       unsubscribeConnectionRestored()
       unsubscribeConnectionFailed()
       unsubscribeFilesystemRestoreError()
+      unsubscribeWriteableRootBusy()
     }
   }, [])
 
@@ -1236,7 +1374,6 @@ export default function App() {
   const handleConnect = async (saveAfterConnect: boolean) => {
     const thisAttempt = ++connectAttemptRef.current
     setConnecting(true)
-    setError('')
 
     try {
       let result
@@ -1263,7 +1400,8 @@ export default function App() {
         debugLog('[DEBUG] handleConnect: calling GetInstalledPackagesWithOsCheck')
         const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
         debugLog('[DEBUG] handleConnect: result =', installedResult)
-        setInstalledPackages(new Set(installedResult.packages || []))
+        const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
+        setInstalledPackages(new Map(Object.entries(installedVersions || {})))
         if (installedResult.osUpgraded) {
           setOsUpgradeDetected(true)
           setPrevOsVersion(installedResult.prevVersion)
@@ -1288,13 +1426,13 @@ export default function App() {
         setStep('select')
         setShowAddForm(false)
       } else {
-        setError(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
+        toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
       }
     } catch (err) {
       if (thisAttempt !== connectAttemptRef.current) {
         return
       }
-      setError(handleError(err, 'Connection'))
+      toast.error(handleError(err, 'Connection'))
     } finally {
       if (thisAttempt === connectAttemptRef.current) {
         setConnecting(false)
@@ -1329,15 +1467,15 @@ export default function App() {
     connectAttemptRef.current++
     await window.go.main.App.CancelConnect()
     setConnecting(false)
-    setError('')
   }
 
   const handleDisconnect = async () => {
     await window.go.main.App.Disconnect()
     setStep('connect')
     setDevice('')
+    setConnectedDeviceId('')
     setDeviceInfo({})
-    setInstalledPackages(new Set())
+    setInstalledPackages(new Map())
     setInstallQueue(new Set())
     setUninstallQueue(new Set())
     setOutput('')
@@ -1348,7 +1486,6 @@ export default function App() {
     setStoredOsVersion('')
     setCurrentOsVersion('')
     setChecklistLoading(false)
-    setError('')
     setVellumInstalled(null)
     setBootstrapping(false)
     setBootstrapOutput('')
@@ -1362,6 +1499,7 @@ export default function App() {
     setReconnectAttempt(0)
     setShowFileBrowser(false)
     setShowConfigEditor(false)
+    setWriteableRootBusy(false)
 
     const devices = await window.go.main.App.GetSavedDevices()
     setSavedDevices(devices || [])
@@ -1396,21 +1534,39 @@ export default function App() {
     setShowFilesystemRestoreError(false)
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newPreventSleep: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string, newCheckForUpdates: boolean) => {
+    const wasCheckForUpdatesOff = !checkForUpdates
     setTabVisibility(newTabVisibility)
     setProxyMode(newProxyMode)
     setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
+    setPreventSleep(newPreventSleep)
     setTheme(newTheme)
     localStorage.setItem('theme', newTheme)
     await applyThemeWithPortal(newTheme)
     setTerminalTheme(newTerminalTheme)
     setEditorTheme(newEditorTheme)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newTheme, newTerminalTheme, newEditorTheme)
+    setCheckForUpdates(newCheckForUpdates)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newPreventSleep, newTheme, newTerminalTheme, newEditorTheme, newCheckForUpdates)
+
+    if (wasCheckForUpdatesOff && newCheckForUpdates) {
+      window.go.main.App.CheckForAppUpdate().then((result) => {
+        if (result.updateAvailable && result.latestVersion) {
+          toast.info(`Update available: ${result.latestVersion}`, {
+            description: `You're running ${result.currentVersion}`,
+            action: {
+              label: 'View Release',
+              onClick: () => window.runtime.BrowserOpenURL(result.releaseURL)
+            },
+            duration: 6000,
+          })
+        }
+      }).catch(() => {})
+    }
   }
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, theme, terminalTheme, editorTheme)
+    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates)
     setShowDnsErrorModal(false)
   }
 
@@ -1566,12 +1722,54 @@ export default function App() {
 
   const rescanAllPackages = async () => {
     try {
-      const installed = await window.go.main.App.GetInstalledPackages()
-      setInstalledPackages(new Set(installed || []))
+      const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
+      setInstalledPackages(new Map(Object.entries(installedVersions || {})))
       return true
     } catch (err) {
       console.error('Failed to rescan package status:', err)
       return false
+    }
+  }
+
+  const handleSelectPackageForOS = async (name: string, targetOS: string, isCompatible: boolean = true) => {
+    try {
+      const arch = await window.go.main.App.GetDeviceArchitecture(device)
+      let pkg = await window.go.main.App.GetPackageForOS(name, targetOS, device, arch)
+      if (!pkg) {
+        pkg = packages.find(p => p.name === name) || null
+      }
+      if (pkg) {
+        setSidebarViewOnly(true)
+        setSidebarIncompatible(!isCompatible)
+        setSelectedPackage(pkg)
+      }
+    } catch (err) {
+      console.error('Failed to get package for OS:', err)
+    }
+  }
+
+  const handleRefreshPackages = async () => {
+    setRefreshingPackages(true)
+    try {
+      await window.go.main.App.RefreshMetadata()
+      if (device) {
+        const info = await window.go.main.App.GetDeviceInfo()
+        setDeviceInfo(info)
+        const arch = await window.go.main.App.GetDeviceArchitecture(device)
+        const filteredPkgs = await window.go.main.App.GetPackages(device, info.firmware || '', arch)
+        setPackages(filteredPkgs || [])
+      }
+      await rescanAllPackages()
+    } catch (err) {
+      console.error('Failed to refresh packages:', err)
+    }
+    setRefreshingPackages(false)
+  }
+
+  const handleTabChange = async (value: 'mods' | 'maintenance' | 'utilities') => {
+    setActiveTab(value)
+    if (value === 'mods') {
+      await rescanAllPackages()
     }
   }
 
@@ -1587,6 +1785,10 @@ export default function App() {
     await window.go.main.App.RunReenable()
 
     setRunningReenable(false)
+    setReenableStatus('ok')
+    setRescanning(true)
+    await rescanAllPackages()
+    setRescanning(false)
     setCommandRunning(false)
     setCommandContext(null)
     setOsUpgradeDetected(false)
@@ -1654,10 +1856,6 @@ export default function App() {
     setCommandContext('maintenance')
 
     await window.go.main.App.RunUpgrade()
-
-    setChecklistLoading(false)
-    setCommandRunning(false)
-    setCommandContext(null)
   }
 
   const fetchUpdateServiceStatus = async () => {
@@ -1747,6 +1945,7 @@ export default function App() {
         ? `${action} failed`
         : `${action} complete!`
     } else if (progressModalType === 'maintenance') {
+      if (rescanning) return 'Refreshing package list...'
       return commandRunning ? 'Running command...' : 'Command complete!'
     }
     return ''
@@ -1773,6 +1972,14 @@ export default function App() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Settings</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" onClick={() => setShowSupportBundles(true)}>
+                  <LifeBuoy className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Support</TooltipContent>
             </Tooltip>
             {device && (
               <Tooltip>
@@ -1846,9 +2053,6 @@ export default function App() {
                           )}
                         </div>
                       </div>
-                      {error && connectingDeviceId === savedDevice.id && (
-                        <p className="text-sm text-destructive mt-2">{error}</p>
-                      )}
                     </CardContent>
                   </Card>
                 ))}
@@ -1996,7 +2200,6 @@ export default function App() {
                     </>
                   )}
 
-                  {error && <p className="text-sm text-destructive">{error}</p>}
                   <div className="flex justify-between">
                     <div>
                       {savedDevices.length > 0 && (
@@ -2071,7 +2274,7 @@ export default function App() {
         )}
 
         {/* Warning Banner */}
-        {step !== 'connect' && !osMismatchDetected && (
+        {step !== 'connect' && (
           <div className="mb-4">
             <ConsolidatedWarningBanner
               warnings={{
@@ -2079,6 +2282,7 @@ export default function App() {
                 hashtabMismatch: hashtabMismatch ? { hashtabVersion: hashtabMismatch.hashtabVersion, firmwareVersion: hashtabMismatch.firmwareVersion } : undefined,
                 timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
                 autoUpdatesEnabled: showAutoUpdateBanner,
+                reenableNeeded: reenableStatus === 'needed',
               }}
               onGoToMaintenance={() => setActiveTab('maintenance')}
               onDismiss={() => {
@@ -2092,7 +2296,8 @@ export default function App() {
         )}
 
         {step !== 'connect' && (
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'mods' | 'maintenance' | 'utilities')}>
+          <>
+          <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as 'mods' | 'maintenance' | 'utilities')}>
             <TabsList className={`grid w-full mb-4 grid-cols-${[tabVisibility.mods, true, tabVisibility.utilities].filter(Boolean).length}`}>
               {tabVisibility.mods && <TabsTrigger value="mods">Mods</TabsTrigger>}
               <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
@@ -2154,45 +2359,83 @@ export default function App() {
                     onAddToUninstallQueue={addToUninstallQueue}
                     onRemoveFromUninstallQueue={removeFromUninstallQueue}
                     onRunUpgrade={handleChecklistUpgrade}
-                    autoUpdatesEnabled={updateServiceStatus.enabled}
-                    hashtabMismatch={!!hashtabMismatch}
-                    timezoneMismatch={!!timezoneMismatch}
-                    onGoToMaintenance={() => setActiveTab('maintenance')}
+                    onSelectPackage={handleSelectPackageForOS}
                   />
                 </div>
               ) : (
               <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
                   {/* Filters */}
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search mods..."
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className="pl-9"
-                      />
+                  <div className="flex flex-wrap gap-2">
+                    <div className="flex gap-2 w-full md:contents">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search mods..."
+                          value={search}
+                          onChange={(e) => setSearch(e.target.value)}
+                          className={`pl-9 ${search ? 'pr-8' : ''}`}
+                        />
+                        {search && (
+                          <button
+                            onClick={() => setSearch('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="md:order-last"
+                            onClick={handleRefreshPackages}
+                            disabled={refreshingPackages}
+                          >
+                            {refreshingPackages ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Refresh package list</TooltipContent>
+                      </Tooltip>
                     </div>
-                    <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                      <SelectTrigger className="w-[160px]">
-                        <SelectValue placeholder="Category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Categories</SelectItem>
-                        {categories.map((cat) => (
-                          <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={viewMode} onValueChange={(v) => setViewMode(v as 'full' | 'compact')}>
-                      <SelectTrigger className="w-[120px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="full">Full</SelectItem>
-                        <SelectItem value="compact">Compact</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <div className="flex gap-2 w-full md:contents">
+                      <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                        <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
+                          <SelectValue placeholder="Category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Categories</SelectItem>
+                          {categories.map((cat) => (
+                            <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={developerFilter} onValueChange={setDeveloperFilter}>
+                        <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
+                          <SelectValue placeholder="Developer" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Developers</SelectItem>
+                          {developers.map((dev) => (
+                            <SelectItem key={dev} value={dev}>{dev}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={viewMode} onValueChange={(v) => setViewMode(v as 'full' | 'compact')}>
+                        <SelectTrigger className="flex-1 md:flex-none md:w-[120px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="full">Full</SelectItem>
+                          <SelectItem value="compact">Compact</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
 
                   {/* Installed Section */}
@@ -2213,7 +2456,7 @@ export default function App() {
                                   <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
-                                    onClick={() => setSelectedPackage(pkg)}
+                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
                                   >
                                     {viewMode === 'compact' ? (
                                       <div className="flex items-center gap-2">
@@ -2284,7 +2527,7 @@ export default function App() {
                                   <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
-                                    onClick={() => setSelectedPackage(pkg)}
+                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
                                   >
                                     {viewMode === 'compact' ? (
                                       <div className="flex items-center gap-2">
@@ -2366,185 +2609,6 @@ export default function App() {
                   )}
                 </div>
               )}
-
-              {/* Queue Section - Outside ternary so it shows with both checklist and normal mods */}
-              {(installQueue.size > 0 || uninstallQueue.size > 0) && (
-                <div className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4">
-                  {/* Install Queue */}
-                  {installQueue.size > 0 && (
-                    <div>
-                      <Accordion type="single" collapsible>
-                        <AccordionItem value="install-queue" className="border-none">
-                          <AccordionTrigger className="py-2 text-sm font-medium hover:no-underline">
-                            Install Queue ({installQueue.size})
-                          </AccordionTrigger>
-                          <AccordionContent>
-                            <div className="space-y-1 mb-3">
-                              {Array.from(installQueue).map((name) => {
-                                return (
-                                  <div
-                                    key={name}
-                                    className="flex items-center justify-between text-sm py-1"
-                                  >
-                                    <span>{name}</span>
-                                    <button
-                                      onClick={() => removeFromQueue(name)}
-                                      className="text-muted-foreground hover:text-foreground"
-                                    >
-                                      <X className="h-4 w-4" />
-                                    </button>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </AccordionContent>
-                        </AccordionItem>
-                      </Accordion>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          className="flex-1"
-                          onClick={clearQueue}
-                          disabled={installing || uninstalling}
-                        >
-                          Clear Install Queue
-                        </Button>
-                        <Button
-                          className="flex-1"
-                          onClick={async () => {
-                            setSimulatingInstall(true)
-                            try {
-                              const sim = await window.go.main.App.SimulateInstall([...installQueue], device)
-                              if (sim.packages.length === 0) {
-                                setQueueError('All packages are already installed')
-                                setTimeout(() => setQueueError(null), 4000)
-                                setInstallQueue(new Set())
-                              } else {
-                                setPendingInstallConfirm({ packages: sim.packages, requested: sim.requested })
-                              }
-                            } catch (err) {
-                              console.error('SimulateInstall failed:', err)
-                              const pkgs = [...installQueue]
-                              setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
-                            } finally {
-                              setSimulatingInstall(false)
-                            }
-                          }}
-                          disabled={installing || uninstalling || simulatingInstall || connectionStatus !== 'connected'}
-                        >
-                          {installing ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Installing...
-                            </>
-                          ) : simulatingInstall ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Checking...
-                            </>
-                          ) : (
-                            'Install Selected'
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Uninstall Queue */}
-                  {uninstallQueue.size > 0 && (
-                    <div>
-                      <Accordion type="single" collapsible>
-                        <AccordionItem value="uninstall-queue" className="border-none">
-                          <AccordionTrigger className="py-2 text-sm font-medium text-destructive hover:no-underline">
-                            Uninstall Queue ({uninstallQueue.size})
-                          </AccordionTrigger>
-                          <AccordionContent>
-                            <div className="space-y-1 mb-3">
-                              {Array.from(uninstallQueue).map((name) => {
-                                return (
-                                  <div
-                                    key={name}
-                                    className="flex items-center justify-between text-sm py-1"
-                                  >
-                                    <span>{name}</span>
-                                    <button
-                                      onClick={() => removeFromUninstallQueue(name)}
-                                      className="text-muted-foreground hover:text-foreground"
-                                    >
-                                      <X className="h-4 w-4" />
-                                    </button>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </AccordionContent>
-                        </AccordionItem>
-                      </Accordion>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          className="flex-1"
-                          onClick={clearUninstallQueue}
-                          disabled={installing || uninstalling}
-                        >
-                          Clear Uninstall Queue
-                        </Button>
-                        <Button
-                          className="flex-1"
-                          onClick={async () => {
-                            setSimulatingUninstall(true)
-                            try {
-                              const selected = [...uninstallQueue]
-                              const sim = await window.go.main.App.SimulateUninstall(selected)
-                              if (sim.blocked && Object.keys(sim.blocked).length > 0) {
-                                setPendingUninstallConfirm({
-                                  selected,
-                                  packages: sim.recursivePackages || sim.packages,
-                                  blocked: sim.blocked,
-                                  useRecursive: true
-                                })
-                              } else {
-                                setPendingUninstallConfirm({
-                                  selected,
-                                  packages: sim.packages.length > 0 ? sim.packages : selected,
-                                  blocked: null,
-                                  useRecursive: false
-                                })
-                              }
-                            } catch (err) {
-                              console.error('SimulateUninstall failed:', err)
-                              const selected = [...uninstallQueue]
-                              setPendingUninstallConfirm({
-                                selected,
-                                packages: selected,
-                                blocked: null,
-                                useRecursive: false
-                              })
-                            } finally {
-                              setSimulatingUninstall(false)
-                            }
-                          }}
-                          disabled={installing || uninstalling || simulatingUninstall || connectionStatus !== 'connected'}
-                        >
-                          {uninstalling ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Removing...
-                            </>
-                          ) : simulatingUninstall ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Checking...
-                            </>
-                          ) : (
-                            'Uninstall Selected'
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
             </TabsContent>
             )}
 
@@ -2579,7 +2643,7 @@ export default function App() {
                             <Button
                               key={task.id}
                               onClick={() => handleSystemTask(task.id)}
-                              disabled={commandRunning || isEnableDisabled || isDisableDisabled || connectionStatus !== 'connected'}
+                              disabled={commandRunning || isEnableDisabled || isDisableDisabled || connectionStatus !== 'connected' || (task.needsWriteableRoot && writeableRootBusy)}
                               variant={shouldHighlight ? 'default' : 'outline'}
                             >
                               {isRunning ? (
@@ -2607,7 +2671,7 @@ export default function App() {
                         </div>
                         <Button
                           onClick={handleSetTimezone}
-                          disabled={settingTimezone || connectionStatus !== 'connected' || !selectedTimezone || selectedTimezone === deviceTimezone}
+                          disabled={settingTimezone || connectionStatus !== 'connected' || !selectedTimezone || selectedTimezone === deviceTimezone || writeableRootBusy}
                           variant={timezoneMismatch?.needsUpdate ? 'default' : 'outline'}
                         >
                           {settingTimezone ? (
@@ -2640,8 +2704,8 @@ export default function App() {
                             <TooltipTrigger asChild>
                               <Button
                                 onClick={handleRunReenable}
-                                disabled={commandRunning || runningReenable || connectionStatus !== 'connected'}
-                                variant="outline"
+                                disabled={commandRunning || runningReenable || connectionStatus !== 'connected' || reenableStatus === 'unneeded' || writeableRootBusy}
+                                variant={reenableStatus === 'needed' ? 'default' : 'outline'}
                                 size="sm"
                                 className="flex-1"
                               >
@@ -2663,6 +2727,20 @@ export default function App() {
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>Check for and install package updates</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                onClick={() => setShowCheckOSDialog(true)}
+                                disabled={connectionStatus !== 'connected'}
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                              >
+                                Check OS
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Check package compatibility with a target OS version</TooltipContent>
                           </Tooltip>
                         </div>
                       </div>
@@ -2691,7 +2769,7 @@ export default function App() {
                                         <TooltipTrigger asChild>
                                           <Button
                                             onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
-                                            disabled={(commandRunning && !isRunning) || connectionStatus !== 'connected'}
+                                            disabled={(commandRunning && !isRunning) || connectionStatus !== 'connected' || writeableRootBusy}
                                             variant={shouldHighlight ? 'default' : 'outline'}
                                             size="sm"
                                             className="flex-1"
@@ -2794,6 +2872,201 @@ export default function App() {
               </TabsContent>
             )}
           </Tabs>
+
+          {/* Queue Section - Fixed at bottom, visible on all tabs */}
+          {(installQueue.size > 0 || uninstallQueue.size > 0) && (
+            <div className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4">
+              {/* Install Queue */}
+              {installQueue.size > 0 && (
+                <div>
+                  <Accordion type="single" collapsible>
+                    <AccordionItem value="install-queue" className="border-none">
+                      <AccordionTrigger className="py-2 text-sm font-medium hover:no-underline">
+                        Install Queue ({installQueue.size})
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <div className="space-y-1 mb-3">
+                          {Array.from(installQueue).map((name) => {
+                            return (
+                              <div
+                                key={name}
+                                className="flex items-center justify-between text-sm py-1"
+                              >
+                                <span>{name}</span>
+                                <button
+                                  onClick={() => removeFromQueue(name)}
+                                  className="text-muted-foreground hover:text-foreground"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  </Accordion>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      className="flex-1"
+                      onClick={clearQueue}
+                      disabled={installing || uninstalling}
+                    >
+                      Clear Install Queue
+                    </Button>
+                    <Button
+                      className="flex-1"
+                      onClick={async () => {
+                        setSimulatingInstall(true)
+                        try {
+                          const sim = await window.go.main.App.SimulateInstall([...installQueue], device)
+                          const filteredPackages = sim.packages.filter((name: string) => !installedPackages.has(name))
+                          if (filteredPackages.length === 0) {
+                            setQueueError('All packages are already installed')
+                            setTimeout(() => setQueueError(null), 4000)
+                            setInstallQueue(new Set())
+                          } else {
+                            setPendingInstallConfirm({ packages: filteredPackages, requested: sim.requested })
+                          }
+                        } catch (err) {
+                          console.error('SimulateInstall failed:', err)
+                          const pkgs = [...installQueue].filter((name) => !installedPackages.has(name))
+                          if (pkgs.length === 0) {
+                            setQueueError('All packages are already installed')
+                            setTimeout(() => setQueueError(null), 4000)
+                            setInstallQueue(new Set())
+                          } else {
+                            setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
+                          }
+                        } finally {
+                          setSimulatingInstall(false)
+                        }
+                      }}
+                      disabled={installing || uninstalling || simulatingInstall || connectionStatus !== 'connected'}
+                    >
+                      {installing ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Installing...
+                        </>
+                      ) : simulatingInstall ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Checking...
+                        </>
+                      ) : (
+                        'Install Selected'
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Uninstall Queue */}
+              {uninstallQueue.size > 0 && (
+                <div>
+                  <Accordion type="single" collapsible>
+                    <AccordionItem value="uninstall-queue" className="border-none">
+                      <AccordionTrigger className="py-2 text-sm font-medium text-destructive hover:no-underline">
+                        Uninstall Queue ({uninstallQueue.size})
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <div className="space-y-1 mb-3">
+                          {Array.from(uninstallQueue).map((name) => {
+                            return (
+                              <div
+                                key={name}
+                                className="flex items-center justify-between text-sm py-1"
+                              >
+                                <span>{name}</span>
+                                <button
+                                  onClick={() => removeFromUninstallQueue(name)}
+                                  className="text-muted-foreground hover:text-foreground"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  </Accordion>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      className="flex-1"
+                      onClick={clearUninstallQueue}
+                      disabled={installing || uninstalling}
+                    >
+                      Clear Uninstall Queue
+                    </Button>
+                    <Button
+                      className="flex-1"
+                      onClick={async () => {
+                        setSimulatingUninstall(true)
+                        try {
+                          const selected = [...uninstallQueue]
+                          const sim = await window.go.main.App.SimulateUninstall(selected)
+                          if (sim.worldDeps && sim.worldDeps.length > 0) {
+                            setPendingUninstallConfirm({
+                              selected,
+                              packages: sim.allAffected || selected,
+                              blocked: null,
+                              useRecursive: false,
+                              worldDeps: sim.worldDeps
+                            })
+                          } else if (sim.blocked && Object.keys(sim.blocked).length > 0) {
+                            setPendingUninstallConfirm({
+                              selected,
+                              packages: sim.recursivePackages || sim.packages || selected,
+                              blocked: sim.blocked,
+                              useRecursive: true
+                            })
+                          } else {
+                            setPendingUninstallConfirm({
+                              selected,
+                              packages: (sim.packages && sim.packages.length > 0) ? sim.packages : selected,
+                              blocked: null,
+                              useRecursive: false
+                            })
+                          }
+                        } catch (err) {
+                          console.error('SimulateUninstall failed:', err)
+                          const selected = [...uninstallQueue]
+                          setPendingUninstallConfirm({
+                            selected,
+                            packages: selected,
+                            blocked: null,
+                            useRecursive: false
+                          })
+                        } finally {
+                          setSimulatingUninstall(false)
+                        }
+                      }}
+                      disabled={installing || uninstalling || simulatingUninstall || connectionStatus !== 'connected'}
+                    >
+                      {uninstalling ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Removing...
+                        </>
+                      ) : simulatingUninstall ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Checking...
+                        </>
+                      ) : (
+                        'Uninstall Selected'
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          </>
         )}
       </div>
 
@@ -2913,18 +3186,29 @@ export default function App() {
       </Dialog>
 
       {/* Hook Dialog (e.g., Rebuild Qt Resources) */}
-      <Dialog open={showRebuildDialog} onOpenChange={setShowRebuildDialog} priority>
+      <Dialog open={showRebuildDialog} onOpenChange={(open) => {
+        setShowRebuildDialog(open)
+        if (!open && !dialogRespondedRef.current) {
+          dialogRespondedRef.current = true
+          manuallyStoppedRef.current = true
+          setDialogRequest(null)
+          window.go.main.App.RespondToDialog(false)
+        }
+      }} priority>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              {dialogRequest?.infoOnly
+                ? <Info className="h-5 w-5 text-blue-500" />
+                : <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              }
               {dialogRequest?.title || 'Confirmation Required'}
             </DialogTitle>
             <DialogDescription>
               <div className="space-y-4 pt-4">
                 <p>{dialogRequest?.message}</p>
                 {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
-                  <ol className="list-decimal list-inside space-y-1 text-sm">
+                  <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
                     {dialogRequest.steps.map((step, idx) => (
                       <li key={idx}>{step}</li>
                     ))}
@@ -2934,25 +3218,43 @@ export default function App() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowRebuildDialog(false)
-                setDialogRequest(null)
-                window.go.main.App.RespondToDialog(false)
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                setShowRebuildDialog(false)
-                setDialogRequest(null)
-                window.go.main.App.RespondToDialog(true)
-              }}
-            >
-              {dialogRequest?.confirmText || 'Proceed'}
-            </Button>
+            {dialogRequest?.infoOnly ? (
+              <Button
+                onClick={() => {
+                  dialogRespondedRef.current = true
+                  setShowRebuildDialog(false)
+                  setDialogRequest(null)
+                  window.go.main.App.RespondToDialog(true)
+                }}
+              >
+                {dialogRequest?.confirmText || 'Got it'}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    dialogRespondedRef.current = true
+                    manuallyStoppedRef.current = true
+                    setShowRebuildDialog(false)
+                    setDialogRequest(null)
+                    window.go.main.App.RespondToDialog(false)
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    dialogRespondedRef.current = true
+                    setShowRebuildDialog(false)
+                    setDialogRequest(null)
+                    window.go.main.App.RespondToDialog(true)
+                  }}
+                >
+                  {dialogRequest?.confirmText || 'Proceed'}
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2977,9 +3279,9 @@ export default function App() {
             }
           }
         }}
-        closable={!installing && !uninstalling && !commandRunning}
+        closable={false}
       >
-        <DialogContent className="max-w-6xl w-full">
+        <DialogContent className="w-[90vw] max-w-none">
           {/* Confirmation step for install */}
           {pendingInstallConfirm !== null && !installing && !uninstalling && (() => {
             const requestedSet = new Set(pendingInstallConfirm.requested)
@@ -3036,7 +3338,7 @@ export default function App() {
 
           {/* Confirmation step for uninstall */}
           {pendingUninstallConfirm !== null && !installing && !uninstalling && (() => {
-            // Build a map: dependent -> what it requires
+            const worldDeps = pendingUninstallConfirm.worldDeps
             const dependsOn: Record<string, string[]> = {}
             if (pendingUninstallConfirm.blocked) {
               for (const [pkg, dependents] of Object.entries(pendingUninstallConfirm.blocked)) {
@@ -3054,7 +3356,7 @@ export default function App() {
               <>
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
-                    {additional.length > 0 && (
+                    {(additional.length > 0 || (worldDeps && worldDeps.length > 0)) && (
                       <AlertTriangle className="h-5 w-5 text-yellow-500" />
                     )}
                     Uninstall Packages
@@ -3064,29 +3366,43 @@ export default function App() {
                   </DialogDescription>
                 </DialogHeader>
                 <div className="max-h-[40vh] overflow-y-auto overscroll-y-contain space-y-4">
-                  <div>
-                    <p className="font-medium text-sm mb-2">Selected for removal:</p>
-                    <ul className="space-y-1 text-sm">
-                      {[...selected].sort().map((name) => (
-                        <li key={name}>{name}</li>
-                      ))}
-                    </ul>
-                  </div>
+                  {worldDeps && worldDeps.length > 0 ? (
+                    <>
+                      <div>
+                        <ul className="space-y-1 text-sm">
+                          {[...pendingUninstallConfirm.packages].sort().map((name) => (
+                            <li key={name}>{name}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <p className="font-medium text-sm mb-2">Selected for removal:</p>
+                        <ul className="space-y-1 text-sm">
+                          {[...selected].sort().map((name) => (
+                            <li key={name}>{name}</li>
+                          ))}
+                        </ul>
+                      </div>
 
-                  {additional.length > 0 && (
-                    <div>
-                      <p className="font-medium text-sm mb-2">Will also be removed:</p>
-                      <ul className="space-y-1 text-sm">
-                        {[...additional].sort().map((name) => (
-                          <li key={name}>
-                            {name}
-                            {dependsOn[name] && (
-                              <span className="text-muted-foreground"> (requires {dependsOn[name].join(', ')})</span>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                      {additional.length > 0 && (
+                        <div>
+                          <p className="font-medium text-sm mb-2">Will also be removed:</p>
+                          <ul className="space-y-1 text-sm">
+                            {[...additional].sort().map((name) => (
+                              <li key={name}>
+                                {name}
+                                {dependsOn[name] && (
+                                  <span className="text-muted-foreground"> (requires {dependsOn[name].join(', ')})</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
                 <DialogFooter>
@@ -3094,9 +3410,9 @@ export default function App() {
                     Cancel
                   </Button>
                   <Button variant="destructive" onClick={() => {
-                    const packages = pendingUninstallConfirm.packages
+                    const selected = pendingUninstallConfirm.selected
                     setPendingUninstallConfirm(null)
-                    handleUninstallQueue(packages)
+                    handleUninstallQueue(selected)
                   }}>
                     Uninstall ({pendingUninstallConfirm.packages.length})
                   </Button>
@@ -3120,10 +3436,12 @@ export default function App() {
                 setProgressModalType(null)
                 setLastInstallSuccess(null)
                 setLastOperationType(null)
+                setRescanning(false)
               }}
               canStop={(installing || uninstalling) || currentRunningCommand !== null}
               onStop={(installing || uninstalling) ? handleCancelInstallation : handleStopCommand}
               terminalTheme={resolvedTerminalTheme}
+              showProgress={progressModalType === 'install'}
             />
           )}
         </DialogContent>
@@ -3193,13 +3511,14 @@ export default function App() {
 
 
       {/* Package Detail Side Panel */}
-      <Sheet open={selectedPackage !== null} onOpenChange={(open) => !open && setSelectedPackage(null)}>
+      <Sheet open={selectedPackage !== null} onOpenChange={(open) => { if (!open) { setSelectedPackage(null); setSidebarViewOnly(false); setSidebarIncompatible(false) } }}>
         <SheetContent side="right" className="w-[400px] sm:w-[450px] sm:max-w-none flex flex-col">
           {selectedPackage && (
             <PackageDetailPanel
               pkg={selectedPackage}
               isInstalled={installedPackages.has(selectedPackage.name)}
               installedPackages={installedPackages}
+              installedVersion={installedPackages.get(selectedPackage.name)}
               onInstall={() => {
                 addToQueue(selectedPackage.name)
                 setSelectedPackage(null)
@@ -3213,11 +3532,17 @@ export default function App() {
               disabled={installing || uninstalling || connectionStatus !== 'connected'}
               onSelectPackage={(name) => {
                 const pkg = packages.find(p => p.name === name)
-                if (pkg) setSelectedPackage(pkg)
+                if (pkg) {
+                  setSidebarViewOnly(false)
+                  setSidebarIncompatible(false)
+                  setSelectedPackage(pkg)
+                }
               }}
               firmware={deviceInfo.firmware || ''}
               conflict={getConflict(selectedPackage)}
               isOsCompatible={isPackageCompatible(selectedPackage, deviceInfo.firmware || '')}
+              viewOnly={sidebarViewOnly}
+              showIncompatible={sidebarIncompatible}
             />
           )}
         </SheetContent>
@@ -3231,15 +3556,25 @@ export default function App() {
         tabVisibility={tabVisibility}
         proxyMode={proxyMode}
         suppressSystemFileWarnings={suppressSystemFileWarnings}
+        preventSleep={preventSleep}
         theme={theme}
         terminalTheme={terminalTheme}
         editorTheme={editorTheme}
+        checkForUpdates={checkForUpdates}
         onSaveSettings={handleSaveSettings}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
         uninstallOutput={vellumUninstallOutput}
         uninstallError={vellumUninstallError}
         appVersion={appVersion}
+      />
+
+      <SupportBundlePage
+        open={showSupportBundles}
+        onOpenChange={setShowSupportBundles}
+        isConnected={!!device}
+        savedDevices={savedDevices}
+        connectedDeviceId={connectedDeviceId}
       />
 
       <VellumInstallSuccessDialog
@@ -3274,6 +3609,13 @@ export default function App() {
         onReboot={handleFilesystemRestoreReboot}
         onDismiss={handleFilesystemRestoreDismiss}
         isRetrying={isRetryingFilesystemRestore}
+      />
+
+      <CheckOSDialog
+        open={showCheckOSDialog}
+        onOpenChange={setShowCheckOSDialog}
+        isConnected={connectionStatus === 'connected'}
+        onSelectPackage={handleSelectPackageForOS}
       />
 
       {showFileBrowser && (
@@ -3381,6 +3723,7 @@ export default function App() {
         </div>
       )}
 
+      <Toaster position="bottom-right" richColors />
     </div>
   )
 }

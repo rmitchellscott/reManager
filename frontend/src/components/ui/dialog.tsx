@@ -8,9 +8,10 @@ interface DialogProps {
   closable?: boolean
   className?: string
   priority?: boolean
+  lowPriority?: boolean
 }
 
-export function Dialog({ open, onOpenChange, children, closable = true, className, priority = false }: DialogProps) {
+export function Dialog({ open, onOpenChange, children, closable = true, className, priority = false, lowPriority = false }: DialogProps) {
   React.useEffect(() => {
     if (open) {
       document.body.style.overflow = 'hidden'
@@ -22,8 +23,15 @@ export function Dialog({ open, onOpenChange, children, closable = true, classNam
 
   if (!open) return null
 
-  const backdropZ = priority ? 'z-[65]' : 'z-[55]'
-  const contentZ = priority ? 'z-[70]' : 'z-[60]'
+  let backdropZ = 'z-[55]'
+  let contentZ = 'z-[60]'
+  if (priority) {
+    backdropZ = 'z-[65]'
+    contentZ = 'z-[70]'
+  } else if (lowPriority) {
+    backdropZ = 'z-[35]'
+    contentZ = 'z-[40]'
+  }
 
   return (
     <div className={cn(`fixed inset-0 ${contentZ} flex items-center justify-center`, className)}>

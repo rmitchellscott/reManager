@@ -2,7 +2,7 @@ import { DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
-import { Loader2 } from 'lucide-react'
+import { Loader2, CheckCircle2 } from 'lucide-react'
 
 interface ProgressModalProps {
   title: string
@@ -14,6 +14,7 @@ interface ProgressModalProps {
   canStop?: boolean
   onStop?: () => void
   terminalTheme?: 'dark' | 'light'
+  showProgress?: boolean
 }
 
 export function ProgressModal({
@@ -26,6 +27,7 @@ export function ProgressModal({
   canStop,
   onStop,
   terminalTheme,
+  showProgress = true,
 }: ProgressModalProps) {
   return (
     <>
@@ -34,15 +36,24 @@ export function ProgressModal({
       </DialogHeader>
       <div className="space-y-4">
         <p className="text-sm font-medium text-center text-foreground flex items-center justify-center gap-2">
-          {!isComplete && <Loader2 className="h-4 w-4 animate-spin" />}
+          <span className="h-4 w-4 flex-shrink-0">
+            {!isComplete && <Loader2 className="h-4 w-4 animate-spin" />}
+          </span>
           {progressText}
         </p>
-        <Progress value={percentage} />
-        <div className="h-[400px] rounded-lg overflow-hidden overscroll-y-contain">
-          <TerminalWithCopy output={terminalOutput} theme={terminalTheme} />
-        </div>
+        {showProgress && <Progress value={percentage} />}
+        {isComplete && !terminalOutput.trim() ? (
+          <div className="h-[400px] rounded-lg flex flex-col items-center justify-center gap-3">
+            <CheckCircle2 className="h-12 w-12 text-green-600 dark:text-green-400" />
+            <p className="text-sm text-muted-foreground">Operation completed successfully.</p>
+          </div>
+        ) : (
+          <div className="h-[400px] rounded-lg overflow-hidden overscroll-y-contain">
+            <TerminalWithCopy output={terminalOutput} theme={terminalTheme} />
+          </div>
+        )}
       </div>
-      <DialogFooter>
+      <DialogFooter className="min-h-[40px]">
         {isComplete ? (
           <Button onClick={onClose}>Close</Button>
         ) : canStop ? (

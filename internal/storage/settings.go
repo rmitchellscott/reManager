@@ -13,9 +13,11 @@ type Settings struct {
 	TabVisibility              TabVisibility `json:"tabVisibility"`
 	ProxyMode                  bool          `json:"proxyMode"`
 	SuppressSystemFileWarnings bool          `json:"suppressSystemFileWarnings"`
+	PreventSleep               bool          `json:"preventSleep"`
 	Theme                      string        `json:"theme"`
 	TerminalTheme              string        `json:"terminalTheme"`
-	EditorTheme string `json:"editorTheme"`
+	EditorTheme                string        `json:"editorTheme"`
+	CheckForUpdates            bool          `json:"checkForUpdates"`
 }
 
 type SettingsStore struct {
@@ -24,7 +26,7 @@ type SettingsStore struct {
 }
 
 func NewSettingsStore() (*SettingsStore, error) {
-	configDir, err := getConfigDir()
+	configDir, err := GetConfigDir()
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +57,7 @@ func (s *SettingsStore) Load() (*Settings, error) {
 		return s.defaultSettings(), nil
 	}
 
-	// Check if proxyMode was present in JSON (default to true if missing)
+	// Check if fields were present in JSON (default to true/match if missing)
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err == nil {
 		if _, exists := raw["proxyMode"]; !exists {
@@ -69,6 +71,9 @@ func (s *SettingsStore) Load() (*Settings, error) {
 		}
 		if _, exists := raw["editorTheme"]; !exists {
 			settings.EditorTheme = "match"
+		}
+		if _, exists := raw["checkForUpdates"]; !exists {
+			settings.CheckForUpdates = true
 		}
 	}
 
@@ -104,11 +109,14 @@ func (s *SettingsStore) defaultSettings() *Settings {
 			"mods":        true,
 			"maintenance": true,
 			"utilities":   true,
+			"support":     true,
 		},
 		ProxyMode:                  true,
 		SuppressSystemFileWarnings: false,
+		PreventSleep:               true,
 		Theme:                      "system",
 		TerminalTheme:              "match",
 		EditorTheme:                "match",
+		CheckForUpdates:            true,
 	}
 }

@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dialog'
 import {
   Popover,
+  PopoverClose,
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
@@ -46,6 +47,7 @@ import {
   Archive,
   Upload,
   FolderPlus,
+  FolderUp,
   RefreshCw,
   Download,
   Trash2,
@@ -59,6 +61,7 @@ import {
   Eye,
   EyeOff,
   Terminal,
+  X,
 } from 'lucide-react'
 
 interface FileInfo {
@@ -74,6 +77,16 @@ interface TransferProgress {
   filename: string
   bytesSent: number
   totalBytes: number
+  percentage: number
+  status: string
+}
+
+interface FolderTransferProgress {
+  currentFile: string
+  filesDone: number
+  filesTotal: number
+  bytesDone: number
+  bytesTotal: number
   percentage: number
   status: string
 }
@@ -146,6 +159,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [transferProgress, setTransferProgress] = useState<TransferProgress | null>(null)
+  const [folderTransferProgress, setFolderTransferProgress] = useState<FolderTransferProgress | null>(null)
 
   const [deleteDialog, setDeleteDialog] = useState<FileInfo | null>(null)
   const [renameDialog, setRenameDialog] = useState<FileInfo | null>(null)
@@ -215,18 +229,34 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
       const errorObj = err as { message: string; code?: string }
       setError(errorObj.code ? handleError(errorObj, 'File transfer') : handleError(errorObj.message, 'File transfer'))
       setTransferProgress(null)
+      setFolderTransferProgress(null)
+    }
+
+    const handleFolderProgress = (progress: unknown) => {
+      setFolderTransferProgress(progress as FolderTransferProgress)
+    }
+
+    const handleFolderComplete = () => {
+      setFolderTransferProgress(null)
+      loadDirectory(currentPath)
     }
 
     const unsubProgress = window.runtime.EventsOn('filebrowser:progress', handleProgress)
     const unsubDownload = window.runtime.EventsOn('filebrowser:download-complete', handleComplete)
     const unsubUpload = window.runtime.EventsOn('filebrowser:upload-complete', handleComplete)
     const unsubError = window.runtime.EventsOn('filebrowser:error', handleFileBrowserError)
+    const unsubFolderProgress = window.runtime.EventsOn('filebrowser:folder-progress', handleFolderProgress)
+    const unsubFolderDownload = window.runtime.EventsOn('filebrowser:folder-download-complete', handleFolderComplete)
+    const unsubFolderUpload = window.runtime.EventsOn('filebrowser:folder-upload-complete', handleFolderComplete)
 
     return () => {
       unsubProgress()
       unsubDownload()
       unsubUpload()
       unsubError()
+      unsubFolderProgress()
+      unsubFolderDownload()
+      unsubFolderUpload()
     }
   }, [currentPath, loadDirectory])
 
@@ -365,6 +395,22 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
     }
   }
 
+  const handleDownloadFolder = (file: FileInfo) => {
+    if (file.isDir) {
+      window.go.main.App.DownloadFolder(file.path)
+    }
+  }
+
+  const handleUploadFolder = () => {
+    confirmSystemFileAction('upload', currentPath, () => {
+      window.go.main.App.UploadFolder(currentPath + '/')
+    })
+  }
+
+  const handleCancelFolderTransfer = () => {
+    window.go.main.App.CancelFolderTransfer()
+  }
+
   const initiateDelete = (file: FileInfo) => {
     if (isSystemPath(file.path) && !suppressSystemFileWarnings) {
       confirmSystemFileAction('delete', file.path, () => setDeleteDialog(file))
@@ -440,7 +486,11 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
 
   const handleContextMenu = (e: React.MouseEvent, file: FileInfo) => {
     e.preventDefault()
-    setContextMenu({ file, x: e.clientX, y: e.clientY })
+    const menuWidth = 192
+    const menuHeight = 200
+    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8)
+    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8)
+    setContextMenu({ file, x, y })
   }
 
   const closeContextMenu = () => setContextMenu(null)
@@ -589,9 +639,13 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
               <Home className="h-4 w-4 mr-1" />
               Home
             </Button>
-            <Button variant="outline" size="sm" onClick={handleUpload} disabled={loading}>
+            <Button variant="outline" size="sm" onClick={handleUpload} disabled={loading || !!folderTransferProgress}>
               <Upload className="h-4 w-4 mr-1" />
-              Upload
+              Upload File
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleUploadFolder} disabled={loading || !!folderTransferProgress}>
+              <FolderUp className="h-4 w-4 mr-1" />
+              Upload Folder
             </Button>
             <Button variant="outline" size="sm" onClick={() => setNewFolderDialog(true)} disabled={loading}>
               <FolderPlus className="h-4 w-4 mr-1" />
@@ -628,6 +682,34 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
               <Progress value={transferProgress.percentage} />
               <div className="text-xs text-muted-foreground">
                 {formatSize(transferProgress.bytesSent)} / {formatSize(transferProgress.totalBytes)}
+              </div>
+            </div>
+          )}
+
+          {/* Folder transfer progress */}
+          {folderTransferProgress && (
+            <div className="bg-muted p-3 rounded space-y-2">
+              <div className="flex justify-between items-center text-sm">
+                <span>
+                  {folderTransferProgress.status === 'uploading' ? 'Uploading' : 'Downloading'} folder
+                </span>
+                <div className="flex items-center gap-2">
+                  <span>{folderTransferProgress.percentage.toFixed(0)}%</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    onClick={handleCancelFolderTransfer}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <Progress value={folderTransferProgress.percentage} />
+              <div className="text-xs text-muted-foreground space-y-1">
+                <div>Current: {folderTransferProgress.currentFile}</div>
+                <div>Files: {folderTransferProgress.filesDone} / {folderTransferProgress.filesTotal}</div>
+                <div>{formatSize(folderTransferProgress.bytesDone)} / {formatSize(folderTransferProgress.bytesTotal)}</div>
               </div>
             </div>
           )}
@@ -703,55 +785,77 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
                           </Button>
                         </PopoverTrigger>
                         <PopoverContent className={`${sleepScreenSupported && isPngFile(file) ? 'w-48' : 'w-40'} p-1`} align="end">
-                          {!file.isDir && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="w-full justify-start font-normal"
-                              onClick={() => handleDownload(file)}
-                            >
-                              <Download className="h-4 w-4 mr-2" />
-                              Download
-                            </Button>
+                          {file.isDir ? (
+                            <PopoverClose asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full justify-start font-normal"
+                                onClick={() => handleDownloadFolder(file)}
+                              >
+                                <Download className="h-4 w-4 mr-2" />
+                                Download Folder
+                              </Button>
+                            </PopoverClose>
+                          ) : (
+                            <PopoverClose asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full justify-start font-normal"
+                                onClick={() => handleDownload(file)}
+                              >
+                                <Download className="h-4 w-4 mr-2" />
+                                Download
+                              </Button>
+                            </PopoverClose>
                           )}
                           {sleepScreenSupported && isPngFile(file) && (
+                            <PopoverClose asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full justify-start font-normal"
+                                onClick={() => handleSetSleepScreen(file)}
+                              >
+                                <Image className="h-4 w-4 mr-2" />
+                                Set as sleep screen
+                              </Button>
+                            </PopoverClose>
+                          )}
+                          <PopoverClose asChild>
                             <Button
                               variant="ghost"
                               size="sm"
                               className="w-full justify-start font-normal"
-                              onClick={() => handleSetSleepScreen(file)}
+                              onClick={() => initiateRename(file)}
                             >
-                              <Image className="h-4 w-4 mr-2" />
-                              Set as sleep screen
+                              <Pencil className="h-4 w-4 mr-2" />
+                              Rename
                             </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start font-normal"
-                            onClick={() => initiateRename(file)}
-                          >
-                            <Pencil className="h-4 w-4 mr-2" />
-                            Rename
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start font-normal"
-                            onClick={() => copyPath(file.path)}
-                          >
-                            <Copy className="h-4 w-4 mr-2" />
-                            Copy Path
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start font-normal"
-                            onClick={() => initiateDelete(file)}
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete
-                          </Button>
+                          </PopoverClose>
+                          <PopoverClose asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-full justify-start font-normal"
+                              onClick={() => copyPath(file.path)}
+                            >
+                              <Copy className="h-4 w-4 mr-2" />
+                              Copy Path
+                            </Button>
+                          </PopoverClose>
+                          <PopoverClose asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-full justify-start font-normal"
+                              onClick={() => initiateDelete(file)}
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete
+                            </Button>
+                          </PopoverClose>
                         </PopoverContent>
                       </Popover>
                     </TableCell>
@@ -941,7 +1045,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
       </Dialog>
 
       {/* Restart xochitl confirmation dialog */}
-      <Dialog open={restartXochitlDialog !== null} onOpenChange={(open) => !open && setRestartXochitlDialog(null)}>
+      <Dialog open={restartXochitlDialog !== null} onOpenChange={(open) => !open && setRestartXochitlDialog(null)} priority>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Restart Required</DialogTitle>

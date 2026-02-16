@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -35,8 +38,10 @@ import (
 	apperrors "reManager/internal/errors"
 	"reManager/internal/executor"
 	"reManager/internal/installer"
+	"reManager/internal/logger"
 	"reManager/internal/platform"
 	"reManager/internal/storage"
+	"reManager/internal/support"
 	"reManager/internal/vellum"
 )
 
@@ -84,6 +89,28 @@ func saveFileDialog(ctx context.Context, title, defaultFilename string) (string,
 	})
 }
 
+func openDirectoryDialog(ctx context.Context, title string) (string, error) {
+	if platform.IsRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
+			CurrentFolder: home,
+			Directory:     true,
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(files) == 0 {
+			return "", nil
+		}
+		return strings.TrimPrefix(files[0], "file://"), nil
+	}
+	home, _ := os.UserHomeDir()
+	return runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: home,
+	})
+}
+
 func sanitizeFilename(name string) string {
 	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "-", "<", "_", ">", "_", "\"", "_", "|", "_", "?", "_", "*", "_")
 	return replacer.Replace(name)
@@ -101,22 +128,34 @@ type App struct {
 	dialogResponse chan bool
 	deviceStore    *storage.DeviceStore
 	settingsStore  *storage.SettingsStore
+	bundleStore    *storage.BundleStore
 	vellumClient   *vellum.Client
 	metadata       *vellum.MetadataStore
 
+	logger            *logger.Logger
+	operationLog      *logger.CommandLog
+	supportBundleID   string
+
 	keepaliveStop     chan struct{}
-	connectedDeviceID string
-	reconnecting      bool
+	connectedDeviceID   string
+	connectedDeviceType string
+	writeableRootBusy   bool
+	reconnecting        bool
 	reconnectMu       sync.Mutex
 	fastDialMode      bool
-	installCancelCh   chan struct{}
-	backupCancelCh    chan struct{}
-	backupMu          sync.Mutex
+	installCancelCh        chan struct{}
+	backupCancelCh         chan struct{}
+	backupMu               sync.Mutex
+	folderTransferCancelCh chan struct{}
+	folderTransferMu       sync.Mutex
 
 	shellSession *ssh.Session
 	shellStdin   io.WriteCloser
 	shellMu      sync.Mutex
 	shellActive  bool
+
+	preventSleepStop chan struct{}
+	penInputDevice   string
 }
 
 func NewApp() *App {
@@ -125,6 +164,18 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	configDir, err := storage.GetConfigDir()
+	if err == nil {
+		l, lerr := logger.New(configDir)
+		if lerr == nil {
+			a.logger = l
+			debug.SetFileLogger(l)
+			a.logger.LogEvent("APP", "reManager starting, version="+version)
+			go a.logger.CleanupOldCommandLogs(30 * 24 * time.Hour)
+		}
+	}
+
 	store, err := storage.NewDeviceStore()
 	if err != nil {
 		fmt.Printf("Warning: could not initialize device store: %v\n", err)
@@ -136,6 +187,12 @@ func (a *App) startup(ctx context.Context) {
 		fmt.Printf("Warning: could not initialize settings store: %v\n", err)
 	}
 	a.settingsStore = settingsStore
+
+	bundleStore, err := storage.NewBundleStore()
+	if err != nil {
+		fmt.Printf("Warning: could not initialize bundle store: %v\n", err)
+	}
+	a.bundleStore = bundleStore
 
 	a.metadata = vellum.NewMetadataStore()
 	if err := a.metadata.Load(); err != nil {
@@ -164,7 +221,13 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.logger != nil {
+		a.logger.LogEvent("APP", "reManager shutting down")
+	}
 	a.Disconnect()
+	if a.logger != nil {
+		a.logger.Close()
+	}
 }
 
 type ConnectionResult struct {
@@ -323,6 +386,13 @@ func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
 		a.mu.Unlock()
 
 		a.startConnectionMonitor()
+
+		if settings, err := a.settingsStore.Load(); err == nil && settings.PreventSleep {
+			debug.Println("[DEBUG] ConnectToSavedDevice: auto-starting prevent sleep")
+			if err := a.StartPreventSleep(); err != nil {
+				debug.Printf("[DEBUG] ConnectToSavedDevice: StartPreventSleep failed: %v\n", err)
+			}
+		}
 	}
 
 	return result
@@ -656,6 +726,10 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	a.vellumClient = vellum.NewClient(&wailsExecutor{app: a})
 	a.mu.Unlock()
 
+	if a.logger != nil {
+		a.logger.LogConnection("connected", host)
+	}
+
 	debug.Println("[DEBUG] Detecting device...")
 	deviceType, err := a.detectDevice()
 	debug.Printf("[DEBUG] Device detected: %s, err: %v\n", deviceType, err)
@@ -694,6 +768,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 					"prevVersion": osState.StoredVersion,
 					"newVersion":  osState.CurrentVersion,
 				})
+			}
+
+			reenableStatus, reenableErr := a.vellumClient.ReenableStatus()
+			if reenableErr == nil && reenableStatus != "" {
+				debug.Printf("[DEBUG] Reenable status: %s\n", reenableStatus)
+				runtime.EventsEmit(a.ctx, "reenable:status", reenableStatus)
 			}
 
 			status := a.CheckHashtabVersion()
@@ -735,6 +815,10 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		}
 	}()
 
+	a.mu.Lock()
+	a.connectedDeviceType = deviceType
+	a.mu.Unlock()
+
 	return ConnectionResult{
 		Success: true,
 		Message: "Connected successfully",
@@ -764,18 +848,25 @@ func (a *App) detectDevice() (string, error) {
 }
 
 func (a *App) Disconnect() {
+	if a.logger != nil {
+		a.logger.LogConnection("disconnect", "user initiated")
+	}
+
 	a.stopConnectionMonitor()
 
 	a.reconnectMu.Lock()
 	a.reconnecting = false
 	a.reconnectMu.Unlock()
 
+	a.StopPreventSleep()
 	a.StopShell()
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	a.connectedDeviceID = ""
+	a.connectedDeviceType = ""
+	a.writeableRootBusy = false
 
 	if a.client != nil {
 		a.client.Close()
@@ -788,6 +879,38 @@ func (a *App) IsConnected() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.client != nil
+}
+
+func (a *App) acquireWriteableRoot(deviceType string) error {
+	dev := component.DeviceType(deviceType)
+	if dev != component.DeviceRMPP && dev != component.DeviceRMPPM {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writeableRootBusy {
+		return fmt.Errorf("another operation is modifying the filesystem")
+	}
+	a.writeableRootBusy = true
+	runtime.EventsEmit(a.ctx, "writeable-root:busy", true)
+	return nil
+}
+
+func (a *App) releaseWriteableRoot(deviceType string) {
+	dev := component.DeviceType(deviceType)
+	if dev != component.DeviceRMPP && dev != component.DeviceRMPPM {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.writeableRootBusy = false
+	runtime.EventsEmit(a.ctx, "writeable-root:busy", false)
+}
+
+func (a *App) IsWriteableRootBusy() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.writeableRootBusy
 }
 
 const (
@@ -870,7 +993,11 @@ func (a *App) checkConnection() error {
 }
 
 func (a *App) handleConnectionLost(err error) {
+	if a.logger != nil {
+		a.logger.LogConnection("connection-lost", err.Error())
+	}
 	a.mu.Lock()
+	hadCommandSession := a.commandSession != nil
 	if a.commandSession != nil {
 		a.commandSession.Close()
 		a.commandSession = nil
@@ -885,8 +1012,9 @@ func (a *App) handleConnectionLost(err error) {
 	a.keepaliveStop = nil
 	a.mu.Unlock()
 
-	runtime.EventsEmit(a.ctx, "command:output", "\nConnection lost.\n")
-	runtime.EventsEmit(a.ctx, "command:done", false)
+	if hadCommandSession {
+		runtime.EventsEmit(a.ctx, "command:output", "\nConnection lost.\n")
+	}
 
 	ue := apperrors.Classify(err)
 	runtime.EventsEmit(a.ctx, "connection:lost", map[string]interface{}{
@@ -949,6 +1077,9 @@ func (a *App) attemptReconnect(deviceID string) {
 		debug.Printf("[%s] Reconnect attempt %d/%d result: success=%v, message=%s\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts, result.Success, result.Message)
 
 		if result.Success {
+			if a.logger != nil {
+				a.logger.LogConnection("reconnected", deviceID)
+			}
 			runtime.EventsEmit(a.ctx, "connection:restored", map[string]interface{}{
 				"deviceId": deviceID,
 				"device":   result.Device,
@@ -1016,7 +1147,20 @@ func (a *App) RunCommand(cmd string) string {
 
 func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 	debug.Println("[DEBUG] RunCommandWithOutput called:", cmd[:min(50, len(cmd))], "requiresPTY:", requiresPTY)
+	cmdLog := a.operationLog
+	ownLog := cmdLog == nil
+	if ownLog && a.logger != nil {
+		cmdLog = a.logger.StartCommandLog(a.connectedDeviceID, cmd)
+	}
+	if !ownLog {
+		cmdLog.Write(fmt.Sprintf("\n$ %s\n", cmd))
+	}
 	go func() {
+		defer func() {
+			if ownLog && cmdLog != nil {
+				cmdLog.Close()
+			}
+		}()
 		a.mu.Lock()
 
 		if a.client == nil {
@@ -1106,7 +1250,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 				n, err := stdout.Read(buf)
 				if n > 0 {
 					debug.Printf("[DEBUG] stdout: %d bytes\n", n)
-					runtime.EventsEmit(a.ctx, "command:output", string(buf[:n]))
+					chunk := string(buf[:n])
+					runtime.EventsEmit(a.ctx, "command:output", chunk)
+					cmdLog.Write(chunk)
 				}
 				if err == io.EOF {
 					break
@@ -1123,7 +1269,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 				n, err := stderr.Read(buf)
 				if n > 0 {
 					debug.Printf("[DEBUG] stderr: %d bytes\n", n)
-					runtime.EventsEmit(a.ctx, "command:output", string(buf[:n]))
+					chunk := string(buf[:n])
+					runtime.EventsEmit(a.ctx, "command:output", chunk)
+					cmdLog.Write(chunk)
 				}
 				if err == io.EOF {
 					break
@@ -1135,6 +1283,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		}()
 
 		err = session.Wait()
+		if ownLog {
+			cmdLog.WriteExitCode(err)
+		}
 		debug.Println("[DEBUG] Command done, success:", err == nil)
 		runtime.EventsEmit(a.ctx, "command:done", err == nil)
 	}()
@@ -1491,6 +1642,13 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 		}
 		a.mu.Unlock()
 
+		if err := a.acquireWriteableRoot(deviceType); err != nil {
+			runtime.EventsEmit(a.ctx, "timezone:error", err.Error())
+			runtime.EventsEmit(a.ctx, "command:done", false)
+			return
+		}
+		defer a.releaseWriteableRoot(deviceType)
+
 		cmdResults := []component.CommandResult{
 			{
 				Script:      fmt.Sprintf("systemctl restart systemd-timedated && timedatectl set-timezone %s", timezone),
@@ -1501,6 +1659,16 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 		dev := component.DeviceType(deviceType)
 		if dev == component.DeviceRMPP || dev == component.DeviceRMPPM {
 			cmdResults = commands.WrapWithWriteableRoot(cmdResults, dev)
+		}
+
+		var operationErr error
+		if a.logger != nil {
+			a.operationLog = a.logger.StartCommandLog(a.connectedDeviceID, "set-timezone")
+			defer func() {
+				a.operationLog.WriteExitCode(operationErr)
+				a.operationLog.Close()
+				a.operationLog = nil
+			}()
 		}
 
 		for _, cmd := range cmdResults {
@@ -1522,6 +1690,7 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 			unsub()
 
 			if !success {
+				operationErr = fmt.Errorf("command failed: %s", cmd.Script)
 				runtime.EventsEmit(a.ctx, "timezone:error", "Failed to set timezone")
 				return
 			}
@@ -1532,18 +1701,19 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 }
 
 type PackageInfo struct {
-	Name           string   `json:"name"`
-	Version        string   `json:"version"`
-	Description    string   `json:"description"`
-	UpstreamAuthor string   `json:"upstreamAuthor"`
-	Categories     []string `json:"categories"`
-	URL            string   `json:"url"`
-	License        string   `json:"license"`
-	Devices        []string `json:"devices"`
-	Depends        []string `json:"depends"`
-	Conflicts      []string `json:"conflicts"`
-	OSMin          *string  `json:"osMin"`
-	OSMax          *string  `json:"osMax"`
+	Name           string              `json:"name"`
+	Version        string              `json:"version"`
+	Description    string              `json:"description"`
+	UpstreamAuthor string              `json:"upstreamAuthor"`
+	Categories     []string            `json:"categories"`
+	URL            string              `json:"url"`
+	License        string              `json:"license"`
+	Devices        []string            `json:"devices"`
+	Depends        []string            `json:"depends"`
+	Conflicts      []string            `json:"conflicts"`
+	OSMin          *string             `json:"osMin"`
+	OSMax          *string             `json:"osMax"`
+	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
 }
 
 var hiddenPackages = map[string]bool{
@@ -1560,6 +1730,10 @@ func containsString(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func (a *App) RefreshMetadata() error {
+	return a.metadata.Refresh()
 }
 
 func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
@@ -1591,6 +1765,7 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 			Conflicts:      pkg.Conflicts,
 			OSMin:          pkg.OSMin,
 			OSMax:          pkg.OSMax,
+			OSConstraints:  pkg.OSConstraints,
 		})
 	}
 
@@ -1651,23 +1826,92 @@ func (a *App) GetInstalledPackagesWithOsCheck() InstalledPackagesResult {
 	}
 }
 
+func (a *App) GetInstalledPackagesWithVersions() map[string]string {
+	if a.vellumClient == nil {
+		return map[string]string{}
+	}
+
+	versions, err := a.vellumClient.ListInstalledWithVersions()
+	if err != nil {
+		fmt.Printf("Error getting installed packages with versions: %v\n", err)
+		return map[string]string{}
+	}
+
+	result := make(map[string]string)
+	for pkg, version := range versions {
+		if !hiddenPackages[pkg] {
+			result[pkg] = version
+		}
+	}
+	return result
+}
+
+func (a *App) GetPackageForOS(name, targetOS, deviceType, arch string) *PackageInfo {
+	if a.metadata == nil {
+		return nil
+	}
+
+	pkg := a.metadata.GetPackageForTargetOS(name, targetOS, deviceType, arch)
+	if pkg == nil {
+		return nil
+	}
+
+	return &PackageInfo{
+		Name:           pkg.Name,
+		Version:        pkg.Version,
+		Description:    pkg.Description,
+		UpstreamAuthor: pkg.UpstreamAuthor,
+		Categories:     pkg.Categories,
+		URL:            pkg.URL,
+		License:        pkg.License,
+		Devices:        pkg.Devices,
+		Depends:        pkg.Depends,
+		Conflicts:      pkg.Conflicts,
+		OSMin:          pkg.OSMin,
+		OSMax:          pkg.OSMax,
+		OSConstraints:  pkg.OSConstraints,
+	}
+}
+
 func (a *App) RunReenable() {
 	if a.vellumClient == nil {
 		return
 	}
 
-	runtime.EventsEmit(a.ctx, "terminal:clear")
-	runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum reenable...\n")
+	if err := a.acquireWriteableRoot(a.connectedDeviceType); err != nil {
+		runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Blocked: %v\n", err))
+		return
+	}
+	defer a.releaseWriteableRoot(a.connectedDeviceType)
+
+	runtime.EventsEmit(a.ctx, "command:output", "Running vellum reenable...\n")
 
 	err := a.vellumClient.ReenableStreaming(func(line string) {
-		runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+		runtime.EventsEmit(a.ctx, "command:output", line+"\n")
 	})
 
 	if err != nil {
-		runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nError: %v\n", err))
+		runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nError: %v\n", err))
 	} else {
-		runtime.EventsEmit(a.ctx, "terminal:output", "\nReenable completed successfully.\n")
+		runtime.EventsEmit(a.ctx, "command:output", "\nReenable completed successfully.\n")
 	}
+}
+
+type ReenableStatusResult struct {
+	Status string `json:"status"`
+}
+
+func (a *App) GetReenableStatus() ReenableStatusResult {
+	if a.vellumClient == nil {
+		return ReenableStatusResult{}
+	}
+	status, err := a.vellumClient.ReenableStatus()
+	if err != nil {
+		debug.Printf("[DEBUG] GetReenableStatus error: %v\n", err)
+		return ReenableStatusResult{}
+	}
+	debug.Printf("[DEBUG] GetReenableStatus: %s\n", status)
+	return ReenableStatusResult{Status: status}
 }
 
 func (a *App) SimulatePackageUpgrade() (map[string]interface{}, error) {
@@ -1690,20 +1934,26 @@ func (a *App) RunPackageUpgrade() {
 	}
 
 	go func() {
-		runtime.EventsEmit(a.ctx, "terminal:clear")
-		runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum upgrade...\n")
+		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
+		var dnsError bool
 		err := a.vellumClient.UpgradeStreaming(func(line string) {
-			runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+			runtime.EventsEmit(a.ctx, "command:output", line+"\n")
+			if strings.Contains(strings.ToLower(line), "dns:") {
+				dnsError = true
+			}
 		})
 
 		success := err == nil
 		if success {
-			runtime.EventsEmit(a.ctx, "terminal:output", "\nPackage upgrade completed.\n")
+			runtime.EventsEmit(a.ctx, "command:output", "\nPackage upgrade completed.\n")
 		} else {
-			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
 		}
-		runtime.EventsEmit(a.ctx, "package-upgrade:complete", success)
+		runtime.EventsEmit(a.ctx, "package-upgrade:complete", map[string]interface{}{
+			"success":  success,
+			"dnsError": dnsError,
+		})
 	}()
 }
 
@@ -1844,7 +2094,7 @@ func (a *App) RunUpgrade() {
 		}
 
 		if osState.Mismatch {
-			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("Checking package compatibility with OS %s...\n", osState.CurrentVersion))
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Checking package compatibility with OS %s...\n", osState.CurrentVersion))
 
 			compat, err := a.vellumClient.CheckOSCompatibility(osState.CurrentVersion)
 			if err != nil && compat.FetchFailed {
@@ -1862,24 +2112,33 @@ func (a *App) RunUpgrade() {
 				return
 			}
 
-			runtime.EventsEmit(a.ctx, "terminal:output", "All packages compatible. Proceeding with upgrade...\n\n")
+			runtime.EventsEmit(a.ctx, "command:output", "All packages compatible. Proceeding with upgrade...\n\n")
 		}
 
-		runtime.EventsEmit(a.ctx, "terminal:clear")
-		runtime.EventsEmit(a.ctx, "terminal:output", "Running vellum upgrade...\n")
+		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
+		var dnsError bool
 		err = a.vellumClient.UpgradeStreaming(func(line string) {
-			runtime.EventsEmit(a.ctx, "terminal:output", line+"\n")
+			runtime.EventsEmit(a.ctx, "command:output", line+"\n")
+			if strings.Contains(strings.ToLower(line), "dns:") {
+				dnsError = true
+			}
 		})
 
 		if err != nil {
-			runtime.EventsEmit(a.ctx, "terminal:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
-			runtime.EventsEmit(a.ctx, "upgrade:complete", false)
+			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nUpgrade error: %v\n", err))
+			runtime.EventsEmit(a.ctx, "upgrade:complete", map[string]interface{}{
+				"success":  false,
+				"dnsError": dnsError,
+			})
 			return
 		}
 
-		runtime.EventsEmit(a.ctx, "terminal:output", "\nUpgrade completed successfully.\n")
-		runtime.EventsEmit(a.ctx, "upgrade:complete", true)
+		runtime.EventsEmit(a.ctx, "command:output", "\nUpgrade completed successfully.\n")
+		runtime.EventsEmit(a.ctx, "upgrade:complete", map[string]interface{}{
+			"success":  true,
+			"dnsError": dnsError,
+		})
 	}()
 }
 
@@ -1974,17 +2233,23 @@ type TransferProgress struct {
 	Status     string  `json:"status"`
 }
 
+type FolderTransferProgress struct {
+	CurrentFile string  `json:"currentFile"`
+	FilesDone   int     `json:"filesDone"`
+	FilesTotal  int     `json:"filesTotal"`
+	BytesDone   int64   `json:"bytesDone"`
+	BytesTotal  int64   `json:"bytesTotal"`
+	Percentage  float64 `json:"percentage"`
+	Status      string  `json:"status"`
+}
+
 type DialogRequest struct {
 	Title             string   `json:"title"`
 	Message           string   `json:"message"`
 	Steps             []string `json:"steps"`
 	ConfirmText       string   `json:"confirmText"`
 	InProgressMessage string   `json:"inProgressMessage"`
-}
-
-type BlockedUninstallInfo struct {
-	RequestedPackages []string            `json:"requestedPackages"`
-	BlockedBy         map[string][]string `json:"blockedBy"`
+	InfoOnly          bool     `json:"infoOnly"`
 }
 
 // InstallSimulationResult contains the result of simulating an install
@@ -1998,6 +2263,8 @@ type UninstallSimulationResult struct {
 	Packages          []string            `json:"packages"`          // Packages that will be removed
 	Blocked           map[string][]string `json:"blocked"`           // Packages blocked by dependents
 	RecursivePackages []string            `json:"recursivePackages"` // All packages if recursive removal is needed
+	WorldDeps         []string            `json:"worldDeps"`         // World packages that must be removed
+	AllAffected       []string            `json:"allAffected"`       // Complete list that will be purged
 }
 
 // SimulateInstall returns all packages that will be installed (including dependencies)
@@ -2033,8 +2300,13 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 		return &UninstallSimulationResult{Packages: packageNames}, nil
 	}
 
+	packages := simResult.Packages
+	if packages == nil {
+		packages = []string{}
+	}
+
 	result := &UninstallSimulationResult{
-		Packages: simResult.Packages,
+		Packages: packages,
 		Blocked:  simResult.Blocked,
 	}
 
@@ -2043,12 +2315,105 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 		recursiveList, err := a.vellumClient.SimulateDelRecursive(packageNames...)
 		if err != nil {
 			debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
-		} else {
+		} else if len(recursiveList) > 0 {
 			result.RecursivePackages = recursiveList
+		}
+
+		// If recursive simulation didn't return packages, build list from blocked info
+		if len(result.RecursivePackages) == 0 {
+			seen := make(map[string]bool)
+			for _, name := range packageNames {
+				seen[name] = true
+			}
+			for _, dependents := range simResult.Blocked {
+				for _, dep := range dependents {
+					seen[dep] = true
+				}
+			}
+			all := make([]string, 0, len(seen))
+			for name := range seen {
+				all = append(all, name)
+			}
+			result.RecursivePackages = all
+		}
+	}
+
+	// If nothing would be removed or packages are blocked, resolve world deps
+	if a.vellumClient != nil && (len(result.Packages) == 0 || len(result.Blocked) > 0) {
+		worldToRemove, allAffected, err := a.resolveWorldDeps(packageNames)
+		if err != nil {
+			debug.Printf("[DEBUG] resolveWorldDeps failed: %v\n", err)
+		} else if len(worldToRemove) > 0 {
+			result.WorldDeps = worldToRemove
+			result.AllAffected = allAffected
 		}
 	}
 
 	return result, nil
+}
+
+func (a *App) resolveWorldDeps(targets []string) (worldToRemove []string, allAffected []string, err error) {
+	worldPkgs, err := a.vellumClient.GetWorldPackages()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read world file: %w", err)
+	}
+
+	worldSet := make(map[string]bool, len(worldPkgs))
+	for _, pkg := range worldPkgs {
+		worldSet[pkg] = true
+	}
+
+	visited := make(map[string]bool)
+	queue := make([]string, len(targets))
+	copy(queue, targets)
+	for _, t := range targets {
+		visited[t] = true
+	}
+
+	for len(queue) > 0 {
+		pkg := queue[0]
+		queue = queue[1:]
+
+		rdeps, err := a.vellumClient.GetReverseDeps(pkg)
+		if err != nil {
+			debug.Printf("[DEBUG] GetReverseDeps(%s) failed: %v\n", pkg, err)
+			continue
+		}
+
+		for _, rdep := range rdeps {
+			if !visited[rdep] {
+				visited[rdep] = true
+				queue = append(queue, rdep)
+			}
+		}
+	}
+
+	for pkg := range visited {
+		allAffected = append(allAffected, pkg)
+		if worldSet[pkg] {
+			worldToRemove = append(worldToRemove, pkg)
+		}
+	}
+
+	if len(worldToRemove) == 0 {
+		return nil, nil, nil
+	}
+
+	// Simulate deleting the world packages to get the full cascade list
+	simResult, err := a.vellumClient.SimulateDel(worldToRemove...)
+	if err != nil {
+		debug.Printf("[DEBUG] SimulateDel for world deps failed: %v\n", err)
+		return worldToRemove, allAffected, nil
+	}
+
+	for _, pkg := range simResult.Packages {
+		if !visited[pkg] {
+			visited[pkg] = true
+			allAffected = append(allAffected, pkg)
+		}
+	}
+
+	return worldToRemove, allAffected, nil
 }
 
 func (a *App) RespondToDialog(confirmed bool) {
@@ -2067,6 +2432,9 @@ func (a *App) CancelInstallation() {
 }
 
 func (a *App) InstallPackages(packageNames []string, deviceType string) {
+	if a.logger != nil {
+		a.logger.LogInstall("install", strings.Join(packageNames, ", "), "started")
+	}
 	go func() {
 		a.mu.Lock()
 		a.installCancelCh = make(chan struct{})
@@ -2157,6 +2525,9 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 			allPackages,
 			ctx,
 			func(progress executor.ProgressInfo) {
+				if a.logger != nil {
+					a.logger.LogInstall("install", progress.CurrentComponent, progress.Message)
+				}
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
 					Component: progress.CurrentComponent,
 					Index:     progress.CurrentIndex,
@@ -2173,6 +2544,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 						Steps:             hookResult.DialogConfig.Steps,
 						ConfirmText:       hookResult.DialogConfig.ConfirmText,
 						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
+						InfoOnly:          hookResult.DialogConfig.InfoOnly,
 					})
 
 					confirmed := <-a.dialogResponse
@@ -2204,6 +2576,9 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 }
 
 func (a *App) UninstallPackages(packageNames []string, deviceType string) {
+	if a.logger != nil {
+		a.logger.LogInstall("uninstall", strings.Join(packageNames, ", "), "started")
+	}
 	go func() {
 		a.mu.Lock()
 		a.installCancelCh = make(chan struct{})
@@ -2243,35 +2618,27 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		// Simulate uninstall to check for blockers and get full package list
 		var allPackages []string
 		useRecursive := false
+		useBatch := false
 
 		if a.vellumClient != nil {
 			simResult, err := a.vellumClient.SimulateDel(packageNames...)
 			if err != nil {
 				debug.Printf("[DEBUG] SimulateDel failed: %v, using packageNames only\n", err)
 				allPackages = packageNames
-			} else if len(simResult.Blocked) > 0 {
-				// Packages are blocked by dependents - prompt user
-				debug.Printf("[DEBUG] Packages blocked: %v\n", simResult.Blocked)
-				runtime.EventsEmit(a.ctx, "uninstall:blocked", BlockedUninstallInfo{
-					RequestedPackages: packageNames,
-					BlockedBy:         simResult.Blocked,
-				})
-
-				confirmed := <-a.dialogResponse
-				if !confirmed {
-					runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
-						Success: false,
-						Errors:  []string{"Uninstall cancelled by user"},
-					})
-					return
-				}
-
-				// User confirmed - use recursive deletion
-				useRecursive = true
-				allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
-				if err != nil {
-					debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
-					allPackages = packageNames
+			} else if len(simResult.Blocked) > 0 || len(simResult.Packages) == 0 {
+				worldToRemove, allAffected, wErr := a.resolveWorldDeps(packageNames)
+				if wErr != nil || len(worldToRemove) == 0 {
+					debug.Printf("[DEBUG] resolveWorldDeps failed or empty: %v\n", wErr)
+					useRecursive = true
+					allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
+					if err != nil {
+						debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
+						allPackages = packageNames
+					}
+				} else {
+					packageNames = worldToRemove
+					allPackages = allAffected
+					useBatch = true
 				}
 			} else {
 				allPackages = simResult.Packages
@@ -2298,6 +2665,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 			packageNames,
 			allPackages,
 			useRecursive,
+			useBatch,
 			ctx,
 			func(progress executor.ProgressInfo) {
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
@@ -2316,6 +2684,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 						Steps:             hookResult.DialogConfig.Steps,
 						ConfirmText:       hookResult.DialogConfig.ConfirmText,
 						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
+						InfoOnly:          hookResult.DialogConfig.InfoOnly,
 					})
 
 					confirmed := <-a.dialogResponse
@@ -2393,6 +2762,7 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 						Steps:             hookResult.DialogConfig.Steps,
 						ConfirmText:       hookResult.DialogConfig.ConfirmText,
 						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
+						InfoOnly:          hookResult.DialogConfig.InfoOnly,
 					})
 
 					confirmed := <-a.dialogResponse
@@ -2428,6 +2798,22 @@ func (a *App) RunSystemTask(taskID, deviceType string) {
 
 		if task.NeedsWriteableRoot {
 			cmdResults = commands.WrapWithWriteableRoot(cmdResults, component.DeviceType(deviceType))
+			if err := a.acquireWriteableRoot(deviceType); err != nil {
+				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Blocked: %v\n", err))
+				runtime.EventsEmit(a.ctx, "command:done", false)
+				return
+			}
+			defer a.releaseWriteableRoot(deviceType)
+		}
+
+		var operationErr error
+		if a.logger != nil {
+			a.operationLog = a.logger.StartCommandLog(a.connectedDeviceID, taskID)
+			defer func() {
+				a.operationLog.WriteExitCode(operationErr)
+				a.operationLog.Close()
+				a.operationLog = nil
+			}()
 		}
 
 		for _, c := range cmdResults {
@@ -2449,6 +2835,7 @@ func (a *App) RunSystemTask(taskID, deviceType string) {
 			unsub()
 
 			if !success {
+				operationErr = fmt.Errorf("command failed: %s", c.Script)
 				runtime.EventsEmit(a.ctx, "command:output", "Command failed, stopping execution\n")
 				return
 			}
@@ -2462,6 +2849,20 @@ type wailsExecutor struct {
 }
 
 func (e *wailsExecutor) Execute(cmds []component.CommandResult) error {
+	var operationErr error
+	if e.app.logger != nil && len(cmds) > 0 {
+		name := cmds[0].Description
+		if name == "" {
+			name = "execute"
+		}
+		e.app.operationLog = e.app.logger.StartCommandLog(e.app.connectedDeviceID, name)
+		defer func() {
+			e.app.operationLog.WriteExitCode(operationErr)
+			e.app.operationLog.Close()
+			e.app.operationLog = nil
+		}()
+	}
+
 	for _, cmd := range cmds {
 		runtime.EventsEmit(e.app.ctx, "command:output", fmt.Sprintf("$ %s\n", cmd.Script))
 
@@ -2481,7 +2882,8 @@ func (e *wailsExecutor) Execute(cmds []component.CommandResult) error {
 		unsub()
 
 		if !success {
-			return fmt.Errorf("command failed: %s", cmd.Description)
+			operationErr = fmt.Errorf("command failed: %s", cmd.Description)
+			return operationErr
 		}
 	}
 	return nil
@@ -2499,6 +2901,12 @@ func (e *wailsExecutor) ExecuteWithOutput(cmd string) (string, error) {
 }
 
 func (e *wailsExecutor) ExecuteStreaming(cmd string, onOutput func(line string)) error {
+	var cmdLog *logger.CommandLog
+	if e.app.logger != nil {
+		cmdLog = e.app.logger.StartCommandLog(e.app.connectedDeviceID, cmd)
+	}
+	defer cmdLog.Close()
+
 	e.app.mu.Lock()
 	if e.app.client == nil {
 		e.app.mu.Unlock()
@@ -2533,8 +2941,10 @@ func (e *wailsExecutor) ExecuteStreaming(cmd string, onOutput func(line string))
 		defer wg.Done()
 		scanner := bufio.NewScanner(r)
 		for scanner.Scan() {
+			line := scanner.Text()
+			cmdLog.Write(line + "\n")
 			if onOutput != nil {
-				onOutput(scanner.Text())
+				onOutput(line)
 			}
 		}
 	}
@@ -2544,6 +2954,7 @@ func (e *wailsExecutor) ExecuteStreaming(cmd string, onOutput func(line string))
 
 	err = session.Wait()
 	wg.Wait()
+	cmdLog.WriteExitCode(err)
 	return err
 }
 
@@ -2551,48 +2962,167 @@ func (a *App) GetAppVersion() string {
 	return version
 }
 
+type UpdateCheckResult struct {
+	UpdateAvailable bool   `json:"updateAvailable"`
+	LatestVersion   string `json:"latestVersion"`
+	CurrentVersion  string `json:"currentVersion"`
+	ReleaseURL      string `json:"releaseURL"`
+	Error           string `json:"error,omitempty"`
+}
+
+func (a *App) CheckForAppUpdate() UpdateCheckResult {
+	result := UpdateCheckResult{
+		CurrentVersion: version,
+	}
+
+	if version == "dev" {
+		return result
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("https://api.github.com/repos/rmitchellscott/remanager/releases/latest")
+	if err != nil {
+		debug.Printf("[DEBUG] CheckForAppUpdate: request failed: %v\n", err)
+		result.Error = "network_error"
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		debug.Printf("[DEBUG] CheckForAppUpdate: HTTP %d\n", resp.StatusCode)
+		result.Error = "api_error"
+		return result
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		result.Error = "read_error"
+		return result
+	}
+
+	if err := json.Unmarshal(body, &release); err != nil {
+		result.Error = "parse_error"
+		return result
+	}
+
+	result.LatestVersion = release.TagName
+	result.ReleaseURL = release.HTMLURL
+	result.UpdateAvailable = isNewerVersion(version, release.TagName)
+
+	debug.Printf("[DEBUG] CheckForAppUpdate: current=%s, latest=%s, updateAvailable=%v\n",
+		version, release.TagName, result.UpdateAvailable)
+
+	return result
+}
+
+func isNewerVersion(current, latest string) bool {
+	current = strings.TrimPrefix(current, "v")
+	latest = strings.TrimPrefix(latest, "v")
+
+	currentParts := strings.Split(current, ".")
+	latestParts := strings.Split(latest, ".")
+
+	for len(currentParts) < 3 {
+		currentParts = append(currentParts, "0")
+	}
+	for len(latestParts) < 3 {
+		latestParts = append(latestParts, "0")
+	}
+
+	for i := 0; i < 3; i++ {
+		currNum, err1 := strconv.Atoi(currentParts[i])
+		latestNum, err2 := strconv.Atoi(latestParts[i])
+
+		if err1 != nil || err2 != nil {
+			if latestParts[i] > currentParts[i] {
+				return true
+			}
+			if latestParts[i] < currentParts[i] {
+				return false
+			}
+			continue
+		}
+
+		if latestNum > currNum {
+			return true
+		}
+		if latestNum < currNum {
+			return false
+		}
+	}
+
+	return false
+}
+
+type BehaviorSettings struct {
+	ProxyMode                  bool `json:"proxyMode"`
+	SuppressSystemFileWarnings bool `json:"suppressSystemFileWarnings"`
+	PreventSleep               bool `json:"preventSleep"`
+	CheckForUpdates            bool `json:"checkForUpdates"`
+}
+
 type SettingsInfo struct {
-	TabVisibility              map[string]bool `json:"tabVisibility"`
-	ProxyMode                  bool            `json:"proxyMode"`
-	SuppressSystemFileWarnings bool            `json:"suppressSystemFileWarnings"`
-	Theme                      string          `json:"theme"`
-	TerminalTheme              string          `json:"terminalTheme"`
-	EditorTheme string `json:"editorTheme"`
+	BehaviorSettings
+	TabVisibility map[string]bool `json:"tabVisibility"`
+	Theme         string          `json:"theme"`
+	TerminalTheme string          `json:"terminalTheme"`
+	EditorTheme   string          `json:"editorTheme"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
 	if a.settingsStore == nil {
+		debug.Println("[DEBUG] GetSettings: settingsStore is nil")
 		return SettingsInfo{
-			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
-			ProxyMode:                  true,
-			SuppressSystemFileWarnings: false,
-			Theme:                      "system",
-			TerminalTheme:              "match",
-			EditorTheme:                "match",
+			BehaviorSettings: BehaviorSettings{
+				ProxyMode:                  true,
+				SuppressSystemFileWarnings: false,
+				PreventSleep:               true,
+				CheckForUpdates:            true,
+			},
+			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
+			Theme:         "system",
+			TerminalTheme: "match",
+			EditorTheme:   "match",
 		}
 	}
 	settings, err := a.settingsStore.Load()
 	if err != nil {
+		debug.Printf("[DEBUG] GetSettings: failed to load: %v\n", err)
 		return SettingsInfo{
-			TabVisibility:              map[string]bool{"mods": true, "maintenance": true, "utilities": true},
-			ProxyMode:                  true,
-			SuppressSystemFileWarnings: false,
-			Theme:                      "system",
-			TerminalTheme:              "match",
-			EditorTheme:                "match",
+			BehaviorSettings: BehaviorSettings{
+				ProxyMode:                  true,
+				SuppressSystemFileWarnings: false,
+				PreventSleep:               true,
+				CheckForUpdates:            true,
+			},
+			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
+			Theme:         "system",
+			TerminalTheme: "match",
+			EditorTheme:   "match",
 		}
 	}
+	debug.Printf("[DEBUG] GetSettings: loaded PreventSleep=%v\n", settings.PreventSleep)
 	return SettingsInfo{
-		TabVisibility:              settings.TabVisibility,
-		ProxyMode:                  settings.ProxyMode,
-		SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
-		Theme:                      settings.Theme,
-		TerminalTheme:              settings.TerminalTheme,
-		EditorTheme:                settings.EditorTheme,
+		BehaviorSettings: BehaviorSettings{
+			ProxyMode:                  settings.ProxyMode,
+			SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
+			PreventSleep:               settings.PreventSleep,
+			CheckForUpdates:            settings.CheckForUpdates,
+		},
+		TabVisibility: settings.TabVisibility,
+		Theme:         settings.Theme,
+		TerminalTheme: settings.TerminalTheme,
+		EditorTheme:   settings.EditorTheme,
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, theme string, terminalTheme string, editorTheme string) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, preventSleep bool, theme string, terminalTheme string, editorTheme string, checkForUpdates bool) error {
+	debug.Printf("[DEBUG] SaveSettings: preventSleep=%v, isConnected=%v\n", preventSleep, a.IsConnected())
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
@@ -2600,10 +3130,23 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		TabVisibility:              storage.TabVisibility(tabVisibility),
 		ProxyMode:                  proxyMode,
 		SuppressSystemFileWarnings: suppressSystemFileWarnings,
+		PreventSleep:               preventSleep,
 		Theme:                      theme,
 		TerminalTheme:              terminalTheme,
 		EditorTheme:                editorTheme,
+		CheckForUpdates:            checkForUpdates,
 	}
+
+	if preventSleep && a.IsConnected() {
+		debug.Println("[DEBUG] SaveSettings: starting prevent sleep")
+		if err := a.StartPreventSleep(); err != nil {
+			debug.Printf("[DEBUG] SaveSettings: StartPreventSleep failed: %v\n", err)
+		}
+	} else {
+		debug.Println("[DEBUG] SaveSettings: stopping prevent sleep")
+		a.StopPreventSleep()
+	}
+
 	return a.settingsStore.Save(settings)
 }
 
@@ -2990,10 +3533,221 @@ func (a *App) DownloadFile(remotePath string) {
 			}
 		}
 
+		runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
+			Filename:   filename,
+			BytesSent:  totalBytes,
+			TotalBytes: totalBytes,
+			Percentage: 100,
+			Status:     "downloading",
+		})
+
 		runtime.EventsEmit(a.ctx, "filebrowser:download-complete", map[string]string{
 			"path": remotePath,
 		})
 	}()
+}
+
+func (a *App) DownloadFolder(remotePath string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
+				"message": "Not connected.",
+				"code":    apperrors.ErrHostDown,
+			})
+			return
+		}
+
+		folderName := path.Base(remotePath)
+		localDir, err := openDirectoryDialog(a.ctx, "Save Folder To")
+		if err != nil || localDir == "" {
+			return
+		}
+		localBasePath := filepath.Join(localDir, folderName)
+
+		a.folderTransferMu.Lock()
+		a.folderTransferCancelCh = make(chan struct{})
+		cancelCh := a.folderTransferCancelCh
+		a.folderTransferMu.Unlock()
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			ue := apperrors.Classify(err)
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
+				"message": ue.Message,
+				"code":    ue.Code,
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		filesTotal, bytesTotal, err := a.countRemoteFolder(sftpClient, remotePath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to scan folder: %v", err),
+			})
+			return
+		}
+
+		var filesDone int
+		var bytesDone int64
+		var failedFiles []string
+
+		err = a.downloadFolderRecursive(sftpClient, remotePath, localBasePath, &filesDone, &bytesDone, filesTotal, bytesTotal, &failedFiles, cancelCh)
+
+		select {
+		case <-cancelCh:
+			runtime.EventsEmit(a.ctx, "filebrowser:folder-download-complete", map[string]interface{}{
+				"cancelled": true,
+			})
+			return
+		default:
+		}
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Download failed: %v", err),
+			})
+			return
+		}
+
+		runtime.EventsEmit(a.ctx, "filebrowser:folder-download-complete", map[string]interface{}{
+			"path":        remotePath,
+			"failedFiles": failedFiles,
+		})
+	}()
+}
+
+func (a *App) countRemoteFolder(sftpClient *sftp.Client, remotePath string) (int, int64, error) {
+	var filesTotal int
+	var bytesTotal int64
+
+	walker := sftpClient.Walk(remotePath)
+	for walker.Step() {
+		if err := walker.Err(); err != nil {
+			continue
+		}
+		info := walker.Stat()
+		if info.Mode()&os.ModeSymlink != 0 {
+			filesTotal++
+		} else if !info.IsDir() {
+			filesTotal++
+			bytesTotal += info.Size()
+		}
+	}
+
+	return filesTotal, bytesTotal, nil
+}
+
+func (a *App) downloadFolderRecursive(sftpClient *sftp.Client, remotePath, localPath string, filesDone *int, bytesDone *int64, filesTotal int, bytesTotal int64, failedFiles *[]string, cancelCh chan struct{}) error {
+	select {
+	case <-cancelCh:
+		return fmt.Errorf("cancelled")
+	default:
+	}
+
+	info, err := sftpClient.Lstat(remotePath)
+	if err != nil {
+		return err
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := sftpClient.ReadLink(remotePath)
+		if err != nil {
+			*failedFiles = append(*failedFiles, remotePath)
+			return nil
+		}
+		if err := os.Symlink(target, localPath); err != nil {
+			*failedFiles = append(*failedFiles, remotePath)
+		}
+		*filesDone++
+		a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading")
+		return nil
+	}
+
+	if info.IsDir() {
+		if err := os.MkdirAll(localPath, 0755); err != nil {
+			return err
+		}
+
+		entries, err := sftpClient.ReadDir(remotePath)
+		if err != nil {
+			return err
+		}
+
+		for _, entry := range entries {
+			remoteEntryPath := path.Join(remotePath, entry.Name())
+			localEntryPath := filepath.Join(localPath, entry.Name())
+
+			if err := a.downloadFolderRecursive(sftpClient, remoteEntryPath, localEntryPath, filesDone, bytesDone, filesTotal, bytesTotal, failedFiles, cancelCh); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	remoteFile, err := sftpClient.Open(remotePath)
+	if err != nil {
+		*failedFiles = append(*failedFiles, remotePath)
+		return nil
+	}
+	defer remoteFile.Close()
+
+	localFile, err := os.Create(localPath)
+	if err != nil {
+		*failedFiles = append(*failedFiles, remotePath)
+		return nil
+	}
+	defer localFile.Close()
+
+	buffer := make([]byte, 32*1024)
+	for {
+		select {
+		case <-cancelCh:
+			return fmt.Errorf("cancelled")
+		default:
+		}
+
+		n, err := remoteFile.Read(buffer)
+		if n > 0 {
+			if _, writeErr := localFile.Write(buffer[:n]); writeErr != nil {
+				*failedFiles = append(*failedFiles, remotePath)
+				return nil
+			}
+			*bytesDone += int64(n)
+			a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading")
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			*failedFiles = append(*failedFiles, remotePath)
+			return nil
+		}
+	}
+
+	*filesDone++
+	a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading")
+	return nil
+}
+
+func (a *App) emitFolderProgress(currentFile string, filesDone, filesTotal int, bytesDone, bytesTotal int64, status string) {
+	var percentage float64
+	if bytesTotal > 0 {
+		percentage = float64(bytesDone) / float64(bytesTotal) * 100
+	}
+	runtime.EventsEmit(a.ctx, "filebrowser:folder-progress", FolderTransferProgress{
+		CurrentFile: currentFile,
+		FilesDone:   filesDone,
+		FilesTotal:  filesTotal,
+		BytesDone:   bytesDone,
+		BytesTotal:  bytesTotal,
+		Percentage:  percentage,
+		Status:      status,
+	})
 }
 
 func (a *App) UploadFile(remotePath string) {
@@ -3105,10 +3859,229 @@ func (a *App) UploadFile(remotePath string) {
 			}
 		}
 
+		runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
+			Filename:   filename,
+			BytesSent:  totalBytes,
+			TotalBytes: totalBytes,
+			Percentage: 100,
+			Status:     "uploading",
+		})
+
 		runtime.EventsEmit(a.ctx, "filebrowser:upload-complete", map[string]string{
 			"path": destPath,
 		})
 	}()
+}
+
+func (a *App) UploadFolder(remotePath string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": "Not connected",
+			})
+			return
+		}
+
+		localDir, err := openDirectoryDialog(a.ctx, "Select Folder to Upload")
+		if err != nil || localDir == "" {
+			return
+		}
+
+		a.folderTransferMu.Lock()
+		a.folderTransferCancelCh = make(chan struct{})
+		cancelCh := a.folderTransferCancelCh
+		a.folderTransferMu.Unlock()
+
+		folderName := filepath.Base(localDir)
+		destPath := remotePath
+		if strings.HasSuffix(remotePath, "/") || remotePath == "" {
+			destPath = path.Join(remotePath, folderName)
+		}
+
+		needsWritable := isSystemPath(destPath)
+		if needsWritable {
+			if err := a.makeFilesystemWritable(client); err != nil {
+				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+					"message": fmt.Sprintf("Failed to prepare filesystem: %v", err),
+				})
+				return
+			}
+			defer a.restoreFilesystemDeferred(client)
+		}
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+			})
+			return
+		}
+		defer sftpClient.Close()
+
+		filesTotal, bytesTotal, err := a.countLocalFolder(localDir)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to scan folder: %v", err),
+			})
+			return
+		}
+
+		var filesDone int
+		var bytesDone int64
+		var failedFiles []string
+
+		err = a.uploadFolderRecursive(sftpClient, localDir, destPath, &filesDone, &bytesDone, filesTotal, bytesTotal, &failedFiles, cancelCh)
+
+		select {
+		case <-cancelCh:
+			runtime.EventsEmit(a.ctx, "filebrowser:folder-upload-complete", map[string]interface{}{
+				"cancelled": true,
+			})
+			return
+		default:
+		}
+
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Upload failed: %v", err),
+			})
+			return
+		}
+
+		runtime.EventsEmit(a.ctx, "filebrowser:folder-upload-complete", map[string]interface{}{
+			"path":        destPath,
+			"failedFiles": failedFiles,
+		})
+	}()
+}
+
+func (a *App) countLocalFolder(localPath string) (int, int64, error) {
+	var filesTotal int
+	var bytesTotal int64
+
+	err := filepath.WalkDir(localPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			filesTotal++
+		} else if !d.IsDir() {
+			filesTotal++
+			bytesTotal += info.Size()
+		}
+		return nil
+	})
+
+	return filesTotal, bytesTotal, err
+}
+
+func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePath string, filesDone *int, bytesDone *int64, filesTotal int, bytesTotal int64, failedFiles *[]string, cancelCh chan struct{}) error {
+	select {
+	case <-cancelCh:
+		return fmt.Errorf("cancelled")
+	default:
+	}
+
+	info, err := os.Lstat(localPath)
+	if err != nil {
+		return err
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(localPath)
+		if err != nil {
+			*failedFiles = append(*failedFiles, localPath)
+			return nil
+		}
+		if err := sftpClient.Symlink(target, remotePath); err != nil {
+			*failedFiles = append(*failedFiles, localPath)
+		}
+		*filesDone++
+		a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading")
+		return nil
+	}
+
+	if info.IsDir() {
+		if err := sftpClient.MkdirAll(remotePath); err != nil {
+			return err
+		}
+
+		entries, err := os.ReadDir(localPath)
+		if err != nil {
+			return err
+		}
+
+		for _, entry := range entries {
+			localEntryPath := filepath.Join(localPath, entry.Name())
+			remoteEntryPath := path.Join(remotePath, entry.Name())
+
+			if err := a.uploadFolderRecursive(sftpClient, localEntryPath, remoteEntryPath, filesDone, bytesDone, filesTotal, bytesTotal, failedFiles, cancelCh); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	localFile, err := os.Open(localPath)
+	if err != nil {
+		*failedFiles = append(*failedFiles, localPath)
+		return nil
+	}
+	defer localFile.Close()
+
+	remoteFile, err := sftpClient.Create(remotePath)
+	if err != nil {
+		*failedFiles = append(*failedFiles, localPath)
+		return nil
+	}
+	defer remoteFile.Close()
+
+	buffer := make([]byte, 32*1024)
+	for {
+		select {
+		case <-cancelCh:
+			return fmt.Errorf("cancelled")
+		default:
+		}
+
+		n, err := localFile.Read(buffer)
+		if n > 0 {
+			if _, writeErr := remoteFile.Write(buffer[:n]); writeErr != nil {
+				*failedFiles = append(*failedFiles, localPath)
+				return nil
+			}
+			*bytesDone += int64(n)
+			a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading")
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			*failedFiles = append(*failedFiles, localPath)
+			return nil
+		}
+	}
+
+	*filesDone++
+	a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading")
+	return nil
+}
+
+func (a *App) CancelFolderTransfer() {
+	a.folderTransferMu.Lock()
+	defer a.folderTransferMu.Unlock()
+	if a.folderTransferCancelCh != nil {
+		close(a.folderTransferCancelCh)
+		a.folderTransferCancelCh = nil
+	}
 }
 
 func (a *App) UploadFilesFromPaths(localPaths []string, remotePath string) {
@@ -3125,6 +4098,20 @@ func (a *App) UploadFilesFromPaths(localPaths []string, remotePath string) {
 		}
 
 		if len(localPaths) == 0 {
+			return
+		}
+
+		var hasFolder bool
+		for _, localPath := range localPaths {
+			info, err := os.Stat(localPath)
+			if err == nil && info.IsDir() {
+				hasFolder = true
+				break
+			}
+		}
+
+		if hasFolder {
+			a.uploadMixedPaths(client, localPaths, remotePath)
 			return
 		}
 
@@ -3149,6 +4136,122 @@ func (a *App) UploadFilesFromPaths(localPaths []string, remotePath string) {
 			"path": remotePath,
 		})
 	}()
+}
+
+func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePath string) {
+	a.folderTransferMu.Lock()
+	a.folderTransferCancelCh = make(chan struct{})
+	cancelCh := a.folderTransferCancelCh
+	a.folderTransferMu.Unlock()
+
+	needsWritable := isSystemPath(remotePath)
+	if needsWritable {
+		if err := a.makeFilesystemWritable(client); err != nil {
+			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+				"message": fmt.Sprintf("Failed to prepare filesystem: %v", err),
+			})
+			return
+		}
+		defer a.restoreFilesystemDeferred(client)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
+			"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
+		})
+		return
+	}
+	defer sftpClient.Close()
+
+	var filesTotal int
+	var bytesTotal int64
+	for _, localPath := range localPaths {
+		info, err := os.Stat(localPath)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			f, b, _ := a.countLocalFolder(localPath)
+			filesTotal += f
+			bytesTotal += b
+		} else {
+			filesTotal++
+			bytesTotal += info.Size()
+		}
+	}
+
+	var filesDone int
+	var bytesDone int64
+	var failedFiles []string
+
+	for _, localPath := range localPaths {
+		select {
+		case <-cancelCh:
+			runtime.EventsEmit(a.ctx, "filebrowser:folder-upload-complete", map[string]interface{}{
+				"cancelled": true,
+			})
+			return
+		default:
+		}
+
+		info, err := os.Stat(localPath)
+		if err != nil {
+			failedFiles = append(failedFiles, localPath)
+			continue
+		}
+
+		if info.IsDir() {
+			folderName := filepath.Base(localPath)
+			destPath := path.Join(remotePath, folderName)
+			if err := a.uploadFolderRecursive(sftpClient, localPath, destPath, &filesDone, &bytesDone, filesTotal, bytesTotal, &failedFiles, cancelCh); err != nil {
+				continue
+			}
+		} else {
+			destPath := path.Join(remotePath, info.Name())
+			localFile, err := os.Open(localPath)
+			if err != nil {
+				failedFiles = append(failedFiles, localPath)
+				continue
+			}
+
+			remoteFile, err := sftpClient.Create(destPath)
+			if err != nil {
+				localFile.Close()
+				failedFiles = append(failedFiles, localPath)
+				continue
+			}
+
+			buffer := make([]byte, 32*1024)
+			for {
+				n, err := localFile.Read(buffer)
+				if n > 0 {
+					if _, writeErr := remoteFile.Write(buffer[:n]); writeErr != nil {
+						failedFiles = append(failedFiles, localPath)
+						break
+					}
+					bytesDone += int64(n)
+					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading")
+				}
+				if err == io.EOF {
+					filesDone++
+					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading")
+					break
+				}
+				if err != nil {
+					failedFiles = append(failedFiles, localPath)
+					break
+				}
+			}
+			localFile.Close()
+			remoteFile.Close()
+		}
+	}
+
+	runtime.EventsEmit(a.ctx, "filebrowser:folder-upload-complete", map[string]interface{}{
+		"path":        remotePath,
+		"failedFiles": failedFiles,
+	})
 }
 
 func (a *App) uploadSingleFile(client *ssh.Client, sftpClient *sftp.Client, localPath string, remotePath string) error {
@@ -3219,6 +4322,14 @@ func (a *App) uploadSingleFile(client *ssh.Client, sftpClient *sftp.Client, loca
 			return fmt.Errorf("failed to read local file: %v", err)
 		}
 	}
+
+	runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
+		Filename:   filename,
+		BytesSent:  totalBytes,
+		TotalBytes: totalBytes,
+		Percentage: 100,
+		Status:     "uploading",
+	})
 
 	return nil
 }
@@ -3564,7 +4675,30 @@ func (a *App) RestoreConfigBackup(backupName string) error {
 	return err
 }
 
-func (a *App) CreateDeviceBackup() {
+func (a *App) SelectBackupFile() string {
+	a.mu.Lock()
+	deviceID := a.connectedDeviceID
+	a.mu.Unlock()
+
+	rawDeviceName := ""
+	if savedDevice, err := a.deviceStore.Get(deviceID); err == nil && savedDevice.Name != "" {
+		rawDeviceName = savedDevice.Name
+	}
+	deviceName := "device"
+	if rawDeviceName != "" {
+		deviceName = sanitizeFilename(rawDeviceName)
+	}
+
+	timestamp := time.Now().Format("2006-01-02-150405")
+	defaultName := fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp)
+	destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName)
+	if err != nil || destPath == "" {
+		return ""
+	}
+	return destPath
+}
+
+func (a *App) CreateDeviceBackup(destPath string) {
 	go func() {
 		a.mu.Lock()
 		client := a.client
@@ -3581,17 +4715,6 @@ func (a *App) CreateDeviceBackup() {
 		rawDeviceName := ""
 		if savedDevice, err := a.deviceStore.Get(deviceID); err == nil && savedDevice.Name != "" {
 			rawDeviceName = savedDevice.Name
-		}
-		deviceName := "device"
-		if rawDeviceName != "" {
-			deviceName = sanitizeFilename(rawDeviceName)
-		}
-
-		timestamp := time.Now().Format("2006-01-02-150405")
-		defaultName := fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp)
-		destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName)
-		if err != nil || destPath == "" {
-			return
 		}
 
 		sftpClient, err := sftp.NewClient(client)
@@ -3886,4 +5009,565 @@ func (a *App) RestartXochitl() error {
 	}
 
 	return nil
+}
+
+// Input event bytes for BTN_TOUCH (arm64: 24 bytes per event)
+// Layout: time_sec(8) + time_usec(8) + type(2) + code(2) + value(4)
+var (
+	btnTouchDown = []byte{
+		0, 0, 0, 0, 0, 0, 0, 0, // time_sec
+		0, 0, 0, 0, 0, 0, 0, 0, // time_usec
+		0x01, 0x00, // type = EV_KEY (1)
+		0x4a, 0x01, // code = BTN_TOUCH (330 = 0x14a)
+		0x01, 0x00, 0x00, 0x00, // value = 1 (pressed)
+	}
+	btnTouchUp = []byte{
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0x01, 0x00,
+		0x4a, 0x01,
+		0x00, 0x00, 0x00, 0x00, // value = 0 (released)
+	}
+	synReport = []byte{
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0x00, 0x00, // type = EV_SYN (0)
+		0x00, 0x00, // code = SYN_REPORT (0)
+		0x00, 0x00, 0x00, 0x00,
+	}
+)
+
+func (a *App) findPenInputDevice() (string, error) {
+	debug.Println("[DEBUG] findPenInputDevice: searching for pen input device via BTN_STYLUS capability")
+	// Detect pen device by checking for BTN_STYLUS (331) capability
+	// BTN_STYLUS is bit 11 in the first word of key capabilities
+	// Pen devices have >= 6 words (64-bit) or >= 11 words (32-bit)
+	// Both architectures have BTN_STYLUS in the first printed word
+	cmd := `for ev in /sys/class/input/event*; do
+		caps=$(cat "$ev/device/capabilities/key" 2>/dev/null)
+		[ -z "$caps" ] && continue
+		count=$(echo "$caps" | wc -w)
+		[ "$count" -lt 6 ] && continue
+		first=$(echo "$caps" | awk '{print $1}')
+		if [ $((0x$first & 0x800)) -ne 0 ]; then
+			echo "/dev/input/$(basename $ev)"
+			exit 0
+		fi
+	done`
+	output, err := a.runCommand(cmd)
+	if err != nil {
+		debug.Printf("[DEBUG] findPenInputDevice: runCommand failed: %v\n", err)
+		return "", err
+	}
+	device := strings.TrimSpace(output)
+	debug.Printf("[DEBUG] findPenInputDevice: raw output=%q, device=%q\n", output, device)
+	if device == "" {
+		return "", fmt.Errorf("pen input device not found (no device with BTN_STYLUS capability)")
+	}
+	debug.Printf("[DEBUG] findPenInputDevice: found device: %s\n", device)
+	return device, nil
+}
+
+func (a *App) pokePenDevice(devicePath string, enter bool) error {
+	debug.Printf("[DEBUG] pokePenDevice: device=%s enter=%v\n", devicePath, enter)
+
+	var val, dist string
+	if enter {
+		val = `\001`
+		dist = `\062`
+	} else {
+		val = `\000`
+		dist = `\000`
+	}
+
+	cmd := fmt.Sprintf(`arch=$(uname -m)
+if [ "$arch" = "aarch64" ]; then
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001\000\100\001%s\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\003\000\031\000%s\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
+else
+  printf '\000\000\000\000\000\000\000\000\003\000\000\000\062\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\003\000\001\000\062\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\003\000\000\000\144\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\003\000\001\000\144\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\001\000\100\001%s\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\003\000\031\000%s\000\000\000' > %s
+  printf '\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000' > %s
+fi`,
+		val, devicePath,
+		dist, devicePath,
+		devicePath,
+		devicePath,
+		devicePath,
+		devicePath,
+		devicePath,
+		devicePath,
+		val, devicePath,
+		dist, devicePath,
+		devicePath)
+
+	_, err := a.runCommand(cmd)
+	if err != nil {
+		debug.Printf("[DEBUG] pokePenDevice: command failed: %v\n", err)
+		return err
+	}
+	debug.Println("[DEBUG] pokePenDevice: successfully wrote events")
+	return nil
+}
+
+func (a *App) StartPreventSleep() error {
+	debug.Println("[DEBUG] StartPreventSleep: called")
+	a.mu.Lock()
+	if a.preventSleepStop != nil {
+		a.mu.Unlock()
+		debug.Println("[DEBUG] StartPreventSleep: already running, skipping")
+		return nil
+	}
+	a.mu.Unlock()
+
+	penDevice, err := a.findPenInputDevice()
+	if err != nil {
+		debug.Printf("[DEBUG] StartPreventSleep: findPenInputDevice failed: %v\n", err)
+		return fmt.Errorf("failed to find pen input device: %w", err)
+	}
+
+	a.mu.Lock()
+	a.penInputDevice = penDevice
+	a.preventSleepStop = make(chan struct{})
+	stopCh := a.preventSleepStop
+	a.mu.Unlock()
+
+	debug.Printf("[DEBUG] StartPreventSleep: starting goroutine for device %s\n", penDevice)
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+
+		debug.Println("[DEBUG] StartPreventSleep goroutine: sending pen-enter")
+		if err := a.pokePenDevice(penDevice, true); err != nil {
+			debug.Printf("[DEBUG] StartPreventSleep goroutine: pen-enter failed: %v\n", err)
+		}
+
+		for {
+			select {
+			case <-ticker.C:
+				debug.Println("[DEBUG] StartPreventSleep goroutine: re-asserting pen hover")
+				a.pokePenDevice(penDevice, false)
+				time.Sleep(50 * time.Millisecond)
+				if err := a.pokePenDevice(penDevice, true); err != nil {
+					debug.Printf("[DEBUG] StartPreventSleep goroutine: pen-enter failed: %v\n", err)
+				}
+			case <-stopCh:
+				debug.Println("[DEBUG] StartPreventSleep goroutine: sending pen-leave")
+				a.pokePenDevice(penDevice, false)
+				return
+			}
+		}
+	}()
+
+	runtime.EventsEmit(a.ctx, "prevent-sleep-changed", true)
+	debug.Println("[DEBUG] StartPreventSleep: completed successfully")
+	return nil
+}
+
+func (a *App) StopPreventSleep() error {
+	debug.Println("[DEBUG] StopPreventSleep: called")
+	a.mu.Lock()
+	penDevice := a.penInputDevice
+	if a.preventSleepStop != nil {
+		debug.Println("[DEBUG] StopPreventSleep: closing stop channel")
+		close(a.preventSleepStop)
+		a.preventSleepStop = nil
+	} else {
+		debug.Println("[DEBUG] StopPreventSleep: not running, nothing to stop")
+	}
+	a.penInputDevice = ""
+	a.mu.Unlock()
+	if penDevice != "" {
+		a.pokePenDevice(penDevice, false)
+	}
+
+	runtime.EventsEmit(a.ctx, "prevent-sleep-changed", false)
+	return nil
+}
+
+func (a *App) IsPreventingSleep() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	running := a.preventSleepStop != nil
+	debug.Printf("[DEBUG] IsPreventingSleep: %v\n", running)
+	return running
+}
+
+func (a *App) DeleteAllLogs() error {
+	if a.logger == nil {
+		return nil
+	}
+	err := a.logger.DeleteAllCommandLogs()
+	if err != nil {
+		a.logger.LogEvent("APP", "failed to delete command logs: "+err.Error())
+		return err
+	}
+	a.logger.LogEvent("APP", "all command logs deleted by user")
+	return nil
+}
+
+func (a *App) GetSupportBundlePreview() support.SupportBundlePreview {
+	return support.GetPreview()
+}
+
+func (a *App) buildGenerator(deviceID string, isConnectedDevice bool, deviceName string) *support.Generator {
+	var logDir string
+	if a.logger != nil {
+		logDir = a.logger.GetLogDir()
+	}
+
+	env := runtime.Environment(a.ctx)
+	hostOS := env.Platform
+	if hostOS == "darwin" {
+		hostOS = "macos"
+	}
+	if platform.IsRunningInFlatpak() {
+		hostOS += " (Flatpak)"
+	}
+
+	gen := &support.Generator{
+		AppVersion: version,
+		HostOS:     hostOS,
+		LogDir:     logDir,
+		DeviceID:   deviceID,
+		DeviceName: deviceName,
+	}
+
+	settings := a.GetSettings()
+	gen.Settings = settings.BehaviorSettings
+
+	if isConnectedDevice {
+		deviceInfo := a.GetDeviceInfo()
+		if len(deviceInfo) > 0 {
+			gen.Device = &support.DeviceInfo{
+				MachineType:     deviceInfo["machine"],
+				FirmwareVersion: deviceInfo["firmware"],
+			}
+		}
+
+		if a.vellumClient != nil {
+			if versions, err := a.vellumClient.ListInstalledWithVersions(); err == nil {
+				gen.InstalledPackages = versions
+			}
+		}
+
+		osState := a.GetOSVersionState()
+		if osState.StoredVersion != "" {
+			gen.OSVer = osState.StoredVersion
+		}
+
+		updateStatus := a.GetUpdateServiceStatus()
+		gen.UpdateService = &support.UpdateServiceStatus{
+			Enabled: updateStatus.Enabled,
+			Running: updateStatus.Running,
+		}
+
+		hashtab := a.CheckHashtabVersion()
+		gen.Hashtab = &support.HashtabInfo{
+			Installed:      hashtab.Installed,
+			HashtabVersion: hashtab.HashtabVersion,
+			NeedsRebuild:   hashtab.NeedsRebuild,
+		}
+
+		if tz, err := a.GetDeviceTimezone(); err == nil {
+			gen.Timezone = tz
+		}
+	}
+
+	return gen
+}
+
+func (a *App) GenerateSupportBundle(deviceID string) {
+	go func() {
+		a.mu.Lock()
+		if deviceID == "" {
+			deviceID = a.connectedDeviceID
+		}
+		isConnectedDevice := deviceID == a.connectedDeviceID && a.client != nil
+		a.mu.Unlock()
+
+		var deviceName string
+		if deviceID != "" && a.deviceStore != nil {
+			if d, err := a.deviceStore.Get(deviceID); err == nil {
+				deviceName = d.Name
+			}
+		}
+
+		runtime.EventsEmit(a.ctx, "support-bundle:progress", map[string]string{
+			"phase":   "generating",
+			"message": "Preparing support bundle...",
+		})
+
+		filename := fmt.Sprintf("remanager-support-%s.tar.gz", time.Now().Format("20060102-150405"))
+		destPath, err := saveFileDialog(a.ctx, "Save Support Bundle", filename)
+		if err != nil || destPath == "" {
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "support-bundle:error", map[string]string{
+					"message": err.Error(),
+				})
+			}
+			return
+		}
+
+		a.mu.Lock()
+		if a.supportBundleID == "" {
+			a.supportBundleID = support.GenerateBundleID()
+		}
+		bundleID := a.supportBundleID
+		a.mu.Unlock()
+
+		runtime.EventsEmit(a.ctx, "support-bundle:progress", map[string]string{
+			"phase":   "collecting",
+			"message": "Collecting device information...",
+		})
+
+		gen := a.buildGenerator(deviceID, isConnectedDevice, deviceName)
+
+		if err := gen.Generate(destPath, bundleID); err != nil {
+			runtime.EventsEmit(a.ctx, "support-bundle:error", map[string]string{
+				"message": fmt.Sprintf("Failed to generate bundle: %v", err),
+			})
+			return
+		}
+
+		if a.logger != nil {
+			a.logger.LogEvent("APP", "support bundle generated: "+bundleID)
+		}
+
+		runtime.EventsEmit(a.ctx, "support-bundle:complete", map[string]string{
+			"path":     destPath,
+			"bundleId": bundleID,
+		})
+	}()
+}
+
+func (a *App) UploadSupportBundle(deviceID string) {
+	go func() {
+		a.mu.Lock()
+		if deviceID == "" {
+			deviceID = a.connectedDeviceID
+		}
+		isConnectedDevice := deviceID == a.connectedDeviceID && a.client != nil
+		a.mu.Unlock()
+
+		var deviceName string
+		if deviceID != "" && a.deviceStore != nil {
+			if d, err := a.deviceStore.Get(deviceID); err == nil {
+				deviceName = d.Name
+			}
+		}
+
+		runtime.EventsEmit(a.ctx, "support-bundle:progress", map[string]string{
+			"phase":   "generating",
+			"message": "Generating support bundle...",
+		})
+
+		bundleID := support.GenerateBundleID()
+		gen := a.buildGenerator(deviceID, isConnectedDevice, deviceName)
+
+		data, err := gen.GenerateToBuffer(bundleID)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "support-bundle:upload-error", map[string]string{
+				"message": fmt.Sprintf("Failed to generate bundle: %v", err),
+			})
+			return
+		}
+
+		tmpFile, err := os.CreateTemp("", "remanager-bundle-*.tar.gz")
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "support-bundle:upload-error", map[string]string{
+				"message": fmt.Sprintf("Failed to create temp file: %v", err),
+			})
+			return
+		}
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath)
+
+		if _, err := tmpFile.Write(data); err != nil {
+			tmpFile.Close()
+			runtime.EventsEmit(a.ctx, "support-bundle:upload-error", map[string]string{
+				"message": fmt.Sprintf("Failed to write temp file: %v", err),
+			})
+			return
+		}
+		tmpFile.Close()
+
+		runtime.EventsEmit(a.ctx, "support-bundle:progress", map[string]string{
+			"phase":   "uploading",
+			"message": "Uploading support bundle...",
+		})
+
+		client := support.NewUploadClient(support.GetSupportURL())
+		result, err := client.Upload(tmpPath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "support-bundle:upload-error", map[string]string{
+				"message": fmt.Sprintf("Upload failed: %v", err),
+			})
+			return
+		}
+
+		if a.bundleStore != nil {
+			a.bundleStore.Add(storage.BundleRecord{
+				ID:         bundleID,
+				RemoteID:   result.ID,
+				URL:        result.URL,
+				DeviceName: deviceName,
+				DeviceID:   deviceID,
+				UploadedAt: time.Now().Unix(),
+			}, result.DeleteToken)
+		}
+
+		if a.logger != nil {
+			a.logger.LogEvent("APP", "support bundle uploaded: "+result.ID)
+		}
+
+		runtime.EventsEmit(a.ctx, "support-bundle:upload-complete", map[string]string{
+			"url":      result.URL,
+			"remoteId": result.ID,
+		})
+	}()
+}
+
+func (a *App) AppendSupportBundle(remoteID, deviceID string) {
+	go func() {
+		if a.bundleStore == nil {
+			runtime.EventsEmit(a.ctx, "support-bundle:append-error", map[string]string{
+				"message": "Bundle store not available",
+			})
+			return
+		}
+
+		deleteToken, err := a.bundleStore.GetDeleteToken(remoteID)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "support-bundle:append-error", map[string]string{
+				"message": "Could not retrieve bundle credentials",
+			})
+			return
+		}
+
+		a.mu.Lock()
+		if deviceID == "" {
+			deviceID = a.connectedDeviceID
+		}
+		isConnectedDevice := deviceID == a.connectedDeviceID && a.client != nil
+		a.mu.Unlock()
+
+		var deviceName string
+		if deviceID != "" && a.deviceStore != nil {
+			if d, err := a.deviceStore.Get(deviceID); err == nil {
+				deviceName = d.Name
+			}
+		}
+
+		runtime.EventsEmit(a.ctx, "support-bundle:progress", map[string]string{
+			"phase":   "generating",
+			"message": "Generating support bundle...",
+		})
+
+		bundleID := support.GenerateBundleID()
+		gen := a.buildGenerator(deviceID, isConnectedDevice, deviceName)
+
+		data, err := gen.GenerateToBuffer(bundleID)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "support-bundle:append-error", map[string]string{
+				"message": fmt.Sprintf("Failed to generate bundle: %v", err),
+			})
+			return
+		}
+
+		tmpFile, err := os.CreateTemp("", "remanager-bundle-*.tar.gz")
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "support-bundle:append-error", map[string]string{
+				"message": fmt.Sprintf("Failed to create temp file: %v", err),
+			})
+			return
+		}
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath)
+
+		if _, err := tmpFile.Write(data); err != nil {
+			tmpFile.Close()
+			runtime.EventsEmit(a.ctx, "support-bundle:append-error", map[string]string{
+				"message": fmt.Sprintf("Failed to write temp file: %v", err),
+			})
+			return
+		}
+		tmpFile.Close()
+
+		runtime.EventsEmit(a.ctx, "support-bundle:progress", map[string]string{
+			"phase":   "uploading",
+			"message": "Appending to support bundle...",
+		})
+
+		client := support.NewUploadClient(support.GetSupportURL())
+		_, err = client.Append(tmpPath, remoteID, deleteToken)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "support-bundle:append-error", map[string]string{
+				"message": fmt.Sprintf("Append failed: %v", err),
+			})
+			return
+		}
+
+		now := time.Now().Unix()
+		a.bundleStore.UpdateLastAppended(remoteID, now)
+
+		if a.logger != nil {
+			a.logger.LogEvent("APP", "support bundle appended: "+remoteID)
+		}
+
+		runtime.EventsEmit(a.ctx, "support-bundle:append-complete", map[string]string{
+			"remoteId": remoteID,
+		})
+	}()
+}
+
+func (a *App) DeleteSupportBundle(remoteID string) error {
+	if a.bundleStore == nil {
+		return fmt.Errorf("bundle store not available")
+	}
+
+	deleteToken, err := a.bundleStore.GetDeleteToken(remoteID)
+	if err != nil {
+		return fmt.Errorf("could not retrieve bundle credentials")
+	}
+
+	client := support.NewUploadClient(support.GetSupportURL())
+	if err := client.Delete(remoteID, deleteToken); err != nil {
+		return err
+	}
+
+	return a.bundleStore.Remove(remoteID)
+}
+
+func (a *App) GetBundleHistory() []storage.BundleRecord {
+	if a.bundleStore == nil {
+		return []storage.BundleRecord{}
+	}
+	records, err := a.bundleStore.GetAll()
+	if err != nil {
+		return []storage.BundleRecord{}
+	}
+	return records
+}
+
+func (a *App) CopyToClipboard(text string) {
+	runtime.ClipboardSetText(a.ctx, text)
+}
+
+func (a *App) GetSupportBundleSessionID() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.supportBundleID
+}
+
+func (a *App) ResetSupportBundleSession() {
+	a.mu.Lock()
+	a.supportBundleID = ""
+	a.mu.Unlock()
 }

@@ -25,18 +25,24 @@ var fallbackPackagesJSON []byte
 //go:embed fallback_remanager.json
 var fallbackRemanagerJSON []byte
 
+type OSConstraint struct {
+	Version  string `json:"version"`
+	Operator string `json:"operator"`
+}
+
 type PackageVersion struct {
-	Pkgdesc        string   `json:"pkgdesc"`
-	UpstreamAuthor string   `json:"upstream_author"`
-	Categories     []string `json:"categories"`
-	License        string   `json:"license"`
-	URL            string   `json:"url"`
-	OSMin          *string  `json:"os_min"`
-	OSMax          *string  `json:"os_max"`
-	Devices        []string `json:"devices"`
-	Depends        []string `json:"depends"`
-	Conflicts      []string `json:"conflicts"`
-	Arch           []string `json:"arch"`
+	Pkgdesc        string         `json:"pkgdesc"`
+	UpstreamAuthor string         `json:"upstream_author"`
+	Categories     []string       `json:"categories"`
+	License        string         `json:"license"`
+	URL            string         `json:"url"`
+	OSMin          *string        `json:"os_min"`
+	OSMax          *string        `json:"os_max"`
+	OSConstraints  []OSConstraint `json:"os_constraints"`
+	Devices        []string       `json:"devices"`
+	Depends        []string       `json:"depends"`
+	Conflicts      []string       `json:"conflicts"`
+	Arch           []string       `json:"arch"`
 }
 
 type PackagesMetadata struct {
@@ -79,6 +85,7 @@ type Package struct {
 	URL                 string
 	OSMin               *string
 	OSMax               *string
+	OSConstraints       []OSConstraint
 	Devices             []string
 	Depends             []string
 	Conflicts           []string
@@ -230,6 +237,7 @@ func (m *MetadataStore) GetAllPackages() []Package {
 			URL:            latestInfo.URL,
 			OSMin:          latestInfo.OSMin,
 			OSMax:          latestInfo.OSMax,
+			OSConstraints:  latestInfo.OSConstraints,
 			Devices:        latestInfo.Devices,
 			Depends:        latestInfo.Depends,
 			Conflicts:      latestInfo.Conflicts,
@@ -275,6 +283,7 @@ func (m *MetadataStore) GetPackage(name string) *Package {
 		URL:            latestInfo.URL,
 		OSMin:          latestInfo.OSMin,
 		OSMax:          latestInfo.OSMax,
+		OSConstraints:  latestInfo.OSConstraints,
 		Devices:        latestInfo.Devices,
 		Depends:        latestInfo.Depends,
 		Conflicts:      latestInfo.Conflicts,
@@ -343,6 +352,7 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			URL:            bestInfo.URL,
 			OSMin:          bestInfo.OSMin,
 			OSMax:          bestInfo.OSMax,
+			OSConstraints:  bestInfo.OSConstraints,
 			Devices:        bestInfo.Devices,
 			Depends:        bestInfo.Depends,
 			Conflicts:      bestInfo.Conflicts,
@@ -358,6 +368,57 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 	}
 
 	return packages
+}
+
+func (m *MetadataStore) GetPackageForTargetOS(name, targetOS, deviceType, arch string) *Package {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	versions, ok := m.packages.Packages[name]
+	if !ok {
+		return nil
+	}
+
+	var bestVersion string
+	var bestInfo PackageVersion
+
+	for version, info := range versions {
+		if !isVersionCompatible(info, deviceType, targetOS, arch) {
+			continue
+		}
+		if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+			bestVersion = version
+			bestInfo = info
+		}
+	}
+
+	if bestVersion == "" {
+		return nil
+	}
+
+	pkg := &Package{
+		Name:           name,
+		Version:        bestVersion,
+		Description:    bestInfo.Pkgdesc,
+		UpstreamAuthor: bestInfo.UpstreamAuthor,
+		Categories:     bestInfo.Categories,
+		License:        bestInfo.License,
+		URL:            bestInfo.URL,
+		OSMin:          bestInfo.OSMin,
+		OSMax:          bestInfo.OSMax,
+		OSConstraints:  bestInfo.OSConstraints,
+		Devices:        bestInfo.Devices,
+		Depends:        bestInfo.Depends,
+		Conflicts:      bestInfo.Conflicts,
+		Arch:           bestInfo.Arch,
+	}
+
+	if rmInfo, ok := m.remanager.Packages[name]; ok {
+		pkg.MaintenanceCommands = rmInfo.MaintenanceCommands
+		pkg.Hooks = rmInfo.Hooks
+	}
+
+	return pkg
 }
 
 func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string) bool {
@@ -388,14 +449,43 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 	}
 
 	if firmware != "" {
-		if info.OSMin != nil && *info.OSMin != "" {
-			if compareVersions(firmware, *info.OSMin) < 0 {
-				return false
+		if len(info.OSConstraints) > 0 {
+			for _, c := range info.OSConstraints {
+				cmp := compareVersions(firmware, c.Version)
+				switch c.Operator {
+				case ">=":
+					if cmp < 0 {
+						return false
+					}
+				case ">":
+					if cmp <= 0 {
+						return false
+					}
+				case "<=":
+					if cmp > 0 {
+						return false
+					}
+				case "<":
+					if cmp >= 0 {
+						return false
+					}
+				case "=":
+					if cmp != 0 {
+						return false
+					}
+				}
 			}
-		}
-		if info.OSMax != nil && *info.OSMax != "" {
-			if compareVersions(firmware, *info.OSMax) >= 0 {
-				return false
+		} else {
+			// Legacy fallback: os_max is exclusive
+			if info.OSMin != nil && *info.OSMin != "" {
+				if compareVersions(firmware, *info.OSMin) < 0 {
+					return false
+				}
+			}
+			if info.OSMax != nil && *info.OSMax != "" {
+				if compareVersions(firmware, *info.OSMax) >= 0 {
+					return false
+				}
 			}
 		}
 	}

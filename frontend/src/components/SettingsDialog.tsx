@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, AlertTriangle, AlertCircle } from 'lucide-react'
+import { Loader2, AlertTriangle, AlertCircle, CheckCircle2, Trash2 } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 
@@ -17,10 +18,12 @@ interface SettingsDialogProps {
   tabVisibility: Record<string, boolean>
   proxyMode: boolean
   suppressSystemFileWarnings: boolean
+  preventSleep: boolean
   theme: string
   terminalTheme: string
   editorTheme: string
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, theme: string, terminalTheme: string, editorTheme: string) => void
+  checkForUpdates: boolean
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -36,9 +39,11 @@ export function SettingsDialog({
   tabVisibility,
   proxyMode,
   suppressSystemFileWarnings,
+  preventSleep,
   theme,
   terminalTheme,
   editorTheme,
+  checkForUpdates,
   onSaveSettings,
   onUninstallVellum,
   uninstalling,
@@ -51,18 +56,24 @@ export function SettingsDialog({
   const [localTabVisibility, setLocalTabVisibility] = useState({ ...defaultTabVisibility, ...tabVisibility })
   const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
   const [localSuppressSystemFileWarnings, setLocalSuppressSystemFileWarnings] = useState(suppressSystemFileWarnings)
+  const [localPreventSleep, setLocalPreventSleep] = useState(preventSleep)
   const [localTheme, setLocalTheme] = useState(theme)
   const [localTerminalTheme, setLocalTerminalTheme] = useState(terminalTheme)
   const [localEditorTheme, setLocalEditorTheme] = useState(editorTheme)
+  const [localCheckForUpdates, setLocalCheckForUpdates] = useState(checkForUpdates)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
+  const [confirmDeleteLogs, setConfirmDeleteLogs] = useState(false)
+  const [deletingLogs, setDeletingLogs] = useState(false)
 
   const hasChanges =
     localProxyMode !== proxyMode ||
     localSuppressSystemFileWarnings !== suppressSystemFileWarnings ||
+    localPreventSleep !== preventSleep ||
     localTheme !== theme ||
     localTerminalTheme !== terminalTheme ||
     localEditorTheme !== editorTheme ||
+    localCheckForUpdates !== checkForUpdates ||
     JSON.stringify(localTabVisibility) !== JSON.stringify({ ...defaultTabVisibility, ...tabVisibility })
 
   useEffect(() => {
@@ -70,37 +81,58 @@ export function SettingsDialog({
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+      setLocalPreventSleep(preventSleep)
       setLocalTheme(theme)
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
+      setLocalCheckForUpdates(checkForUpdates)
     }
-  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, theme, terminalTheme, editorTheme])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates])
 
   const handleCancel = () => {
     setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
     setLocalProxyMode(proxyMode)
     setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+    setLocalPreventSleep(preventSleep)
     setLocalTheme(theme)
     setLocalTerminalTheme(terminalTheme)
     setLocalEditorTheme(editorTheme)
+    setLocalCheckForUpdates(checkForUpdates)
     setShowUninstallConfirm(false)
+    setConfirmDeleteLogs(false)
     onOpenChange(false)
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localTheme, localTerminalTheme, localEditorTheme)
+    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme, localCheckForUpdates)
     onOpenChange(false)
+  }
+
+  const handleDeleteLogs = async () => {
+    setDeletingLogs(true)
+    try {
+      await window.go.main.App.DeleteAllLogs()
+      toast('All command logs deleted', { icon: <CheckCircle2 className="h-4 w-4" /> })
+      setConfirmDeleteLogs(false)
+    } catch (err) {
+      toast('Failed to delete logs: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setDeletingLogs(false)
+    }
   }
 
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
       setShowUninstallConfirm(false)
+      setConfirmDeleteLogs(false)
       setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
       setLocalProxyMode(proxyMode)
       setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+      setLocalPreventSleep(preventSleep)
       setLocalTheme(theme)
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
+      setLocalCheckForUpdates(checkForUpdates)
     }
     onOpenChange(newOpen)
   }
@@ -206,10 +238,36 @@ export function SettingsDialog({
               </div>
               <div className="flex items-center justify-between gap-4">
                 <div>
+                  <Label htmlFor="prevent-sleep" className="font-normal">Prevent Sleep</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Keep the device awake while connected by simulating periodic input.
+                  </p>
+                </div>
+                <Switch
+                  id="prevent-sleep"
+                  checked={localPreventSleep}
+                  onCheckedChange={setLocalPreventSleep}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="check-updates" className="font-normal">Check for Updates</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Notify when a new version of reManager is available.
+                  </p>
+                </div>
+                <Switch
+                  id="check-updates"
+                  checked={localCheckForUpdates}
+                  onCheckedChange={setLocalCheckForUpdates}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
                   <Label htmlFor="suppress-sys-warnings" className="font-normal">Suppress Filesystem Warnings</Label>
                   <p className="text-xs text-muted-foreground mt-1">
                     Skip confirmation dialogs when modifying system partition files.
-                    Only disable if you are experienced with Linux systems.
+                    Only suppress if you are experienced with Linux systems.
                   </p>
                 </div>
                 <Switch
@@ -218,6 +276,52 @@ export function SettingsDialog({
                   onCheckedChange={setLocalSuppressSystemFileWarnings}
                 />
               </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Data</CardTitle>
+              <CardDescription className="text-xs">
+                Command logs are automatically cleaned up after 30 days
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!confirmDeleteLogs ? (
+                <Button
+                  variant="outline"
+                  onClick={() => setConfirmDeleteLogs(true)}
+                  className="w-full"
+                >
+                  <Trash2 className="h-4 w-4 mr-1.5" />
+                  Delete Command Logs
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-sm text-destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span>This will permanently delete all command logs</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => setConfirmDeleteLogs(false)}
+                      className="flex-1"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={handleDeleteLogs}
+                      disabled={deletingLogs}
+                      className="flex-1"
+                    >
+                      {deletingLogs ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : null}
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -331,6 +435,7 @@ export function SettingsDialog({
           </button>
         </div>
       </DialogContent>
+
     </Dialog>
   )
 }
