@@ -34,6 +34,7 @@ import (
 	"reManager/internal/commands"
 	"reManager/internal/component"
 	"reManager/internal/debug"
+	"reManager/internal/httputil"
 	"reManager/internal/device"
 	apperrors "reManager/internal/errors"
 	"reManager/internal/executor"
@@ -2979,7 +2980,7 @@ func (a *App) CheckForAppUpdate() UpdateCheckResult {
 		return result
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := httputil.NewClient(10 * time.Second)
 	resp, err := client.Get("https://api.github.com/repos/rmitchellscott/remanager/releases/latest")
 	if err != nil {
 		debug.Printf("[DEBUG] CheckForAppUpdate: request failed: %v\n", err)

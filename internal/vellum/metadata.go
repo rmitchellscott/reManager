@@ -11,6 +11,7 @@ import (
 	_ "embed"
 
 	"reManager/internal/debug"
+	"reManager/internal/httputil"
 )
 
 const (
@@ -125,7 +126,7 @@ func (m *MetadataStore) Load() error {
 }
 
 func (m *MetadataStore) Refresh() error {
-	client := &http.Client{Timeout: MetadataTimeout}
+	client := httputil.NewClient(MetadataTimeout)
 
 	var newPackages PackagesMetadata
 	var newRemanager RemanagerMetadata
@@ -172,7 +173,7 @@ func (m *MetadataStore) Refresh() error {
 }
 
 func (m *MetadataStore) loadPackagesMetadata() error {
-	client := &http.Client{Timeout: MetadataTimeout}
+	client := httputil.NewClient(MetadataTimeout)
 	resp, err := client.Get(PackagesMetadataURL)
 	if err != nil {
 		return err
@@ -192,7 +193,7 @@ func (m *MetadataStore) loadPackagesMetadata() error {
 }
 
 func (m *MetadataStore) loadRemanagerMetadata() error {
-	client := &http.Client{Timeout: MetadataTimeout}
+	client := httputil.NewClient(MetadataTimeout)
 	resp, err := client.Get(RemanagerMetadataURL)
 	if err != nil {
 		return err

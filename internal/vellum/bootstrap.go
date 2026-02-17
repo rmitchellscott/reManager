@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"reManager/internal/component"
+	"reManager/internal/httputil"
 )
 
 const (
@@ -44,7 +45,7 @@ type BootstrapFiles struct {
 }
 
 func getLatestVellumRelease(majorVersion int) (*GitHubRelease, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := httputil.NewClient(30 * time.Second)
 	resp, err := client.Get(VellumCLIReleasesAPI)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch releases: %w", err)

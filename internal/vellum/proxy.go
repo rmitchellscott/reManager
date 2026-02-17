@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"reManager/internal/debug"
+	"reManager/internal/httputil"
 )
 
 const (
@@ -202,7 +203,7 @@ func (p *Proxy) uploadToDevice(data []byte, remotePath string) error {
 }
 
 func downloadFile(url string) ([]byte, error) {
-	client := &http.Client{Timeout: ProxyTimeout}
+	client := httputil.NewClient(ProxyTimeout)
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err

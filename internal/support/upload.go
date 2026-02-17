@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"reManager/internal/httputil"
 )
 
 type UploadResponse struct {
@@ -39,9 +41,7 @@ func GetSupportURL() string {
 func NewUploadClient(baseURL string) *UploadClient {
 	return &UploadClient{
 		BaseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 2 * time.Minute,
-		},
+		httpClient: httputil.NewClient(2 * time.Minute),
 	}
 }
 

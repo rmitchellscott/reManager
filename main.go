@@ -9,6 +9,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 
 	"reManager/internal/debug"
+	"reManager/internal/httputil"
 )
 
 //go:embed all:frontend/dist
@@ -17,6 +18,7 @@ var assets embed.FS
 var version = "dev"
 
 func main() {
+	httputil.Init(version)
 	app := NewApp()
 
 	err := wails.Run(&options.App{
