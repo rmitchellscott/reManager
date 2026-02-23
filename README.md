@@ -25,14 +25,14 @@ Powered by the [Vellum](https://github.com/vellum-dev) package manager. See the 
   - Backup & Restore: Backup and restore reMarkable document library and configuration.
   - Configuration editor: Edit system configuration files with a WYSIWYG editor with syntax highlighting.
  
-## Reporting issues
+## Where To Get Help
 
-Please direct:
-- **Package-related issues or package requests** to the
+- **Package-related issues or package requests** should be submitted to the
   [Vellum package repository](https://github.com/vellum-dev/vellum).
-- **Issues with the software being packaged** to the relevant upstream
+- **Issues with the software being packaged** should be submitted to the relevant upstream
   projects, which are linked in the package index and the reManager sidebar.
 - **Issues with reManager itself** should be opened in this repository.
+- **For general questions or help**, join the [community Discord](https://discord.gg/u3P9sDW) where many helpful and knowledgeable people, including mod developers, are active.
 
 ## Installation
 

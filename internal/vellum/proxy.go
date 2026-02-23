@@ -192,6 +192,11 @@ func (p *Proxy) uploadToDevice(data []byte, remotePath string) error {
 	}
 	defer sftpClient.Close()
 
+	dir := path.Dir(remotePath)
+	if err := sftpClient.MkdirAll(dir); err != nil {
+		return fmt.Errorf("failed to create remote directory %s: %w", dir, err)
+	}
+
 	f, err := sftpClient.Create(remotePath)
 	if err != nil {
 		return fmt.Errorf("failed to create remote file %s: %w", remotePath, err)
