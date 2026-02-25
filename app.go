@@ -52,6 +52,7 @@ func openFileDialog(ctx context.Context, title string) (string, error) {
 		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
 			CurrentFolder: home,
 		})
+		fmt.Println("[DEBUG] openFileDialog: files:", files, "err:", err)
 		if err != nil {
 			return "", err
 		}
@@ -74,6 +75,7 @@ func saveFileDialog(ctx context.Context, title, defaultFilename string) (string,
 			CurrentFolder: home,
 			CurrentName:   defaultFilename,
 		})
+		fmt.Println("[DEBUG] saveFileDialog: files:", files, "err:", err)
 		if err != nil {
 			return "", err
 		}
@@ -97,6 +99,7 @@ func openDirectoryDialog(ctx context.Context, title string) (string, error) {
 			CurrentFolder: home,
 			Directory:     true,
 		})
+		fmt.Println("[DEBUG] openDirectoryDialog: files:", files, "err:", err)
 		if err != nil {
 			return "", err
 		}

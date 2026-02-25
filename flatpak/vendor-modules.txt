@@ -361,7 +361,7 @@ github.com/pterm/pterm/internal
 # github.com/rivo/uniseg v0.4.7
 ## explicit; go 1.18
 github.com/rivo/uniseg
-# github.com/rymdport/portal v0.4.3-0.20250830211640-988999c60cca
+# github.com/rymdport/portal v0.4.3-0.20260225172009-01112360d2cb
 ## explicit; go 1.19
 github.com/rymdport/portal
 github.com/rymdport/portal/filechooser
