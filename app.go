@@ -254,16 +254,25 @@ func (a *App) GetDefaultSSHKeys() []SSHKey {
 	}
 
 	sshDir := filepath.Join(home, ".ssh")
-	keyNames := []string{"id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"}
-	var keys []SSHKey
+	entries, err := os.ReadDir(sshDir)
+	if err != nil {
+		return nil
+	}
 
-	for _, name := range keyNames {
-		keyPath := filepath.Join(sshDir, name)
-		if _, err := os.Stat(keyPath); err == nil {
-			keys = append(keys, SSHKey{
-				Path: keyPath,
-				Name: name,
-			})
+	var keys []SSHKey
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, "id_") && !strings.HasSuffix(name, ".pub") {
+			keyPath := filepath.Join(sshDir, name)
+			if info, err := os.Stat(keyPath); err == nil && info.Mode().IsRegular() {
+				keys = append(keys, SSHKey{
+					Path: keyPath,
+					Name: name,
+				})
+			}
 		}
 	}
 
