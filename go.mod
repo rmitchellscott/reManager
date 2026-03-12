@@ -4,6 +4,7 @@ go 1.23.0
 
 require (
 	github.com/Microsoft/go-winio v0.6.1
+	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.17.11
 	github.com/pkg/sftp v1.13.10
 	github.com/rymdport/portal v0.4.3-0.20260225172009-01112360d2cb
@@ -48,7 +49,6 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gookit/color v1.5.4 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect

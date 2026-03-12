@@ -40,6 +40,7 @@ func main() {
 	rootCmd.AddCommand(uninstallCmd())
 	rootCmd.AddCommand(maintenanceCmd())
 	rootCmd.AddCommand(bootstrapCmd())
+	rootCmd.AddCommand(importPDFCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
