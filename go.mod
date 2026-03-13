@@ -3,6 +3,7 @@ module reManager
 go 1.23.0
 
 require (
+	github.com/Microsoft/go-winio v0.6.1
 	github.com/klauspost/compress v1.17.11
 	github.com/pkg/sftp v1.13.10
 	github.com/rymdport/portal v0.4.3-0.20260225172009-01112360d2cb
@@ -22,7 +23,6 @@ require (
 	atomicgo.dev/schedule v0.1.0 // indirect
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
-	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/ProtonMail/go-crypto v1.1.5 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect

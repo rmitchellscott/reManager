@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, AlertTriangle, AlertCircle, CheckCircle2, Trash2 } from 'lucide-react'
@@ -23,7 +25,8 @@ interface SettingsDialogProps {
   terminalTheme: string
   editorTheme: string
   checkForUpdates: boolean
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean) => void
+  sshAgentSocketPath: string
+  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -44,6 +47,7 @@ export function SettingsDialog({
   terminalTheme,
   editorTheme,
   checkForUpdates,
+  sshAgentSocketPath,
   onSaveSettings,
   onUninstallVellum,
   uninstalling,
@@ -61,6 +65,8 @@ export function SettingsDialog({
   const [localTerminalTheme, setLocalTerminalTheme] = useState(terminalTheme)
   const [localEditorTheme, setLocalEditorTheme] = useState(editorTheme)
   const [localCheckForUpdates, setLocalCheckForUpdates] = useState(checkForUpdates)
+  const [localSSHAgentSocketPath, setLocalSSHAgentSocketPath] = useState(sshAgentSocketPath)
+  const [agentSocketMode, setAgentSocketMode] = useState<'auto' | 'custom'>(sshAgentSocketPath ? 'custom' : 'auto')
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [removePackages, setRemovePackages] = useState(true)
   const [confirmDeleteLogs, setConfirmDeleteLogs] = useState(false)
@@ -74,6 +80,7 @@ export function SettingsDialog({
     localTerminalTheme !== terminalTheme ||
     localEditorTheme !== editorTheme ||
     localCheckForUpdates !== checkForUpdates ||
+    localSSHAgentSocketPath !== sshAgentSocketPath ||
     JSON.stringify(localTabVisibility) !== JSON.stringify({ ...defaultTabVisibility, ...tabVisibility })
 
   useEffect(() => {
@@ -86,8 +93,10 @@ export function SettingsDialog({
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
       setLocalCheckForUpdates(checkForUpdates)
+      setLocalSSHAgentSocketPath(sshAgentSocketPath)
+      setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
     }
-  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath])
 
   const handleCancel = () => {
     setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
@@ -98,13 +107,15 @@ export function SettingsDialog({
     setLocalTerminalTheme(terminalTheme)
     setLocalEditorTheme(editorTheme)
     setLocalCheckForUpdates(checkForUpdates)
+    setLocalSSHAgentSocketPath(sshAgentSocketPath)
+    setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
     setShowUninstallConfirm(false)
     setConfirmDeleteLogs(false)
     onOpenChange(false)
   }
 
   const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme, localCheckForUpdates)
+    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme, localCheckForUpdates, localSSHAgentSocketPath)
     onOpenChange(false)
   }
 
@@ -133,6 +144,8 @@ export function SettingsDialog({
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
       setLocalCheckForUpdates(checkForUpdates)
+      setLocalSSHAgentSocketPath(sshAgentSocketPath)
+      setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
     }
     onOpenChange(newOpen)
   }
@@ -276,6 +289,64 @@ export function SettingsDialog({
                   onCheckedChange={setLocalSuppressSystemFileWarnings}
                 />
               </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">SSH Agent Socket</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <RadioGroup
+                  value={agentSocketMode}
+                  onValueChange={(value) => {
+                    setAgentSocketMode(value as 'auto' | 'custom')
+                    if (value === 'auto') setLocalSSHAgentSocketPath('')
+                  }}
+                  className="space-y-1"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <RadioGroupItem value="auto" id="agent-auto" />
+                      <Label htmlFor="agent-auto" className="cursor-pointer font-normal">
+                        Auto-detect
+                      </Label>
+                    </div>
+                    {agentSocketMode === 'auto' && (
+                      <p className="text-xs text-muted-foreground ml-6 mt-0.5">
+                        Uses the SSH_AUTH_SOCK environment variable.
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <RadioGroupItem value="custom" id="agent-custom" />
+                      <Label htmlFor="agent-custom" className="cursor-pointer font-normal">
+                        Custom socket path
+                      </Label>
+                    </div>
+                    {agentSocketMode === 'custom' && (
+                      <div className="flex gap-2 ml-6 mt-1">
+                        <Input
+                          value={localSSHAgentSocketPath}
+                          onChange={(e) => setLocalSSHAgentSocketPath(e.target.value)}
+                          placeholder="/path/to/agent.sock"
+                          className="flex-1"
+                        />
+                        <Button
+                          variant="outline"
+                          type="button"
+                          onClick={async () => {
+                            const path = await window.go.main.App.SelectKeyFile()
+                            if (path) setLocalSSHAgentSocketPath(path)
+                          }}
+                        >
+                          Browse
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </RadioGroup>
             </CardContent>
           </Card>
 

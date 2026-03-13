@@ -18,6 +18,7 @@ type Settings struct {
 	TerminalTheme              string        `json:"terminalTheme"`
 	EditorTheme                string        `json:"editorTheme"`
 	CheckForUpdates            bool          `json:"checkForUpdates"`
+	SSHAgentSocketPath         string        `json:"sshAgentSocketPath,omitempty"`
 }
 
 type SettingsStore struct {

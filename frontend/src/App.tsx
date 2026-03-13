@@ -76,7 +76,7 @@ interface SavedDevice {
   id: string
   name: string
   host: string
-  authType: 'password' | 'key'
+  authType: 'password' | 'key' | 'agent'
   keyPath?: string
   lastConnected?: number
 }
@@ -149,6 +149,8 @@ declare global {
         App: {
           Connect(host: string, password: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
           ConnectWithKey(host: string, keyPath: string, passphrase: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
+          ConnectWithAgent(host: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
+          IsSSHAgentAvailable(): Promise<boolean>
           CancelConnect(): Promise<void>
           Disconnect(): Promise<void>
           IsConnected(): Promise<boolean>
@@ -205,8 +207,8 @@ declare global {
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
           CheckForAppUpdate(): Promise<{ updateAvailable: boolean; latestVersion: string; currentVersion: string; releaseURL: string; error?: string }>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean): Promise<void>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean; sshAgentSocketPath: string }>
+          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string): Promise<void>
           GetSystemColorScheme(): Promise<string>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           CleanupBrokenVellum(): Promise<void>
@@ -265,7 +267,8 @@ type Step = 'connect' | 'select' | 'install' | 'done'
 export default function App() {
   const [step, setStep] = useState<Step>('connect')
   const [host, setHost] = useState('10.11.99.1')
-  const [authType, setAuthType] = useState<'password' | 'key'>('password')
+  const [authType, setAuthType] = useState<'password' | 'key' | 'agent'>('password')
+  const [sshAgentAvailable, setSSHAgentAvailable] = useState(false)
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [showKeyPassphrase, setShowKeyPassphrase] = useState(false)
@@ -343,6 +346,7 @@ export default function App() {
   const [terminalTheme, setTerminalTheme] = useState('match')
   const [editorTheme, setEditorTheme] = useState('match')
   const [checkForUpdates, setCheckForUpdates] = useState(true)
+  const [sshAgentSocketPath, setSSHAgentSocketPath] = useState('')
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
@@ -563,13 +567,14 @@ export default function App() {
     const loadInitialData = async () => {
       try {
         debugLog('[DEBUG] loadInitialData: starting')
-        const [keys, pkgs, tasks, devices, version, settings] = await Promise.all([
+        const [keys, pkgs, tasks, devices, version, settings, agentAvail] = await Promise.all([
           window.go.main.App.GetDefaultSSHKeys(),
           window.go.main.App.GetPackages('', '', ''),
           window.go.main.App.GetSystemTasksInfo(),
           window.go.main.App.GetSavedDevices(),
           window.go.main.App.GetAppVersion(),
           window.go.main.App.GetSettings(),
+          window.go.main.App.IsSSHAgentAvailable().catch(() => false),
         ])
         debugLog('[DEBUG] loadInitialData: got pkgs', pkgs?.length, pkgs)
 
@@ -579,6 +584,7 @@ export default function App() {
         } else {
           setSelectedKey('__other__')
         }
+        setSSHAgentAvailable(!!agentAvail)
 
         setPackages(pkgs || [])
         setSystemTasks(tasks || [])
@@ -595,6 +601,7 @@ export default function App() {
         setEditorTheme(settings?.editorTheme || 'match')
         const shouldCheckUpdates = settings?.checkForUpdates ?? true
         setCheckForUpdates(shouldCheckUpdates)
+        setSSHAgentSocketPath(settings?.sshAgentSocketPath || '')
 
         if (shouldCheckUpdates) {
           window.go.main.App.CheckForAppUpdate().then((result) => {
@@ -756,7 +763,7 @@ export default function App() {
     setEditingDevice(device)
     setDeviceName(device.name)
     setHost(device.host)
-    setAuthType(device.authType)
+    setAuthType(device.authType as 'password' | 'key' | 'agent')
     if (device.authType === 'key' && device.keyPath) {
       setSelectedKey(device.keyPath)
     }
@@ -1397,7 +1404,9 @@ export default function App() {
 
     try {
       let result
-      if (authType === 'key') {
+      if (authType === 'agent') {
+        result = await window.go.main.App.ConnectWithAgent(host)
+      } else if (authType === 'key') {
         result = await window.go.main.App.ConnectWithKey(host, selectedKey, keyPassphrase)
       } else {
         result = await window.go.main.App.Connect(host, password)
@@ -1468,6 +1477,7 @@ export default function App() {
       const kpp = authType === 'key' ? keyPassphrase : ''
 
       await window.go.main.App.SaveDevice('', deviceName, host, authType, pw, kp, kpp)
+
 
       const devices = await window.go.main.App.GetSavedDevices()
       setSavedDevices(devices || [])
@@ -1555,7 +1565,7 @@ export default function App() {
     setShowFilesystemRestoreError(false)
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newPreventSleep: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string, newCheckForUpdates: boolean) => {
+  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newPreventSleep: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string, newCheckForUpdates: boolean, newSSHAgentSocketPath: string) => {
     const wasCheckForUpdatesOff = !checkForUpdates
     setTabVisibility(newTabVisibility)
     setProxyMode(newProxyMode)
@@ -1567,7 +1577,11 @@ export default function App() {
     setTerminalTheme(newTerminalTheme)
     setEditorTheme(newEditorTheme)
     setCheckForUpdates(newCheckForUpdates)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newPreventSleep, newTheme, newTerminalTheme, newEditorTheme, newCheckForUpdates)
+    setSSHAgentSocketPath(newSSHAgentSocketPath)
+    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newPreventSleep, newTheme, newTerminalTheme, newEditorTheme, newCheckForUpdates, newSSHAgentSocketPath)
+
+    const agentAvail = await window.go.main.App.IsSSHAgentAvailable().catch(() => false)
+    setSSHAgentAvailable(!!agentAvail)
 
     if (wasCheckForUpdatesOff && newCheckForUpdates) {
       window.go.main.App.CheckForAppUpdate().then((result) => {
@@ -1587,7 +1601,7 @@ export default function App() {
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates)
+    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath)
     setShowDnsErrorModal(false)
   }
 
@@ -2119,7 +2133,7 @@ export default function App() {
                       onChange={(e) => setHost(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !connecting) {
-                          const canConnect = authType === 'password' ? !!password : (!!selectedKey && selectedKey !== '__other__')
+                          const canConnect = authType === 'agent' ? true : authType === 'password' ? !!password : (!!selectedKey && selectedKey !== '__other__')
                           if (canConnect) handleConnect(true)
                         }
                       }}
@@ -2131,7 +2145,7 @@ export default function App() {
                     <Label>Authentication</Label>
                     <RadioGroup
                       value={authType}
-                      onValueChange={(value) => setAuthType(value as 'password' | 'key')}
+                      onValueChange={(value) => setAuthType(value as 'password' | 'key' | 'agent')}
                       className="flex gap-4"
                     >
                       <div className="flex items-center gap-2">
@@ -2144,10 +2158,22 @@ export default function App() {
                           SSH Key
                         </Label>
                       </div>
+                      {sshAgentAvailable && (
+                        <div className="flex items-center gap-2">
+                          <RadioGroupItem value="agent" id="auth-agent" />
+                          <Label htmlFor="auth-agent" className="cursor-pointer font-normal">
+                            SSH Agent
+                          </Label>
+                        </div>
+                      )}
                     </RadioGroup>
                   </div>
 
-                  {authType === 'password' ? (
+                  {authType === 'agent' ? (
+                    <p className="text-sm text-muted-foreground">
+                      Authentication will use keys from your running SSH agent.
+                    </p>
+                  ) : authType === 'password' ? (
                     <div className="space-y-2">
                       <Label htmlFor="password">SSH Password</Label>
                       <div className="relative">
@@ -2238,7 +2264,7 @@ export default function App() {
                       ) : editingDevice ? (
                         <Button
                           onClick={handleSaveEditedDevice}
-                          disabled={!deviceName.trim() || (authType === 'password' ? !password : !selectedKey || selectedKey === '__other__')}
+                          disabled={!deviceName.trim() || (authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey || selectedKey === '__other__')}
                         >
                           Save
                         </Button>
@@ -2247,13 +2273,13 @@ export default function App() {
                           <Button
                             variant="outline"
                             onClick={() => handleConnect(false)}
-                            disabled={authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
+                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
                           >
                             Connect
                           </Button>
                           <Button
                             onClick={() => handleConnect(true)}
-                            disabled={authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
+                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
                           >
                             Save and Connect
                           </Button>
@@ -3582,6 +3608,7 @@ export default function App() {
         terminalTheme={terminalTheme}
         editorTheme={editorTheme}
         checkForUpdates={checkForUpdates}
+        sshAgentSocketPath={sshAgentSocketPath}
         onSaveSettings={handleSaveSettings}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
