@@ -28,7 +28,7 @@ export function ImportPDFDialog({ open, isConnected, onClose }: ImportPDFDialogP
       setStagedPath(null)
       setEditedName('')
       setManualPageCount('')
-      setRestartXochitl(false)
+      setRestartXochitl(true)
       setUploading(false)
       setIsDragging(false)
       setError(null)
