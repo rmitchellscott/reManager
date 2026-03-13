@@ -19,7 +19,7 @@ import (
 const XochitlPath = "/home/root/.local/share/remarkable/xochitl"
 
 type pdfContent struct {
-	CoverPageNumber       int                    `json:"coverPageNumber"`
+	CoverPageNumber       *int                   `json:"coverPageNumber,omitempty"`
 	CustomZoomCenterX     int                    `json:"customZoomCenterX"`
 	CustomZoomCenterY     int                    `json:"customZoomCenterY"`
 	CustomZoomOrientation string                 `json:"customZoomOrientation"`
@@ -103,7 +103,7 @@ func UploadBytes(client *sftp.Client, remotePath string, data []byte) error {
 // .pagedata) for the given PDF data. visibleName is the display name shown in
 // xochitl; parentID is the UUID of a collection, or "" for the root.
 // Returns the document UUID on success.
-func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, pageCount int) (string, error) {
+func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, pageCount int, coverPageNumber *int) (string, error) {
 	pages := make([]string, pageCount)
 	redirection := make([]int, pageCount)
 	for i := 0; i < pageCount; i++ {
@@ -114,7 +114,7 @@ func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, p
 	nowMs := strconv.FormatInt(time.Now().UnixMilli(), 10)
 
 	content := pdfContent{
-		CoverPageNumber:       0,
+		CoverPageNumber:       coverPageNumber,
 		CustomZoomCenterX:     0,
 		CustomZoomCenterY:     936,
 		CustomZoomOrientation: "portrait",

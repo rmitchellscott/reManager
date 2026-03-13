@@ -5235,10 +5235,64 @@ func (a *App) SelectPDFFile() string {
 	return p
 }
 
+type PDFFileInfo struct {
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	PageCount int    `json:"pageCount"`
+}
+
+func (a *App) SelectPDFFiles() []string {
+	if platform.IsRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", "Select PDFs", &filechooser.OpenFileOptions{
+			CurrentFolder: home,
+			Multiple:      true,
+			Filters: []*filechooser.Filter{
+				{Name: "PDF files", Rules: []filechooser.Rule{{Type: filechooser.GlobPattern, Pattern: "*.pdf"}}},
+			},
+		})
+		if err != nil || len(files) == 0 {
+			return []string{}
+		}
+		for i, f := range files {
+			files[i] = strings.TrimPrefix(f, "file://")
+		}
+		return files
+	}
+	home, _ := os.UserHomeDir()
+	files, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Select PDFs",
+		DefaultDirectory: home,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "PDF files", Pattern: "*.pdf"},
+		},
+	})
+	if err != nil {
+		return []string{}
+	}
+	return files
+}
+
+func (a *App) GetPDFFileInfo(localPath string) (PDFFileInfo, error) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return PDFFileInfo{}, fmt.Errorf("failed to stat file: %w", err)
+	}
+	pdfData, err := os.ReadFile(localPath)
+	if err != nil {
+		return PDFFileInfo{}, fmt.Errorf("failed to read file: %w", err)
+	}
+	return PDFFileInfo{
+		Path:      localPath,
+		Size:      info.Size(),
+		PageCount: pdfimport.EstimatePageCount(pdfData),
+	}, nil
+}
+
 // ImportPDFFromPath reads the PDF at localPath, generates xochitl sidecar files,
 // and uploads the bundle over the active SFTP connection.
 // pageCountOverride can be set to a positive value when auto-detection fails.
-func (a *App) ImportPDFFromPath(localPath, visibleName string, restartXochitl bool, pageCountOverride int) error {
+func (a *App) ImportPDFFromPath(localPath, visibleName string, restartXochitl bool, pageCountOverride int, coverPageNumber *int) error {
 	a.mu.Lock()
 	client := a.client
 	a.mu.Unlock()
@@ -5266,18 +5320,13 @@ func (a *App) ImportPDFFromPath(localPath, visibleName string, restartXochitl bo
 	}
 	defer sftpClient.Close()
 
-	if _, err := pdfimport.Upload(sftpClient, pdfData, visibleName, "", pageCount); err != nil {
+	if _, err := pdfimport.Upload(sftpClient, pdfData, visibleName, "", pageCount, coverPageNumber); err != nil {
 		return err
 	}
 
 	if restartXochitl {
-		session, err := client.NewSession()
-		if err != nil {
-			return fmt.Errorf("uploaded, but failed to create SSH session: %w", err)
-		}
-		defer session.Close()
-		if _, err := session.CombinedOutput("systemctl restart xochitl"); err != nil {
-			return fmt.Errorf("uploaded, but failed to restart xochitl: %w", err)
+		if err := a.RestartXochitl(); err != nil {
+			return fmt.Errorf("uploaded, but %w", err)
 		}
 	}
 

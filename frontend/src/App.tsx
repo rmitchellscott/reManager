@@ -225,7 +225,9 @@ declare global {
           UploadFolder(remotePath: string): void
           CancelFolderTransfer(): void
           SelectPDFFile(): Promise<string>
-          ImportPDFFromPath(localPath: string, visibleName: string, restartXochitl: boolean, pageCountOverride: number): Promise<void>
+          SelectPDFFiles(): Promise<string[]>
+          GetPDFFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number }>
+          ImportPDFFromPath(localPath: string, visibleName: string, restartXochitl: boolean, pageCountOverride: number, coverPageNumber: number | null): Promise<void>
           DeletePath(path: string): Promise<void>
           RenamePath(oldPath: string, newPath: string): Promise<void>
           CreateDirectory(path: string): Promise<void>
@@ -2920,8 +2922,8 @@ export default function App() {
                     </Card>
                     <Card>
                       <CardHeader>
-                        <CardTitle>Import PDF</CardTitle>
-                        <CardDescription>Upload a PDF to your reMarkable library</CardDescription>
+                        <CardTitle>Import Documents</CardTitle>
+                        <CardDescription>Upload documents to your reMarkable library</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <Button
@@ -2930,7 +2932,7 @@ export default function App() {
                           onClick={() => setShowImportPDF(true)}
                           disabled={connectionStatus !== 'connected'}
                         >
-                          Import PDF…
+                          Import Documents
                         </Button>
                       </CardContent>
                     </Card>

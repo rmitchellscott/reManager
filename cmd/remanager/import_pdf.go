@@ -54,7 +54,7 @@ func importPDFCmd() *cobra.Command {
 			}
 			defer sftpClient.Close()
 
-			docID, err := pdfimport.Upload(sftpClient, pdfData, visibleName, parentID, pageCount)
+			docID, err := pdfimport.Upload(sftpClient, pdfData, visibleName, parentID, pageCount, nil)
 			if err != nil {
 				return err
 			}
