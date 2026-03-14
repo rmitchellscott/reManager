@@ -2,6 +2,11 @@
 - dest: vendor
   path: vendor-modules.txt
   type: file
+- dest: vendor/github.com/google/uuid
+  sha256: d0f02f377217f42702e259684e06441edbf5140dddcc34ba9bea56038b38a6ed
+  strip-components: 3
+  type: archive
+  url: https://proxy.golang.org/github.com/google/uuid/@v/v1.6.0.zip
 - dest: vendor/github.com/klauspost/compress
   sha256: 88dea800cc6a11ccb9dd2f0dd487f30e8701870abdfc11245e41dcfc9f3d428e
   strip-components: 3
@@ -212,11 +217,6 @@
   strip-components: 3
   type: archive
   url: https://proxy.golang.org/github.com/google/shlex/@v/v0.0.0-20191202100458-e7afc7fbc510.zip
-- dest: vendor/github.com/google/uuid
-  sha256: d0f02f377217f42702e259684e06441edbf5140dddcc34ba9bea56038b38a6ed
-  strip-components: 3
-  type: archive
-  url: https://proxy.golang.org/github.com/google/uuid/@v/v1.6.0.zip
 - dest: vendor/github.com/gookit/color
   sha256: c5295c810538f77bebb2cf9e34cdfa92adfdec75486234358956ebe877e685f9
   strip-components: 3

@@ -226,8 +226,11 @@ declare global {
           CancelFolderTransfer(): void
           SelectPDFFile(): Promise<string>
           SelectPDFFiles(): Promise<string[]>
+          SelectImportFiles(): Promise<string[]>
           GetPDFFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number }>
+          GetImportFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number; fileType: string; visibleName: string }>
           ImportPDFFromPath(localPath: string, visibleName: string, restartXochitl: boolean, pageCountOverride: number, coverPageNumber: number | null): Promise<void>
+          ImportRmdocFromPath(localPath: string, visibleName: string, restartXochitl: boolean): Promise<void>
           DeletePath(path: string): Promise<void>
           RenamePath(oldPath: string, newPath: string): Promise<void>
           CreateDirectory(path: string): Promise<void>
@@ -2922,7 +2925,7 @@ export default function App() {
                     </Card>
                     <Card>
                       <CardHeader>
-                        <CardTitle>Import Documents</CardTitle>
+                        <CardTitle>Document Import</CardTitle>
                         <CardDescription>Upload documents to your reMarkable library</CardDescription>
                       </CardHeader>
                       <CardContent>
@@ -2932,7 +2935,7 @@ export default function App() {
                           onClick={() => setShowImportPDF(true)}
                           disabled={connectionStatus !== 'connected'}
                         >
-                          Import Documents
+                          Import
                         </Button>
                       </CardContent>
                     </Card>
@@ -3540,7 +3543,7 @@ export default function App() {
       <ImportPDFDialog
         open={showImportPDF}
         isConnected={connectionStatus === 'connected'}
-        onClose={() => setShowImportPDF(false)}
+        onOpenChange={setShowImportPDF}
       />
 
       {/* Orphan Dependency Removal Dialog */}

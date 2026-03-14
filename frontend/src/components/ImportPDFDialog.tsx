@@ -17,6 +17,7 @@ interface StagedFile {
   pageCount: number
   pageCountOverride: number | null
   coverPage: 'first' | 'none'
+  fileType: 'pdf' | 'rmdoc'
   status: 'staged' | 'uploading' | 'done' | 'error'
   error?: string
 }
@@ -24,7 +25,7 @@ interface StagedFile {
 interface ImportPDFDialogProps {
   open: boolean
   isConnected: boolean
-  onClose: () => void
+  onOpenChange: (open: boolean) => void
 }
 
 function formatFileSize(bytes: number): string {
@@ -33,7 +34,7 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function ImportPDFDialog({ open, isConnected, onClose }: ImportPDFDialogProps) {
+export function ImportPDFDialog({ open, isConnected, onOpenChange }: ImportPDFDialogProps) {
   const [files, setFiles] = useState<StagedFile[]>([])
   const [restartXochitl, setRestartXochitl] = useState(true)
   const [importing, setImporting] = useState(false)
@@ -52,27 +53,34 @@ export function ImportPDFDialog({ open, isConnected, onClose }: ImportPDFDialogP
   }, [open])
 
   const addPaths = useCallback(async (paths: string[]) => {
-    const pdfPaths = paths.filter((p) => p.toLowerCase().endsWith('.pdf'))
-    if (pdfPaths.length === 0) {
-      setError('Please select PDF files.')
+    const validPaths = paths.filter((p) => {
+      const lower = p.toLowerCase()
+      return lower.endsWith('.pdf') || lower.endsWith('.rmdoc')
+    })
+    if (validPaths.length === 0) {
+      setError('Please select PDF or rmdoc files.')
       return
     }
     setError(null)
 
     const newFiles: StagedFile[] = []
-    for (const p of pdfPaths) {
+    for (const p of validPaths) {
       try {
-        const info = await window.go.main.App.GetPDFFileInfo(p)
+        const info = await window.go.main.App.GetImportFileInfo(p)
         const filename = p.replace(/\\/g, '/').split('/').pop() ?? p
+        const isRmdoc = info.fileType === 'rmdoc'
         newFiles.push({
           id: crypto.randomUUID(),
           path: p,
           filename,
-          editedName: filename.replace(/\.pdf$/i, ''),
+          editedName: isRmdoc && info.visibleName
+            ? info.visibleName
+            : filename.replace(/\.(pdf|rmdoc)$/i, ''),
           size: info.size,
           pageCount: info.pageCount,
           pageCountOverride: null,
-          coverPage: 'first',
+          coverPage: isRmdoc ? 'none' : 'first',
+          fileType: info.fileType as 'pdf' | 'rmdoc',
           status: 'staged',
         })
       } catch (err) {
@@ -142,7 +150,7 @@ export function ImportPDFDialog({ open, isConnected, onClose }: ImportPDFDialogP
   }, [open, files, importing])
 
   const handleBrowse = async () => {
-    const paths = await window.go.main.App.SelectPDFFiles()
+    const paths = await window.go.main.App.SelectImportFiles()
     if (paths && paths.length > 0) addPaths(paths)
   }
 
@@ -166,14 +174,22 @@ export function ImportPDFDialog({ open, isConnected, onClose }: ImportPDFDialogP
     for (const file of toImport) {
       updateFile(file.id, { status: 'uploading' })
       try {
-        const coverPageNumber = file.coverPage === 'first' ? 0 : null
-        await window.go.main.App.ImportPDFFromPath(
-          file.path,
-          file.editedName.trim(),
-          false,
-          file.pageCountOverride ?? 0,
-          coverPageNumber,
-        )
+        if (file.fileType === 'rmdoc') {
+          await window.go.main.App.ImportRmdocFromPath(
+            file.path,
+            file.editedName.trim(),
+            false,
+          )
+        } else {
+          const coverPageNumber = file.coverPage === 'first' ? 0 : null
+          await window.go.main.App.ImportPDFFromPath(
+            file.path,
+            file.editedName.trim(),
+            false,
+            file.pageCountOverride ?? 0,
+            coverPageNumber,
+          )
+        }
         updateFile(file.id, { status: 'done' })
         succeeded++
       } catch (err) {
@@ -191,15 +207,15 @@ export function ImportPDFDialog({ open, isConnected, onClose }: ImportPDFDialogP
     }
 
     if (failed === 0) {
-      toast.success(`${succeeded} PDF${succeeded !== 1 ? 's' : ''} imported successfully`)
-      onClose()
+      toast.success(`${succeeded} document${succeeded !== 1 ? 's' : ''} imported successfully`)
+      onOpenChange(false)
     } else {
       toast.error(`${failed} of ${toImport.length} import${toImport.length !== 1 ? 's' : ''} failed`)
       setImporting(false)
     }
   }
 
-  const handleClose = () => { if (!importing) onClose() }
+  const handleClose = () => { if (!importing) onOpenChange(false) }
 
   const hasFiles = files.length > 0
 
@@ -207,7 +223,7 @@ export function ImportPDFDialog({ open, isConnected, onClose }: ImportPDFDialogP
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
       <DialogContent className="w-[92vw] sm:w-[70vw] max-w-4xl max-h-[85vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Import Documents</DialogTitle>
+          <DialogTitle>Document Import</DialogTitle>
           <p className="text-xs text-muted-foreground">
             Upload documents to your reMarkable. Drag and drop or browse to add files.
           </p>
@@ -390,75 +406,87 @@ function FileCard({
         <span className="text-[11px] text-muted-foreground">{formatFileSize(file.size)}</span>
         <span className="text-[11px] text-muted-foreground">&middot;</span>
 
-        <Popover open={pagePopoverOpen} onOpenChange={setPagePopoverOpen}>
-          <PopoverTrigger asChild>
-            <button
-              onClick={openPagePopover}
-              className={`text-[11px] rounded px-0.5 border-b border-dashed border-transparent hover:border-muted-foreground ${
-                isOverridden ? 'text-foreground font-medium' : 'text-muted-foreground'
-              }`}
-            >
-              {effectivePages} page{effectivePages !== 1 ? 's' : ''}
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-[200px] p-3" align="start">
-            <p className="text-[13px] font-medium mb-2">Page count override</p>
-            <div className="flex items-center">
-              <input
-                type="text"
-                className="flex-1 h-9 min-w-0 border border-input rounded-l-md px-2.5 text-sm bg-transparent outline-none focus:border-ring focus:ring-2 focus:ring-ring/25 placeholder:text-muted-foreground"
-                placeholder={`${file.pageCount} (auto-detected)`}
-                value={pageInputValue}
-                onChange={(e) => setPageInputValue(e.target.value.replace(/[^0-9]/g, ''))}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { e.preventDefault(); applyPageOverride() }
-                  if (e.key === 'Escape') { e.preventDefault(); setPagePopoverOpen(false) }
-                  e.stopPropagation()
-                }}
-                autoFocus
-              />
-              <div className="flex flex-col shrink-0">
-                <button
-                  onClick={() => stepPage(1)}
-                  className="flex items-center justify-center w-7 h-[18px] border border-input border-l-0 rounded-tr-md hover:bg-muted"
-                >
-                  <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-                <button
-                  onClick={() => stepPage(-1)}
-                  className="flex items-center justify-center w-7 h-[18px] border border-input border-l-0 border-t-0 rounded-br-md hover:bg-muted"
-                >
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
+        {file.fileType === 'pdf' ? (
+          <Popover open={pagePopoverOpen} onOpenChange={setPagePopoverOpen}>
+            <PopoverTrigger asChild>
+              <button
+                onClick={openPagePopover}
+                className={`text-[11px] rounded px-0.5 border-b border-dashed border-transparent hover:border-muted-foreground ${
+                  isOverridden ? 'text-foreground font-medium' : 'text-muted-foreground'
+                }`}
+              >
+                {effectivePages} page{effectivePages !== 1 ? 's' : ''}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[200px] p-3" align="start">
+              <p className="text-[13px] font-medium mb-2">Page count override</p>
+              <div className="flex items-center">
+                <input
+                  type="text"
+                  className="flex-1 h-9 min-w-0 border border-input rounded-l-md px-2.5 text-sm bg-transparent outline-none focus:border-ring focus:ring-2 focus:ring-ring/25 placeholder:text-muted-foreground"
+                  placeholder={`${file.pageCount} (auto-detected)`}
+                  value={pageInputValue}
+                  onChange={(e) => setPageInputValue(e.target.value.replace(/[^0-9]/g, ''))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); applyPageOverride() }
+                    if (e.key === 'Escape') { e.preventDefault(); setPagePopoverOpen(false) }
+                    e.stopPropagation()
+                  }}
+                  autoFocus
+                />
+                <div className="flex flex-col shrink-0">
+                  <button
+                    onClick={() => stepPage(1)}
+                    className="flex items-center justify-center w-7 h-[18px] border border-input border-l-0 rounded-tr-md hover:bg-muted"
+                  >
+                    <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                  <button
+                    onClick={() => stepPage(-1)}
+                    className="flex items-center justify-center w-7 h-[18px] border border-input border-l-0 border-t-0 rounded-br-md hover:bg-muted"
+                  >
+                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="flex justify-end gap-1.5 mt-2.5">
-              <Button variant="outline" size="sm" className="h-8 text-[13px]" onClick={resetPageOverride}>
-                Reset
-              </Button>
-              <Button size="sm" className="h-8 text-[13px]" onClick={applyPageOverride}>
-                Apply
-              </Button>
-            </div>
-          </PopoverContent>
-        </Popover>
+              <div className="flex justify-end gap-1.5 mt-2.5">
+                <Button variant="outline" size="sm" className="h-8 text-[13px]" onClick={resetPageOverride}>
+                  Reset
+                </Button>
+                <Button size="sm" className="h-8 text-[13px]" onClick={applyPageOverride}>
+                  Apply
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        ) : (
+          <span className="text-[11px] text-muted-foreground">
+            {effectivePages} page{effectivePages !== 1 ? 's' : ''}
+          </span>
+        )}
 
         <span className="flex-1" />
 
-        <Select
-          value={file.coverPage}
-          onValueChange={(v: 'first' | 'none') => onUpdate({ coverPage: v })}
-          disabled={importing}
-        >
-          <SelectTrigger className="h-auto w-auto gap-1 border-border bg-transparent px-2 py-0.5 text-[11px] text-muted-foreground [&>svg]:h-2.5 [&>svg]:w-2.5">
-            <span className="font-medium">Cover:</span>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="first">First page</SelectItem>
-            <SelectItem value="none">None</SelectItem>
-          </SelectContent>
-        </Select>
+        {file.fileType === 'pdf' ? (
+          <Select
+            value={file.coverPage}
+            onValueChange={(v: 'first' | 'none') => onUpdate({ coverPage: v })}
+            disabled={importing}
+          >
+            <SelectTrigger className="h-auto w-auto gap-1 border-border bg-transparent px-2 py-0.5 text-[11px] text-muted-foreground [&>svg]:h-2.5 [&>svg]:w-2.5">
+              <span className="font-medium">Cover:</span>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="first">First page</SelectItem>
+              <SelectItem value="none">None</SelectItem>
+            </SelectContent>
+          </Select>
+        ) : (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+            Notebook
+          </span>
+        )}
       </div>
       {file.status === 'error' && file.error && (
         <p className="text-[11px] text-destructive px-3 pb-2 truncate">{file.error}</p>

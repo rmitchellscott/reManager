@@ -41,6 +41,7 @@ import (
 	"reManager/internal/installer"
 	"reManager/internal/logger"
 	"reManager/internal/pdfimport"
+	"reManager/internal/rmdocimport"
 	"reManager/internal/platform"
 	"reManager/internal/sshagent"
 	"reManager/internal/storage"
@@ -5242,13 +5243,20 @@ type PDFFileInfo struct {
 }
 
 func (a *App) SelectPDFFiles() []string {
+	return a.SelectImportFiles()
+}
+
+func (a *App) SelectImportFiles() []string {
 	if platform.IsRunningInFlatpak() {
 		home, _ := os.UserHomeDir()
-		files, err := filechooser.OpenFile("", "Select PDFs", &filechooser.OpenFileOptions{
+		files, err := filechooser.OpenFile("", "Select documents", &filechooser.OpenFileOptions{
 			CurrentFolder: home,
 			Multiple:      true,
 			Filters: []*filechooser.Filter{
-				{Name: "PDF files", Rules: []filechooser.Rule{{Type: filechooser.GlobPattern, Pattern: "*.pdf"}}},
+				{Name: "Documents", Rules: []filechooser.Rule{
+					{Type: filechooser.GlobPattern, Pattern: "*.pdf"},
+					{Type: filechooser.GlobPattern, Pattern: "*.rmdoc"},
+				}},
 			},
 		})
 		if err != nil || len(files) == 0 {
@@ -5261,10 +5269,10 @@ func (a *App) SelectPDFFiles() []string {
 	}
 	home, _ := os.UserHomeDir()
 	files, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "Select PDFs",
+		Title:            "Select documents",
 		DefaultDirectory: home,
 		Filters: []runtime.FileFilter{
-			{DisplayName: "PDF files", Pattern: "*.pdf"},
+			{DisplayName: "Documents (PDF, rmdoc)", Pattern: "*.pdf;*.rmdoc"},
 		},
 	})
 	if err != nil {
@@ -5287,6 +5295,87 @@ func (a *App) GetPDFFileInfo(localPath string) (PDFFileInfo, error) {
 		Size:      info.Size(),
 		PageCount: pdfimport.EstimatePageCount(pdfData),
 	}, nil
+}
+
+type ImportFileInfo struct {
+	Path        string `json:"path"`
+	Size        int64  `json:"size"`
+	PageCount   int    `json:"pageCount"`
+	FileType    string `json:"fileType"`
+	VisibleName string `json:"visibleName"`
+}
+
+func (a *App) GetImportFileInfo(localPath string) (ImportFileInfo, error) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return ImportFileInfo{}, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	ext := strings.ToLower(filepath.Ext(localPath))
+	switch ext {
+	case ".pdf":
+		pdfData, err := os.ReadFile(localPath)
+		if err != nil {
+			return ImportFileInfo{}, fmt.Errorf("failed to read file: %w", err)
+		}
+		return ImportFileInfo{
+			Path:      localPath,
+			Size:      info.Size(),
+			PageCount: pdfimport.EstimatePageCount(pdfData),
+			FileType:  "pdf",
+		}, nil
+	case ".rmdoc":
+		zipData, err := os.ReadFile(localPath)
+		if err != nil {
+			return ImportFileInfo{}, fmt.Errorf("failed to read file: %w", err)
+		}
+		rmdocInfo, err := rmdocimport.Inspect(zipData)
+		if err != nil {
+			return ImportFileInfo{}, fmt.Errorf("failed to inspect rmdoc: %w", err)
+		}
+		return ImportFileInfo{
+			Path:        localPath,
+			Size:        info.Size(),
+			PageCount:   rmdocInfo.PageCount,
+			FileType:    "rmdoc",
+			VisibleName: rmdocInfo.VisibleName,
+		}, nil
+	default:
+		return ImportFileInfo{}, fmt.Errorf("unsupported file type: %s", ext)
+	}
+}
+
+func (a *App) ImportRmdocFromPath(localPath, visibleName string, restartXochitl bool) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	zipData, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read rmdoc: %w", err)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	if _, err := rmdocimport.Upload(sftpClient, zipData, visibleName); err != nil {
+		return err
+	}
+
+	if restartXochitl {
+		if err := a.RestartXochitl(); err != nil {
+			return fmt.Errorf("uploaded, but %w", err)
+		}
+	}
+
+	return nil
 }
 
 // ImportPDFFromPath reads the PDF at localPath, generates xochitl sidecar files,
