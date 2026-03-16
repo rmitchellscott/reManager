@@ -271,6 +271,97 @@ func parseAPKINDEX(data []byte) (map[string]string, error) {
 	return checksums, nil
 }
 
+// ProxyUpgradeDownload downloads APKINDEX, resolves upgradable packages, and uploads them to device cache.
+func (p *Proxy) ProxyUpgradeDownload(onProgress func(ProxyProgress)) error {
+	debug.Printf("[DEBUG] ProxyUpgradeDownload called\n")
+	onProgress(ProxyProgress{Phase: "index", Message: "Downloading package index..."})
+
+	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
+	apkindexData, err := downloadFile(apkindexURL)
+	if err != nil {
+		return fmt.Errorf("failed to download APKINDEX: %w", err)
+	}
+
+	checksums, err := parseAPKINDEX(apkindexData)
+	if err != nil {
+		return fmt.Errorf("failed to parse APKINDEX: %w", err)
+	}
+
+	apkindexCacheName := computeAPKINDEXCacheName(apkindexURL)
+	remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, apkindexCacheName)
+	onProgress(ProxyProgress{Phase: "index", Message: fmt.Sprintf("Transferring %s...", apkindexCacheName)})
+
+	if err := p.uploadToDevice(apkindexData, remotePath); err != nil {
+		return fmt.Errorf("failed to upload APKINDEX: %w", err)
+	}
+
+	onProgress(ProxyProgress{Phase: "resolving", Message: "Checking for upgradable packages..."})
+	upgradeResult, err := p.client.SimulateUpgrade()
+	if err != nil {
+		return fmt.Errorf("failed to simulate upgrade: %w", err)
+	}
+
+	if !upgradeResult.HasUpgrades {
+		debug.Printf("[DEBUG] ProxyUpgradeDownload: no upgrades available\n")
+		onProgress(ProxyProgress{Phase: "complete", Message: "No upgrades available"})
+		return nil
+	}
+
+	debug.Printf("[DEBUG] ProxyUpgradeDownload: %d upgradable packages: %v\n", len(upgradeResult.Packages), upgradeResult.Packages)
+
+	urls, err := p.client.FetchURLs(upgradeResult.Packages...)
+	if err != nil {
+		return fmt.Errorf("failed to get package URLs: %w", err)
+	}
+
+	for i, url := range urls {
+		if !strings.HasPrefix(url, "https://") {
+			continue
+		}
+
+		pkgName, pkgVersion := parsePackageURL(url)
+		if pkgName == "" {
+			continue
+		}
+
+		onProgress(ProxyProgress{
+			Phase:   "downloading",
+			Current: i + 1,
+			Total:   len(urls),
+			Package: pkgName,
+			Message: fmt.Sprintf("Downloading %s (%d/%d)...", pkgName, i+1, len(urls)),
+		})
+
+		pkgData, err := downloadFile(url)
+		if err != nil {
+			return fmt.Errorf("failed to download %s: %w", pkgName, err)
+		}
+
+		cField, ok := checksums[pkgName]
+		if !ok {
+			return fmt.Errorf("checksum not found for package: %s", pkgName)
+		}
+		hash8 := computePackageHash(cField)
+		cacheFilename := fmt.Sprintf("%s-%s.%s.apk", pkgName, pkgVersion, hash8)
+
+		pkgRemotePath := fmt.Sprintf("%s/%s", VellumCacheDir, cacheFilename)
+		onProgress(ProxyProgress{
+			Phase:   "transferring",
+			Current: i + 1,
+			Total:   len(urls),
+			Package: pkgName,
+			Message: fmt.Sprintf("Transferring %s (%d/%d)...", pkgName, i+1, len(urls)),
+		})
+
+		if err := p.uploadToDevice(pkgData, pkgRemotePath); err != nil {
+			return fmt.Errorf("failed to upload %s: %w", pkgName, err)
+		}
+	}
+
+	onProgress(ProxyProgress{Phase: "complete", Total: len(urls), Current: len(urls), Message: "All upgrade packages downloaded and cached"})
+	return nil
+}
+
 // UploadAPKINDEX downloads the APKINDEX and uploads it to device cache.
 // This should be called before vellum update to ensure the index is available.
 func (p *Proxy) UploadAPKINDEX(onProgress func(string)) error {

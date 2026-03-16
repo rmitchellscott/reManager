@@ -254,16 +254,25 @@ func (a *App) GetDefaultSSHKeys() []SSHKey {
 	}
 
 	sshDir := filepath.Join(home, ".ssh")
-	keyNames := []string{"id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"}
-	var keys []SSHKey
+	entries, err := os.ReadDir(sshDir)
+	if err != nil {
+		return nil
+	}
 
-	for _, name := range keyNames {
-		keyPath := filepath.Join(sshDir, name)
-		if _, err := os.Stat(keyPath); err == nil {
-			keys = append(keys, SSHKey{
-				Path: keyPath,
-				Name: name,
-			})
+	var keys []SSHKey
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, "id_") && !strings.HasSuffix(name, ".pub") {
+			keyPath := filepath.Join(sshDir, name)
+			if info, err := os.Stat(keyPath); err == nil && info.Mode().IsRegular() {
+				keys = append(keys, SSHKey{
+					Path: keyPath,
+					Name: name,
+				})
+			}
 		}
 	}
 
@@ -815,6 +824,29 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			}
 			if timezoneStatus.NeedsUpdate {
 				runtime.EventsEmit(a.ctx, "timezone:mismatch", timezoneStatus)
+			}
+
+			settings, _ := a.settingsStore.Load()
+			proxyEnabled := settings == nil || settings.ProxyMode
+
+			if proxyEnabled {
+				a.mu.Lock()
+				sshClient := a.client
+				a.mu.Unlock()
+				if sshClient != nil {
+					arch := device.GetArchitecture(component.DeviceType(deviceType))
+					proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+					_ = proxy.UploadAPKINDEX(func(msg string) {
+						debug.Printf("[DEBUG] Upgrade check APKINDEX: %s\n", msg)
+					})
+				}
+			}
+
+			upgradeResult, simErr := a.vellumClient.SimulateUpgrade()
+			if simErr == nil && upgradeResult.HasUpgrades {
+				runtime.EventsEmit(a.ctx, "packages:upgrades-available", map[string]interface{}{
+					"packages": upgradeResult.Packages,
+				})
 			}
 		}
 	}()
@@ -1938,6 +1970,31 @@ func (a *App) RunPackageUpgrade() {
 	}
 
 	go func() {
+		settings, _ := a.settingsStore.Load()
+		proxyEnabled := settings == nil || settings.ProxyMode
+
+		a.mu.Lock()
+		sshClient := a.client
+		dt := a.connectedDeviceType
+		a.mu.Unlock()
+
+		if proxyEnabled && sshClient != nil {
+			arch := device.GetArchitecture(component.DeviceType(dt))
+			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
+			err := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
+				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
+			})
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nProxy download failed: %v\n", err))
+				runtime.EventsEmit(a.ctx, "package-upgrade:complete", map[string]interface{}{
+					"success":  false,
+					"dnsError": false,
+				})
+				return
+			}
+		}
+
 		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
 		var dnsError bool
@@ -2117,6 +2174,31 @@ func (a *App) RunUpgrade() {
 			}
 
 			runtime.EventsEmit(a.ctx, "command:output", "All packages compatible. Proceeding with upgrade...\n\n")
+		}
+
+		settings, _ := a.settingsStore.Load()
+		proxyEnabled := settings == nil || settings.ProxyMode
+
+		a.mu.Lock()
+		sshClient := a.client
+		dt := a.connectedDeviceType
+		a.mu.Unlock()
+
+		if proxyEnabled && sshClient != nil {
+			arch := device.GetArchitecture(component.DeviceType(dt))
+			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
+			proxyErr := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
+				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
+			})
+			if proxyErr != nil {
+				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("\nProxy download failed: %v\n", proxyErr))
+				runtime.EventsEmit(a.ctx, "upgrade:complete", map[string]interface{}{
+					"success":  false,
+					"dnsError": false,
+				})
+				return
+			}
 		}
 
 		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
@@ -2983,17 +3065,74 @@ func (a *App) CheckForAppUpdate() UpdateCheckResult {
 		return result
 	}
 
+	if platform.IsRunningInFlatpak() {
+		return a.checkFlatpakUpdate(result)
+	}
+	return a.checkGitHubUpdate(result)
+}
+
+func (a *App) checkFlatpakUpdate(result UpdateCheckResult) UpdateCheckResult {
 	client := httputil.NewClient(10 * time.Second)
-	resp, err := client.Get("https://api.github.com/repos/rmitchellscott/remanager/releases/latest")
+	resp, err := client.Get("https://flathub.org/api/v2/appstream/io.scottlabs.reManager")
 	if err != nil {
-		debug.Printf("[DEBUG] CheckForAppUpdate: request failed: %v\n", err)
+		debug.Printf("[DEBUG] checkFlatpakUpdate: request failed: %v\n", err)
 		result.Error = "network_error"
 		return result
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		debug.Printf("[DEBUG] CheckForAppUpdate: HTTP %d\n", resp.StatusCode)
+		debug.Printf("[DEBUG] checkFlatpakUpdate: HTTP %d\n", resp.StatusCode)
+		result.Error = "api_error"
+		return result
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		result.Error = "read_error"
+		return result
+	}
+
+	var appstream struct {
+		Releases []struct {
+			Version   string `json:"version"`
+			Timestamp string `json:"timestamp"`
+		} `json:"releases"`
+	}
+
+	if err := json.Unmarshal(body, &appstream); err != nil {
+		result.Error = "parse_error"
+		return result
+	}
+
+	if len(appstream.Releases) == 0 {
+		result.Error = "no_releases"
+		return result
+	}
+
+	latest := appstream.Releases[0].Version
+	result.LatestVersion = latest
+	result.ReleaseURL = "https://flathub.org/apps/io.scottlabs.reManager"
+	result.UpdateAvailable = isNewerVersion(version, latest)
+
+	debug.Printf("[DEBUG] checkFlatpakUpdate: current=%s, latest=%s, updateAvailable=%v\n",
+		version, latest, result.UpdateAvailable)
+
+	return result
+}
+
+func (a *App) checkGitHubUpdate(result UpdateCheckResult) UpdateCheckResult {
+	client := httputil.NewClient(10 * time.Second)
+	resp, err := client.Get("https://api.github.com/repos/rmitchellscott/remanager/releases/latest")
+	if err != nil {
+		debug.Printf("[DEBUG] checkGitHubUpdate: request failed: %v\n", err)
+		result.Error = "network_error"
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		debug.Printf("[DEBUG] checkGitHubUpdate: HTTP %d\n", resp.StatusCode)
 		result.Error = "api_error"
 		return result
 	}
@@ -3018,7 +3157,7 @@ func (a *App) CheckForAppUpdate() UpdateCheckResult {
 	result.ReleaseURL = release.HTMLURL
 	result.UpdateAvailable = isNewerVersion(version, release.TagName)
 
-	debug.Printf("[DEBUG] CheckForAppUpdate: current=%s, latest=%s, updateAvailable=%v\n",
+	debug.Printf("[DEBUG] checkGitHubUpdate: current=%s, latest=%s, updateAvailable=%v\n",
 		version, release.TagName, result.UpdateAvailable)
 
 	return result
@@ -5147,23 +5286,17 @@ func (a *App) StartPreventSleep() error {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 
-		debug.Println("[DEBUG] StartPreventSleep goroutine: sending pen-enter")
-		if err := a.pokePenDevice(penDevice, true); err != nil {
-			debug.Printf("[DEBUG] StartPreventSleep goroutine: pen-enter failed: %v\n", err)
-		}
-
 		for {
 			select {
 			case <-ticker.C:
-				debug.Println("[DEBUG] StartPreventSleep goroutine: re-asserting pen hover")
-				a.pokePenDevice(penDevice, false)
-				time.Sleep(50 * time.Millisecond)
+				debug.Println("[DEBUG] StartPreventSleep goroutine: pulsing pen proximity")
 				if err := a.pokePenDevice(penDevice, true); err != nil {
 					debug.Printf("[DEBUG] StartPreventSleep goroutine: pen-enter failed: %v\n", err)
 				}
-			case <-stopCh:
-				debug.Println("[DEBUG] StartPreventSleep goroutine: sending pen-leave")
+				time.Sleep(50 * time.Millisecond)
 				a.pokePenDevice(penDevice, false)
+			case <-stopCh:
+				debug.Println("[DEBUG] StartPreventSleep goroutine: stopped")
 				return
 			}
 		}

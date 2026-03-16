@@ -404,9 +404,11 @@ export default function App() {
   const [pendingPackageUpgrade, setPendingPackageUpgrade] = useState<string[] | null>(null)
   const [simulatingUpgrade, setSimulatingUpgrade] = useState(false)
   const [showNoUpgradesDialog, setShowNoUpgradesDialog] = useState(false)
+  const [upgradesAvailable, setUpgradesAvailable] = useState(false)
   const [showCheckOSDialog, setShowCheckOSDialog] = useState(false)
 
   const [osMismatchDetected, setOsMismatchDetected] = useState(false)
+  const osMismatchDetectedRef = useRef(false)
   const [storedOsVersion, setStoredOsVersion] = useState('')
   const [currentOsVersion, setCurrentOsVersion] = useState('')
   const [checklistLoading, setChecklistLoading] = useState(false)
@@ -941,7 +943,7 @@ export default function App() {
       await rescanAllPackages()
 
       // Re-check OS compatibility after uninstall (packages may now be compatible)
-      if (osMismatchDetected) {
+      if (osMismatchDetectedRef.current) {
         window.go.main.App.GetPackageCompatibilityStatus().then(status => {
           setCompatibilityStatus(status)
         }).catch(() => {})
@@ -1116,6 +1118,7 @@ export default function App() {
       const data = args[0] as { prevVersion: string; newVersion: string }
       debugLog('Received os:mismatch:', data)
       setOsMismatchDetected(true)
+      osMismatchDetectedRef.current = true
       setStoredOsVersion(data.prevVersion)
       setCurrentOsVersion(data.newVersion)
     })
@@ -1147,7 +1150,9 @@ export default function App() {
       debugLog('Received upgrade:complete:', result)
       setChecklistLoading(false)
       if (result.success) {
+        setUpgradesAvailable(false)
         setOsMismatchDetected(false)
+        osMismatchDetectedRef.current = false
         setCompatibilityStatus(null)
         setRescanning(true)
         try {
@@ -1177,6 +1182,7 @@ export default function App() {
       const result = args[0] as { success: boolean; dnsError: boolean }
       debugLog('Received package-upgrade:complete:', result)
       if (result.success) {
+        setUpgradesAvailable(false)
         setRescanning(true)
         try {
           const info = await window.go.main.App.GetDeviceInfo()
@@ -1316,6 +1322,19 @@ export default function App() {
       setWriteableRootBusy(args[0] as boolean)
     })
 
+    const unsubscribeUpgradesAvailable = window.runtime.EventsOn('packages:upgrades-available', (...args: unknown[]) => {
+      const data = args[0] as { packages: string[] }
+      debugLog('Received packages:upgrades-available:', data)
+      setUpgradesAvailable(true)
+      toast.info(`${data.packages.length} package upgrade${data.packages.length !== 1 ? 's' : ''} available`, {
+        action: {
+          label: 'Go to Maintenance',
+          onClick: () => setActiveTab('maintenance'),
+        },
+        duration: 6000,
+      })
+    })
+
     return () => {
       unsubscribeOutput()
       unsubscribeDone()
@@ -1356,6 +1375,7 @@ export default function App() {
       unsubscribeConnectionFailed()
       unsubscribeFilesystemRestoreError()
       unsubscribeWriteableRootBusy()
+      unsubscribeUpgradesAvailable()
     }
   }, [])
 
@@ -1481,6 +1501,7 @@ export default function App() {
     setOutput('')
     setHashtabMismatch(null)
     setOsMismatchDetected(false)
+    osMismatchDetectedRef.current = false
     setOsUpgradeDetected(false)
     setCompatibilityStatus(null)
     setStoredOsVersion('')
@@ -2719,7 +2740,7 @@ export default function App() {
                               <Button
                                 onClick={handleCheckUpgrades}
                                 disabled={commandRunning || simulatingUpgrade || connectionStatus !== 'connected'}
-                                variant="outline"
+                                variant={upgradesAvailable ? 'default' : 'outline'}
                                 size="sm"
                                 className="flex-1"
                               >

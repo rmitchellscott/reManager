@@ -30,6 +30,12 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
 
+      - name: Set version in wails.json
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          VERSION=${VERSION#v}
+          jq --arg v "$VERSION" '.info.productVersion = $v | .info.productName = "reManager"' wails.json > tmp.json && mv tmp.json wails.json
+
       - name: Build universal binary
         run: |
           wails build -platform darwin/universal \
@@ -114,6 +120,12 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
 
+      - name: Set version in wails.json
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          VERSION=${VERSION#v}
+          jq --arg v "$VERSION" '.info.productVersion = $v | .info.productName = "reManager"' wails.json > tmp.json && mv tmp.json wails.json
+
       - name: Build
         run: |
           wails build -platform linux/amd64 \
@@ -158,6 +170,12 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
 
+      - name: Set version in wails.json
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          VERSION=${VERSION#v}
+          jq --arg v "$VERSION" '.info.productVersion = $v | .info.productName = "reManager"' wails.json > tmp.json && mv tmp.json wails.json
+
       - name: Build
         run: |
           wails build -platform linux/arm64 \
@@ -198,6 +216,13 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
 
+      - name: Set version in wails.json
+        shell: bash
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          VERSION=${VERSION#v}
+          jq --arg v "$VERSION" '.info.productVersion = $v | .info.productName = "reManager"' wails.json > tmp.json && mv tmp.json wails.json
+
       - name: Build
         run: |
           wails build -platform windows/amd64 `
@@ -234,6 +259,13 @@ jobs:
         id: version
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME:-dev}" >> $GITHUB_OUTPUT
+
+      - name: Set version in wails.json
+        shell: bash
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          VERSION=${VERSION#v}
+          jq --arg v "$VERSION" '.info.productVersion = $v | .info.productName = "reManager"' wails.json > tmp.json && mv tmp.json wails.json
 
       - name: Build
         run: |
