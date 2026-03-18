@@ -41,6 +41,7 @@ import (
 	"reManager/internal/installer"
 	"reManager/internal/logger"
 	"reManager/internal/platform"
+	"reManager/internal/sshagent"
 	"reManager/internal/storage"
 	"reManager/internal/support"
 	"reManager/internal/vellum"
@@ -152,6 +153,8 @@ type App struct {
 	backupMu               sync.Mutex
 	folderTransferCancelCh chan struct{}
 	folderTransferMu       sync.Mutex
+
+	agentConn net.Conn
 
 	shellSession *ssh.Session
 	shellStdin   io.WriteCloser
@@ -375,7 +378,9 @@ func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
 	}
 
 	var result ConnectionResult
-	if device.AuthType == "key" {
+	if device.AuthType == "agent" {
+		result = a.ConnectWithAuth(device.Host, "agent", "", "")
+	} else if device.AuthType == "key" {
 		passphrase, _ := a.deviceStore.GetKeyPassphrase(id)
 		result = a.ConnectWithAuth(device.Host, "key", passphrase, device.KeyPath)
 	} else {
@@ -477,6 +482,25 @@ func (a *App) Connect(host, password string) ConnectionResult {
 
 func (a *App) ConnectWithKey(host, keyPath, passphrase string) ConnectionResult {
 	return a.ConnectWithAuth(host, "key", passphrase, keyPath)
+}
+
+func (a *App) ConnectWithAgent(host string) ConnectionResult {
+	return a.ConnectWithAuth(host, "agent", "", "")
+}
+
+func (a *App) IsSSHAgentAvailable() bool {
+	return sshagent.IsAvailable(a.sshAgentSocketPath())
+}
+
+func (a *App) sshAgentSocketPath() string {
+	if a.settingsStore == nil {
+		return ""
+	}
+	settings, err := a.settingsStore.Load()
+	if err != nil {
+		return ""
+	}
+	return settings.SSHAgentSocketPath
 }
 
 func (a *App) CancelConnect() {
@@ -632,6 +656,10 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		a.client.Close()
 		a.client = nil
 	}
+	if a.agentConn != nil {
+		a.agentConn.Close()
+		a.agentConn = nil
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	a.connectCancel = cancel
@@ -640,7 +668,21 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 	var authMethods []ssh.AuthMethod
 
-	if authType == "key" {
+	if authType == "agent" {
+		conn, authMethod, err := sshagent.Connect(a.sshAgentSocketPath())
+		if err != nil {
+			return ConnectionResult{
+				Success:   false,
+				Message:   err.Error(),
+				Code:      apperrors.ErrAuthFailed,
+				Retryable: false,
+			}
+		}
+		a.mu.Lock()
+		a.agentConn = conn
+		a.mu.Unlock()
+		authMethods = append(authMethods, authMethod)
+	} else if authType == "key" {
 		keyData, err := os.ReadFile(keyPath)
 		if err != nil {
 			ue := apperrors.Classify(err)
@@ -908,6 +950,10 @@ func (a *App) Disconnect() {
 		a.client.Close()
 		a.client = nil
 	}
+	if a.agentConn != nil {
+		a.agentConn.Close()
+		a.agentConn = nil
+	}
 	a.vellumClient = nil
 }
 
@@ -1042,6 +1088,10 @@ func (a *App) handleConnectionLost(err error) {
 	if a.client != nil {
 		a.client.Close()
 		a.client = nil
+	}
+	if a.agentConn != nil {
+		a.agentConn.Close()
+		a.agentConn = nil
 	}
 	a.vellumClient = nil
 	deviceID := a.connectedDeviceID
@@ -3211,10 +3261,11 @@ type BehaviorSettings struct {
 
 type SettingsInfo struct {
 	BehaviorSettings
-	TabVisibility map[string]bool `json:"tabVisibility"`
-	Theme         string          `json:"theme"`
-	TerminalTheme string          `json:"terminalTheme"`
-	EditorTheme   string          `json:"editorTheme"`
+	TabVisibility      map[string]bool `json:"tabVisibility"`
+	Theme              string          `json:"theme"`
+	TerminalTheme      string          `json:"terminalTheme"`
+	EditorTheme        string          `json:"editorTheme"`
+	SSHAgentSocketPath string          `json:"sshAgentSocketPath"`
 }
 
 func (a *App) GetSettings() SettingsInfo {
@@ -3257,14 +3308,15 @@ func (a *App) GetSettings() SettingsInfo {
 			PreventSleep:               settings.PreventSleep,
 			CheckForUpdates:            settings.CheckForUpdates,
 		},
-		TabVisibility: settings.TabVisibility,
-		Theme:         settings.Theme,
-		TerminalTheme: settings.TerminalTheme,
-		EditorTheme:   settings.EditorTheme,
+		TabVisibility:      settings.TabVisibility,
+		Theme:              settings.Theme,
+		TerminalTheme:      settings.TerminalTheme,
+		EditorTheme:        settings.EditorTheme,
+		SSHAgentSocketPath: settings.SSHAgentSocketPath,
 	}
 }
 
-func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, preventSleep bool, theme string, terminalTheme string, editorTheme string, checkForUpdates bool) error {
+func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppressSystemFileWarnings bool, preventSleep bool, theme string, terminalTheme string, editorTheme string, checkForUpdates bool, sshAgentSocketPath string) error {
 	debug.Printf("[DEBUG] SaveSettings: preventSleep=%v, isConnected=%v\n", preventSleep, a.IsConnected())
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
@@ -3278,6 +3330,7 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		TerminalTheme:              terminalTheme,
 		EditorTheme:                editorTheme,
 		CheckForUpdates:            checkForUpdates,
+		SSHAgentSocketPath:         sshAgentSocketPath,
 	}
 
 	if preventSleep && a.IsConnected() {

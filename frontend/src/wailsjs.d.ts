@@ -23,6 +23,12 @@ declare module '*/wailsjs/go/main/App' {
     message: string
     device?: string
   }>
+  export function ConnectWithAgent(host: string): Promise<{
+    success: boolean
+    message: string
+    device?: string
+  }>
+  export function IsSSHAgentAvailable(): Promise<boolean>
   export function CancelConnect(): Promise<void>
   export function Disconnect(): Promise<void>
   export function IsConnected(): Promise<boolean>

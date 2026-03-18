@@ -343,6 +343,13 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			continue
 		}
 
+		if firmware != "" {
+			visited := map[string]bool{}
+			if !m.depsInstallable(name, deviceType, firmware, arch, visited) {
+				continue
+			}
+		}
+
 		pkg := Package{
 			Name:           name,
 			Version:        bestVersion,
@@ -420,6 +427,46 @@ func (m *MetadataStore) GetPackageForTargetOS(name, targetOS, deviceType, arch s
 	}
 
 	return pkg
+}
+
+// depsInstallable checks whether all transitive dependencies of a package
+// have at least one compatible version available. Must be called under m.mu.RLock.
+func (m *MetadataStore) depsInstallable(name, deviceType, firmware, arch string, visited map[string]bool) bool {
+	if visited[name] {
+		return true
+	}
+	visited[name] = true
+
+	versions, ok := m.packages.Packages[name]
+	if !ok {
+		return false
+	}
+
+	var bestInfo *PackageVersion
+	var bestVersion string
+	for version, info := range versions {
+		if !isVersionCompatible(info, deviceType, firmware, arch) {
+			continue
+		}
+		if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+			bestVersion = version
+			v := info
+			bestInfo = &v
+		}
+	}
+	if bestInfo == nil {
+		return false
+	}
+
+	for _, dep := range bestInfo.Depends {
+		if dep == "/bin/sh" {
+			continue
+		}
+		if !m.depsInstallable(dep, deviceType, firmware, arch, visited) {
+			return false
+		}
+	}
+	return true
 }
 
 func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string) bool {

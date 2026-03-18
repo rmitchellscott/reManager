@@ -13,6 +13,7 @@ finish-args:
   - --socket=wayland
   - --device=dri
   - --share=network
+  - --socket=ssh-auth
   - --filesystem=~/.ssh:ro
 
 build-options:
