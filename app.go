@@ -829,16 +829,6 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			} else {
 				vellumReady = true
 
-				osState, err := a.vellumClient.GetOSVersionState()
-				if err == nil && osState.Mismatch {
-					debug.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
-						osState.StoredVersion, osState.CurrentVersion)
-					warnings["osMismatch"] = map[string]string{
-						"prevVersion": osState.StoredVersion,
-						"newVersion":  osState.CurrentVersion,
-					}
-				}
-
 				reenableStatus, reenableErr := a.vellumClient.ReenableStatus()
 				if reenableErr == nil && reenableStatus != "" {
 					debug.Printf("[DEBUG] Reenable status: %s\n", reenableStatus)
@@ -882,8 +872,6 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			warnings["timezoneMismatch"] = timezoneStatus
 		}
 
-		runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
-
 		if vellumReady {
 			settings, _ := a.settingsStore.Load()
 			proxyEnabled := settings == nil || settings.ProxyMode
@@ -902,18 +890,28 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			}
 
 			upgradeResult, simErr := a.vellumClient.SimulateUpgrade()
-			if simErr == nil && upgradeResult.HasUpgrades {
-				hasMismatch := false
-				if m, ok := warnings["osMismatch"]; ok && m != nil {
-					hasMismatch = true
+
+			osState, err := a.vellumClient.GetOSVersionState()
+			debug.Printf("[DEBUG] GetOSVersionState: stored=%q, current=%q, mismatch=%v, err=%v\n", osState.StoredVersion, osState.CurrentVersion, osState.Mismatch, err)
+			if err == nil && osState.Mismatch {
+				debug.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
+					osState.StoredVersion, osState.CurrentVersion)
+				warnings["osMismatch"] = map[string]string{
+					"prevVersion": osState.StoredVersion,
+					"newVersion":  osState.CurrentVersion,
 				}
-				if !hasMismatch {
+			}
+
+			if simErr == nil && upgradeResult.HasUpgrades {
+				if _, hasMismatch := warnings["osMismatch"]; !hasMismatch {
 					runtime.EventsEmit(a.ctx, "packages:upgrades-available", map[string]interface{}{
 						"packages": upgradeResult.Packages,
 					})
 				}
 			}
 		}
+
+		runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
 	}()
 
 	a.mu.Lock()
@@ -1117,6 +1115,7 @@ func (a *App) handleConnectionLost(err error) {
 		a.agentConn = nil
 	}
 	a.vellumClient = nil
+	a.writeableRootBusy = false
 	deviceID := a.connectedDeviceID
 	a.keepaliveStop = nil
 	a.mu.Unlock()

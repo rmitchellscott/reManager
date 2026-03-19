@@ -697,6 +697,72 @@ export default function App() {
     }
   }
 
+  const resetOperationState = () => {
+    setInstallQueue(new Set())
+    setUninstallQueue(new Set())
+    setOutput('')
+    setHashtabMismatch(null)
+    setOsMismatchDetected(false)
+    osMismatchDetectedRef.current = false
+    setOsUpgradeDetected(false)
+    setCompatibilityStatus(null)
+    setStoredOsVersion('')
+    setCurrentOsVersion('')
+    setChecklistLoading(false)
+    setWarningsChecked(false)
+    setBootstrapping(false)
+    setBootstrapOutput('')
+    setBootstrapError(null)
+    setVellumUninstalling(false)
+    setVellumUninstallOutput('')
+    setVellumBrokenInstall(null)
+    setVellumCleaning(false)
+    setConnectionError(null)
+    setReconnectAttempt(0)
+    setShowFileBrowser(false)
+    setShowConfigEditor(false)
+    setWriteableRootBusy(false)
+    setUpgradesAvailable(false)
+    setSettingTimezone(false)
+    settingTimezoneRef.current = false
+    setCommandRunning(false)
+    runningSystemTaskRef.current = null
+    setRunningSystemTask(null)
+    setInstalling(false)
+    setUninstalling(false)
+    setRunningReenable(false)
+    setSimulatingUpgrade(false)
+  }
+
+  const refreshDeviceState = async (deviceType: string) => {
+    const info = await window.go.main.App.GetDeviceInfo()
+    setDeviceInfo(info)
+
+    const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
+    const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
+    setPackages(filteredPkgs || [])
+
+    const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
+    debugLog('refreshDeviceState: GetInstalledPackagesWithOsCheck result:', installedResult)
+    const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
+    setInstalledPackages(new Map(Object.entries(installedVersions || {})))
+    if (installedResult.osUpgraded) {
+      debugLog('refreshDeviceState: osUpgradeDetected=true', installedResult.prevVersion, '->', installedResult.newVersion)
+      setOsUpgradeDetected(true)
+      setPrevOsVersion(installedResult.prevVersion)
+      setNewOsVersion(installedResult.newVersion)
+    }
+
+    const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
+    for (const pkg of filteredPkgs) {
+      const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
+      if (cmds && cmds.length > 0) {
+        maintCmds[pkg.name] = cmds
+      }
+    }
+    setMaintenanceCommands(maintCmds)
+  }
+
   const handleConnectToSavedDevice = async (id: string) => {
     const thisAttempt = ++connectAttemptRef.current
     setConnecting(true)
@@ -709,34 +775,9 @@ export default function App() {
 
       if (result.success) {
         setConnectedDeviceId(id)
-        const info = await window.go.main.App.GetDeviceInfo()
         const deviceType = result.device || 'unknown'
         setDevice(deviceType)
-        setDeviceInfo(info)
-
-        const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
-        const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
-        setPackages(filteredPkgs || [])
-
-        debugLog('[DEBUG] handleConnectToSavedDevice: calling GetInstalledPackagesWithOsCheck')
-        const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
-        debugLog('[DEBUG] handleConnectToSavedDevice: result =', installedResult)
-        const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
-        setInstalledPackages(new Map(Object.entries(installedVersions || {})))
-        if (installedResult.osUpgraded) {
-          setOsUpgradeDetected(true)
-          setPrevOsVersion(installedResult.prevVersion)
-          setNewOsVersion(installedResult.newVersion)
-        }
-
-        const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-        for (const pkg of filteredPkgs) {
-          const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
-          if (cmds && cmds.length > 0) {
-            maintCmds[pkg.name] = cmds
-          }
-        }
-        setMaintenanceCommands(maintCmds)
+        await refreshDeviceState(deviceType)
         setStep('select')
       } else {
         toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
@@ -1097,16 +1138,23 @@ export default function App() {
       setWarningsChecked(true)
 
       if (w.osMismatch) {
+        debugLog('connect:warnings — setting osMismatchDetected=true', w.osMismatch)
         setOsMismatchDetected(true)
         osMismatchDetectedRef.current = true
         setStoredOsVersion(w.osMismatch.prevVersion)
         setCurrentOsVersion(w.osMismatch.newVersion)
+      } else {
+        debugLog('connect:warnings — no osMismatch, clearing')
+        setOsMismatchDetected(false)
+        osMismatchDetectedRef.current = false
       }
       if (w.reenableStatus) {
         setReenableStatus(w.reenableStatus)
       }
       if (w.hashtabMismatch) {
         setHashtabMismatch(w.hashtabMismatch)
+      } else {
+        setHashtabMismatch(null)
       }
       if (w.autoUpdateEnabled) {
         setShowAutoUpdateBanner(true)
@@ -1264,15 +1312,9 @@ export default function App() {
     const unsubscribeConnectionLost = window.runtime.EventsOn('connection:lost', (...args: unknown[]) => {
       const data = args[0] as { reason: string; code?: string; deviceId: string }
       debugLog('Received connection:lost:', data)
+      resetOperationState()
       setConnectionStatus('lost')
       setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
-      setOsMismatchDetected(false)
-      osMismatchDetectedRef.current = false
-      setWarningsChecked(false)
-      setUpgradesAvailable(false)
-      setCompatibilityStatus(null)
-      setStoredOsVersion('')
-      setCurrentOsVersion('')
     })
 
     const unsubscribeConnectionReconnecting = window.runtime.EventsOn('connection:reconnecting', (...args: unknown[]) => {
@@ -1286,40 +1328,16 @@ export default function App() {
     const unsubscribeConnectionRestored = window.runtime.EventsOn('connection:restored', async (...args: unknown[]) => {
       const data = args[0] as { deviceId: string; device: string }
       debugLog('Received connection:restored:', data)
+      resetOperationState()
       setConnectionStatus('connected')
-      setConnectionError(null)
-      setReconnectAttempt(0)
+
+      const deviceType = data.device || device
+      if (data.device) {
+        setDevice(data.device)
+      }
 
       try {
-        const info = await window.go.main.App.GetDeviceInfo()
-        debugLog('Refreshed device info on reconnect:', info)
-        setDeviceInfo(info)
-        const deviceType = data.device || device
-        if (data.device) {
-          setDevice(data.device)
-        }
-
-        const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
-        const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
-        setPackages(filteredPkgs || [])
-
-        const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
-        const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
-        setInstalledPackages(new Map(Object.entries(installedVersions || {})))
-        if (installedResult.osUpgraded) {
-          setOsUpgradeDetected(true)
-          setPrevOsVersion(installedResult.prevVersion)
-          setNewOsVersion(installedResult.newVersion)
-        }
-
-        const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-        for (const pkg of filteredPkgs) {
-          const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
-          if (cmds && cmds.length > 0) {
-            maintCmds[pkg.name] = cmds
-          }
-        }
-        setMaintenanceCommands(maintCmds)
+        await refreshDeviceState(deviceType)
       } catch (err) {
         debugLog('Failed to refresh device info on reconnect:', err)
       }
@@ -1398,8 +1416,10 @@ export default function App() {
 
   useEffect(() => {
     if (osMismatchDetected && !compatibilityStatus) {
+      debugLog('useEffect: osMismatchDetected=true, compatibilityStatus=null — fetching compatibility')
       setChecklistLoading(true)
       window.go.main.App.GetPackageCompatibilityStatus().then(status => {
+        debugLog('useEffect: GetPackageCompatibilityStatus result:', status)
         setCompatibilityStatus(status)
         setChecklistLoading(false)
       }).catch(() => {
@@ -1427,36 +1447,12 @@ export default function App() {
       }
 
       if (result.success) {
-        const info = await window.go.main.App.GetDeviceInfo()
         const deviceType = result.device || 'unknown'
         setDevice(deviceType)
-        setDeviceInfo(info)
-
-        const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
-        const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
-        setPackages(filteredPkgs || [])
-
-        debugLog('[DEBUG] handleConnect: calling GetInstalledPackagesWithOsCheck')
-        const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
-        debugLog('[DEBUG] handleConnect: result =', installedResult)
-        const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
-        setInstalledPackages(new Map(Object.entries(installedVersions || {})))
-        if (installedResult.osUpgraded) {
-          setOsUpgradeDetected(true)
-          setPrevOsVersion(installedResult.prevVersion)
-          setNewOsVersion(installedResult.newVersion)
-        }
-
-        const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-        for (const pkg of filteredPkgs) {
-          const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
-          if (cmds && cmds.length > 0) {
-            maintCmds[pkg.name] = cmds
-          }
-        }
-        setMaintenanceCommands(maintCmds)
+        await refreshDeviceState(deviceType)
 
         if (saveAfterConnect) {
+          const info = await window.go.main.App.GetDeviceInfo()
           const displayName = getDisplayName(info.machine || '')
           setDeviceName(displayName || host)
           setShowSaveDeviceDialog(true)
@@ -1511,37 +1507,14 @@ export default function App() {
 
   const handleDisconnect = async () => {
     await window.go.main.App.Disconnect()
+    resetOperationState()
+    setDeviceInfo({})
+    setInstalledPackages(new Map())
+    setVellumInstalled(null)
     setStep('connect')
     setDevice('')
     setConnectedDeviceId('')
-    setDeviceInfo({})
-    setInstalledPackages(new Map())
-    setInstallQueue(new Set())
-    setUninstallQueue(new Set())
-    setOutput('')
-    setHashtabMismatch(null)
-    setOsMismatchDetected(false)
-    osMismatchDetectedRef.current = false
-    setOsUpgradeDetected(false)
-    setCompatibilityStatus(null)
-    setStoredOsVersion('')
-    setCurrentOsVersion('')
-    setChecklistLoading(false)
-    setVellumInstalled(null)
-    setWarningsChecked(false)
-    setBootstrapping(false)
-    setBootstrapOutput('')
-    setBootstrapError(null)
-    setVellumUninstalling(false)
-    setVellumUninstallOutput('')
-    setVellumBrokenInstall(null)
-    setVellumCleaning(false)
-    setConnectionError(null)
     setConnectionStatus('connected')
-    setReconnectAttempt(0)
-    setShowFileBrowser(false)
-    setShowConfigEditor(false)
-    setWriteableRootBusy(false)
 
     const devices = await window.go.main.App.GetSavedDevices()
     setSavedDevices(devices || [])
