@@ -2,14 +2,12 @@ module reManager
 
 go 1.25.4
 
-replace github.com/rmitchellscott/remarkable-go => ../remarkable-go
-
 require (
 	github.com/Microsoft/go-winio v0.6.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.17.11
 	github.com/pkg/sftp v1.13.10
-	github.com/rmitchellscott/remarkable-go v0.0.0-20260124030457-109e5a924388
+	github.com/rmitchellscott/remarkable-go v0.1.0
 	github.com/rymdport/portal v0.4.3-0.20260225172009-01112360d2cb
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
 	github.com/spf13/cobra v1.10.2

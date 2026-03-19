@@ -26,6 +26,7 @@ Powered by the [Vellum](https://github.com/vellum-dev) package manager. See the 
   - Backup & Restore: Backup and restore reMarkable document library and configuration.
   - Configuration editor: Edit system configuration files with a WYSIWYG editor with syntax highlighting.
   - Document import: Import PDFs and rmdocs directly into the reMarkable document library. 
+  - OS manager: View, install, and switch between reMarkable OS versions.
  
 ## Where To Get Help
 

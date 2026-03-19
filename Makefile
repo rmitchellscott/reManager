@@ -44,7 +44,7 @@ flatpak-deps:
 	docker run --rm -v "$(PWD)":/build -w /build python:3.12-slim bash -c \
 		"pip install -q flatpak-node-generator && \
 		flatpak-node-generator npm frontend/package-lock.json -o flatpak/node-sources.json"
-	docker run --rm -v "$(PWD)":/build -w /build golang:1.23 bash -c \
+	docker run --rm -v "$(PWD)":/build -w /build golang:1.25 bash -c \
 		"go install github.com/dennwc/flatpak-go-mod@latest && \
 		flatpak-go-mod . && \
 		mv go.mod.yml flatpak/go-sources.yml && \
