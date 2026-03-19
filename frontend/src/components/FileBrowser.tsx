@@ -1045,7 +1045,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
       </Dialog>
 
       {/* Restart xochitl confirmation dialog */}
-      <Dialog open={restartXochitlDialog !== null} onOpenChange={(open) => !open && setRestartXochitlDialog(null)} priority>
+      <Dialog open={restartXochitlDialog !== null} onOpenChange={(open) => !open && setRestartXochitlDialog(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Restart Required</DialogTitle>

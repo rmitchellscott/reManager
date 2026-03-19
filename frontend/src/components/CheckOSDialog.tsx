@@ -13,7 +13,6 @@ interface CheckOSDialogProps {
   isConnected: boolean
   onSelectPackage: (name: string, targetOS: string, isCompatible: boolean) => void
   initialVersion?: string
-  priority?: boolean
 }
 
 interface CompatibilityResult {
@@ -29,7 +28,6 @@ export function CheckOSDialog({
   isConnected,
   onSelectPackage,
   initialVersion,
-  priority: priorityProp,
 }: CheckOSDialogProps) {
   const [targetVersion, setTargetVersion] = useState('')
   const [loading, setLoading] = useState(false)
@@ -96,7 +94,7 @@ export function CheckOSDialog({
   const incompatiblePackages = result?.incompatible ?? []
 
   return (
-    <Dialog open={open} onOpenChange={handleClose} lowPriority={!priorityProp} priority={priorityProp}>
+    <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Check OS Compatibility</DialogTitle>

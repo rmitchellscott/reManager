@@ -3357,7 +3357,7 @@ export default function App() {
           setDialogRequest(null)
           window.go.main.App.RespondToDialog(false)
         }
-      }} priority>
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">

@@ -486,7 +486,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
       </Dialog>
 
       {/* Switch boot confirmation */}
-      <Dialog open={showSwitchConfirm} onOpenChange={setShowSwitchConfirm} priority>
+      <Dialog open={showSwitchConfirm} onOpenChange={setShowSwitchConfirm}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="text-base">Switch boot partition?</DialogTitle>
@@ -522,7 +522,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
       </Dialog>
 
       {/* Install confirmation */}
-      <Dialog open={showInstallConfirm} onOpenChange={setShowInstallConfirm} priority>
+      <Dialog open={showInstallConfirm} onOpenChange={setShowInstallConfirm}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="text-base">Install version {selectedVersion}?</DialogTitle>
@@ -541,7 +541,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
       </Dialog>
 
       {/* Incompatibility warning */}
-      <Dialog open={showIncompatWarning} onOpenChange={setShowIncompatWarning} priority>
+      <Dialog open={showIncompatWarning} onOpenChange={setShowIncompatWarning}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
@@ -572,7 +572,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
       </Dialog>
 
       {/* Install progress */}
-      <Dialog open={showInstallProgress} onOpenChange={() => {}} closable={false} priority>
+      <Dialog open={showInstallProgress} onOpenChange={() => {}} closable={false}>
         <DialogContent className="sm:min-w-[420px]">
           <DialogHeader>
             <DialogTitle className="text-base">Installing {selectedVersion}</DialogTitle>
@@ -606,7 +606,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
       </Dialog>
 
       {/* Install complete */}
-      <Dialog open={showInstallComplete} onOpenChange={setShowInstallComplete} priority>
+      <Dialog open={showInstallComplete} onOpenChange={setShowInstallComplete}>
         <DialogContent className="text-center">
           <div className="w-12 h-12 rounded-full bg-muted inline-flex items-center justify-center mx-auto mb-3">
             <Check className="h-6 w-6" />
@@ -625,7 +625,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
       </Dialog>
 
       {/* Reboot confirmation */}
-      <Dialog open={showRebootConfirm} onOpenChange={setShowRebootConfirm} priority>
+      <Dialog open={showRebootConfirm} onOpenChange={setShowRebootConfirm}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="text-base">Reboot device?</DialogTitle>
@@ -639,7 +639,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
       </Dialog>
 
       {/* Install error */}
-      <Dialog open={showInstallError} onOpenChange={setShowInstallError} priority>
+      <Dialog open={showInstallError} onOpenChange={setShowInstallError}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
@@ -665,7 +665,6 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
         isConnected={isConnected}
         onSelectPackage={onSelectPackageForOS}
         initialVersion={checkOSVersion ?? undefined}
-        priority
       />
     </>
   )
