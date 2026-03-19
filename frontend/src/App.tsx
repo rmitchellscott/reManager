@@ -51,6 +51,7 @@ interface PackageInfo {
   osMin: string | null
   osMax: string | null
   osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
+  compatible: boolean
 }
 
 interface MaintenanceCommandInfo {
@@ -518,34 +519,10 @@ export default function App() {
     return editorTheme === 'dark' ? 'dark' : 'light'
   }, [editorTheme, resolvedAppTheme])
 
-  const compareVersions = (a: string, b: string): number => {
-    const aParts = a.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
-    const bParts = b.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
-    const maxLen = Math.max(aParts.length, bParts.length)
-    for (let i = 0; i < maxLen; i++) {
-      const aNum = aParts[i] || 0
-      const bNum = bParts[i] || 0
-      if (aNum > bNum) return 1
-      if (aNum < bNum) return -1
-    }
-    return 0
-  }
-
-  const isPackageCompatible = (pkg: PackageInfo, osVersion: string): boolean => {
-    if (!osVersion) return true
-    if (pkg.osMin && compareVersions(osVersion, pkg.osMin) < 0) return false
-    if (pkg.osMax && compareVersions(osVersion, pkg.osMax) >= 0) return false
-    return true
-  }
-
   const filteredPackages = useMemo(() => {
-    const firmware = deviceInfo.firmware || ''
     return [...packages]
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
       .filter(pkg => {
-        if (!isPackageCompatible(pkg, firmware)) {
-          return false
-        }
         if (search && !pkg.name.toLowerCase().includes(search.toLowerCase()) &&
             !pkg.description.toLowerCase().includes(search.toLowerCase())) {
           return false
@@ -558,17 +535,20 @@ export default function App() {
         }
         return true
       })
-  }, [packages, search, categoryFilter, developerFilter, deviceInfo.firmware])
+  }, [packages, search, categoryFilter, developerFilter])
 
   const installedFiltered = useMemo(() =>
     filteredPackages.filter(pkg => installedPackages.has(pkg.name)),
     [filteredPackages, installedPackages]
   )
 
-  const availableFiltered = useMemo(() =>
-    filteredPackages.filter(pkg => !installedPackages.has(pkg.name)),
-    [filteredPackages, installedPackages]
-  )
+  const availableFiltered = useMemo(() => {
+    const available = filteredPackages.filter(pkg => !installedPackages.has(pkg.name))
+    return available.sort((a, b) => {
+      if (a.compatible !== b.compatible) return a.compatible ? -1 : 1
+      return 0
+    })
+  }, [filteredPackages, installedPackages])
 
   useEffect(() => {
     if (selectedPackage) {
@@ -2570,20 +2550,22 @@ export default function App() {
                                 const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
                                 const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
                                 return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
-                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
+                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(!pkg.compatible); setSelectedPackage(pkg) }}
                                   >
                                     {viewMode === 'compact' ? (
                                       <div className="flex items-center gap-2">
                                         <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
+                                        {!pkg.compatible && <AlertTriangle className="h-3 w-3 text-yellow-500 shrink-0" />}
                                         <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
                                       </div>
                                     ) : (
                                       <>
                                         <div className="flex items-center gap-2">
                                           <span className="font-medium">{pkg.name}</span>
+                                          {!pkg.compatible && <AlertTriangle className="h-3 w-3 text-yellow-500" />}
                                           {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
                                         </div>
                                         <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
@@ -2631,7 +2613,7 @@ export default function App() {
                       <Accordion type="single" collapsible defaultValue="available">
                         <AccordionItem value="available" className="border-none">
                           <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
-                            Available ({availableFiltered.length})
+                            Available ({availableFiltered.filter(p => p.compatible).length}{availableFiltered.some(p => !p.compatible) && ` · ${availableFiltered.filter(p => !p.compatible).length} incompatible`})
                           </AccordionTrigger>
                           <AccordionContent>
                             <div className="divide-y px-6 pb-4">
@@ -2641,10 +2623,10 @@ export default function App() {
                                 const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
                                 const conflict = getConflict(pkg)
                                 return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
-                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
+                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(!pkg.compatible); setSelectedPackage(pkg) }}
                                   >
                                     {viewMode === 'compact' ? (
                                       <div className="flex items-center gap-2">
@@ -2666,7 +2648,22 @@ export default function App() {
                                       </>
                                     )}
                                   </div>
-                                  {isQueued ? (
+                                  {!pkg.compatible ? (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled
+                                          >
+                                            Incompatible
+                                          </Button>
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Does not support your current OS</TooltipContent>
+                                    </Tooltip>
+                                  ) : isQueued ? (
                                     <Button
                                       variant="outline"
                                       size="sm"
@@ -3348,80 +3345,6 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Hook Dialog (e.g., Rebuild Qt Resources) */}
-      <Dialog open={showRebuildDialog} onOpenChange={(open) => {
-        setShowRebuildDialog(open)
-        if (!open && !dialogRespondedRef.current) {
-          dialogRespondedRef.current = true
-          manuallyStoppedRef.current = true
-          setDialogRequest(null)
-          window.go.main.App.RespondToDialog(false)
-        }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              {dialogRequest?.infoOnly
-                ? <Info className="h-5 w-5 text-blue-500" />
-                : <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              }
-              {dialogRequest?.title || 'Confirmation Required'}
-            </DialogTitle>
-            <DialogDescription>
-              <div className="space-y-4 pt-4">
-                <p>{dialogRequest?.message}</p>
-                {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
-                  <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
-                    {dialogRequest.steps.map((step, idx) => (
-                      <li key={idx}>{step}</li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            {dialogRequest?.infoOnly ? (
-              <Button
-                onClick={() => {
-                  dialogRespondedRef.current = true
-                  setShowRebuildDialog(false)
-                  setDialogRequest(null)
-                  window.go.main.App.RespondToDialog(true)
-                }}
-              >
-                {dialogRequest?.confirmText || 'Got it'}
-              </Button>
-            ) : (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    dialogRespondedRef.current = true
-                    manuallyStoppedRef.current = true
-                    setShowRebuildDialog(false)
-                    setDialogRequest(null)
-                    window.go.main.App.RespondToDialog(false)
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => {
-                    dialogRespondedRef.current = true
-                    setShowRebuildDialog(false)
-                    setDialogRequest(null)
-                    window.go.main.App.RespondToDialog(true)
-                  }}
-                >
-                  {dialogRequest?.confirmText || 'Proceed'}
-                </Button>
-              </>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Progress Modal */}
       <Dialog
         open={showProgressModal || pendingInstallConfirm !== null || pendingUninstallConfirm !== null}
@@ -3610,6 +3533,80 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
+      {/* Hook Dialog (e.g., Rebuild Qt Resources) — must render after Progress Modal so it layers on top */}
+      <Dialog open={showRebuildDialog} onOpenChange={(open) => {
+        setShowRebuildDialog(open)
+        if (!open && !dialogRespondedRef.current) {
+          dialogRespondedRef.current = true
+          manuallyStoppedRef.current = true
+          setDialogRequest(null)
+          window.go.main.App.RespondToDialog(false)
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {dialogRequest?.infoOnly
+                ? <Info className="h-5 w-5 text-blue-500" />
+                : <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              }
+              {dialogRequest?.title || 'Confirmation Required'}
+            </DialogTitle>
+            <DialogDescription>
+              <div className="space-y-4 pt-4">
+                <p>{dialogRequest?.message}</p>
+                {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
+                  <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
+                    {dialogRequest.steps.map((step, idx) => (
+                      <li key={idx}>{step}</li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            {dialogRequest?.infoOnly ? (
+              <Button
+                onClick={() => {
+                  dialogRespondedRef.current = true
+                  setShowRebuildDialog(false)
+                  setDialogRequest(null)
+                  window.go.main.App.RespondToDialog(true)
+                }}
+              >
+                {dialogRequest?.confirmText || 'Got it'}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    dialogRespondedRef.current = true
+                    manuallyStoppedRef.current = true
+                    setShowRebuildDialog(false)
+                    setDialogRequest(null)
+                    window.go.main.App.RespondToDialog(false)
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    dialogRespondedRef.current = true
+                    setShowRebuildDialog(false)
+                    setDialogRequest(null)
+                    window.go.main.App.RespondToDialog(true)
+                  }}
+                >
+                  {dialogRequest?.confirmText || 'Proceed'}
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Remove Confirmation Dialog */}
       <Dialog open={deviceToDelete !== null} onOpenChange={(open) => !open && setDeviceToDelete(null)}>
         <DialogContent>
@@ -3701,9 +3698,10 @@ export default function App() {
                   setSelectedPackage(pkg)
                 }
               }}
+              allPackages={packages}
               firmware={deviceInfo.firmware || ''}
               conflict={getConflict(selectedPackage)}
-              isOsCompatible={isPackageCompatible(selectedPackage, deviceInfo.firmware || '')}
+              isOsCompatible={selectedPackage.compatible}
               viewOnly={sidebarViewOnly}
               showIncompatible={sidebarIncompatible}
             />

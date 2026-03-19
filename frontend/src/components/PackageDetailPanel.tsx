@@ -22,6 +22,7 @@ interface PackageInfo {
   osMin: string | null
   osMax: string | null
   osConstraints: OSConstraint[] | null
+  compatible: boolean
 }
 
 interface PackageDetailPanelProps {
@@ -35,6 +36,7 @@ interface PackageDetailPanelProps {
   queueType: 'install' | 'uninstall' | null
   disabled: boolean
   onSelectPackage: (name: string) => void
+  allPackages?: PackageInfo[]
   firmware?: string
   conflict?: string | null
   isOsCompatible?: boolean
@@ -60,17 +62,18 @@ export function PackageDetailPanel({
   queueType,
   disabled,
   onSelectPackage,
+  allPackages = [],
   firmware,
   conflict,
   isOsCompatible = true,
   viewOnly = false,
   showIncompatible = false,
 }: PackageDetailPanelProps) {
-  const formatOsRange = () => {
-    if (pkg.osConstraints && pkg.osConstraints.length > 0) {
-      const minC = pkg.osConstraints.find(c => c.operator === '>=')
-      const maxC = pkg.osConstraints.find(c => c.operator === '<')
-      const exactC = pkg.osConstraints.find(c => c.operator === '=')
+  const formatOsRangeFor = (p: PackageInfo) => {
+    if (p.osConstraints && p.osConstraints.length > 0) {
+      const minC = p.osConstraints.find(c => c.operator === '>=')
+      const maxC = p.osConstraints.find(c => c.operator === '<')
+      const exactC = p.osConstraints.find(c => c.operator === '=')
 
       if (exactC) return exactC.version
 
@@ -86,27 +89,27 @@ export function PackageDetailPanel({
       }
     }
 
-    if (!pkg.osMin && !pkg.osMax) return null
-    if (pkg.osMin && pkg.osMax) {
-      const maxInclusive = (parseFloat(pkg.osMax) - 0.01).toFixed(2)
-      return pkg.osMin === maxInclusive ? pkg.osMin : `${pkg.osMin} – ${maxInclusive}`
+    if (!p.osMin && !p.osMax) return null
+    if (p.osMin && p.osMax) {
+      const maxInclusive = (parseFloat(p.osMax) - 0.01).toFixed(2)
+      return p.osMin === maxInclusive ? p.osMin : `${p.osMin} – ${maxInclusive}`
     }
-    if (pkg.osMin) return `${pkg.osMin}+`
-    if (pkg.osMax) {
-      const maxInclusive = (parseFloat(pkg.osMax) - 0.01).toFixed(2)
+    if (p.osMin) return `${p.osMin}+`
+    if (p.osMax) {
+      const maxInclusive = (parseFloat(p.osMax) - 0.01).toFixed(2)
       return `≤ ${maxInclusive}`
     }
     return null
   }
 
-  const osRange = formatOsRange()
+  const osRange = formatOsRangeFor(pkg)
 
   return (
     <div className="flex flex-col h-full">
       <SheetHeader className="pb-4">
         <SheetTitle className="text-xl pr-8 flex items-center gap-2">
           {pkg.name}
-          {showIncompatible ? (
+          {showIncompatible && isInstalled ? (
             <X className="h-5 w-5 text-destructive" />
           ) : isInstalled ? (
             <Check className="h-5 w-5 text-green-600" />
@@ -118,12 +121,12 @@ export function PackageDetailPanel({
       <div className="flex-1 overflow-y-auto">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
           <dt className="text-muted-foreground">Version</dt>
-          <dd className={`font-medium ${showIncompatible ? 'text-destructive' : ''}`}>
+          <dd className="font-medium">
             {viewOnly && installedVersion && installedVersion !== pkg.version ? (
               <span className="flex items-center gap-2">
                 <span className="text-muted-foreground">{installedVersion}</span>
                 <ArrowRight className="h-3 w-3" />
-                <span className={showIncompatible ? 'text-destructive' : 'text-green-600'}>{pkg.version}</span>
+                <span className="text-green-600">{pkg.version}</span>
               </span>
             ) : (
               isInstalled && installedVersion ? installedVersion : pkg.version
@@ -181,7 +184,7 @@ export function PackageDetailPanel({
           {osRange && (
             <>
               <dt className="text-muted-foreground">OS Version</dt>
-              <dd>{osRange}</dd>
+              <dd className={showIncompatible || !pkg.compatible ? 'text-destructive' : ''}>{osRange}</dd>
             </>
           )}
 
@@ -192,15 +195,23 @@ export function PackageDetailPanel({
                 <ul className="space-y-1">
                   {pkg.depends.map((dep) => {
                     const depInstalled = installedPackages.has(dep)
+                    const depPkg = allPackages.find(p => p.name === dep)
+                    const depOsRange = depPkg ? formatOsRangeFor(depPkg) : null
+                    const depIncompatible = depPkg && !depPkg.compatible
                     return (
                       <li key={dep} className="flex items-center gap-2">
                         <button
                           onClick={() => onSelectPackage(dep)}
-                          className="text-primary hover:underline text-left"
+                          className={`hover:underline text-left ${depIncompatible ? 'text-destructive' : 'text-primary'}`}
                         >
                           {dep}
                         </button>
-                        {!depInstalled && !isInstalled && (
+                        {depOsRange && (
+                          <span className={`text-xs ${depIncompatible ? 'text-destructive' : 'text-muted-foreground'}`}>
+                            (OS {depOsRange})
+                          </span>
+                        )}
+                        {!depInstalled && !isInstalled && !depIncompatible && (
                           <span className="text-xs text-muted-foreground">(will be installed)</span>
                         )}
                         {depInstalled && (

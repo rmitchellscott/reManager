@@ -1823,6 +1823,7 @@ type PackageInfo struct {
 	OSMin          *string               `json:"osMin"`
 	OSMax          *string               `json:"osMax"`
 	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
+	Compatible     bool                  `json:"compatible"`
 }
 
 var hiddenPackages = map[string]bool{
@@ -1875,6 +1876,7 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 			OSMin:          pkg.OSMin,
 			OSMax:          pkg.OSMax,
 			OSConstraints:  pkg.OSConstraints,
+			Compatible:     pkg.Compatible,
 		})
 	}
 
