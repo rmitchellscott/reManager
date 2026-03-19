@@ -55,6 +55,7 @@ type Generator struct {
 	UpdateService     *UpdateServiceStatus
 	Hashtab           *HashtabInfo
 	Timezone          string
+	PartitionInfo     any
 }
 
 func GenerateBundleID() string {
@@ -119,6 +120,15 @@ func (g *Generator) GenerateToBuffer(bundleID string) ([]byte, error) {
 	if g.Hashtab != nil {
 		data, _ := json.MarshalIndent(g.Hashtab, "", "  ")
 		if err := writeEntry(tw, "support-bundle/device/hashtab.json", data); err != nil {
+			tw.Close()
+			gzw.Close()
+			return nil, err
+		}
+	}
+
+	if g.PartitionInfo != nil {
+		data, _ := json.MarshalIndent(g.PartitionInfo, "", "  ")
+		if err := writeEntry(tw, "support-bundle/device/partition_info.json", data); err != nil {
 			tw.Close()
 			gzw.Close()
 			return nil, err
@@ -259,7 +269,7 @@ type SupportBundlePreview struct {
 func GetPreview() SupportBundlePreview {
 	return SupportBundlePreview{
 		Included: []string{
-			"Device name, type, and OS version",
+			"Device name, type, OS version, and partition info",
 			"Device timezone",
 			"Auto-update service status",
 			"Hashtab version",

@@ -447,6 +447,13 @@
     },
     {
         "type": "file",
+        "url": "https://registry.npmjs.org/@radix-ui/react-checkbox/-/react-checkbox-1.3.3.tgz",
+        "sha512": "c016e9bfe3507ed1c3746f3a41cd292325e4e48477b4cf157749d62ca0dc5fc9cd9f89d714e170b0abaac36a2403fd43fe6a5a0249aeca776b3c94d80cd66d17",
+        "dest-filename": "e9bfe3507ed1c3746f3a41cd292325e4e48477b4cf157749d62ca0dc5fc9cd9f89d714e170b0abaac36a2403fd43fe6a5a0249aeca776b3c94d80cd66d17",
+        "dest": "flatpak-node/npm-cache/_cacache/content-v2/sha512/c0/16"
+    },
+    {
+        "type": "file",
         "url": "https://registry.npmjs.org/@radix-ui/react-collapsible/-/react-collapsible-1.1.12.tgz",
         "sha512": "52efa64a1e1a831da26f5b8818f3f8fc228d50bc9a8dbde9f762ec557987d841d53137d95a9965f3c5c9d23e16d33ddff0d2b5798975f8c7ffb331cf99c1f3c8",
         "dest-filename": "a64a1e1a831da26f5b8818f3f8fc228d50bc9a8dbde9f762ec557987d841d53137d95a9965f3c5c9d23e16d33ddff0d2b5798975f8c7ffb331cf99c1f3c8",
@@ -1932,6 +1939,12 @@
         "contents": "49deeda9e027566e4f2466a43b5cbbce97376963\t{\"key\": \"make-fetch-happen:request-cache:https://registry.npmjs.org/state-local/-/state-local-1.0.7.tgz\", \"integrity\": \"sha512-HTEHMNieakEnoe33shBYcZ7NX83ACUjCu8c40iOGEZsngj9zRnkqS9j1pqQPXwobB0ZcVTk27REb7COQ0UR59w==\", \"time\": 0, \"size\": 8761, \"metadata\": {\"url\": \"https://registry.npmjs.org/state-local/-/state-local-1.0.7.tgz\", \"reqHeaders\": {}, \"resHeaders\": {}}}",
         "dest-filename": "86257fc96ff01e62071b95d5e08eab4763df48ea3e44cf84fad5845babf3",
         "dest": "flatpak-node/npm-cache/_cacache/index-v5/25/ed"
+    },
+    {
+        "type": "inline",
+        "contents": "4a964520721b239aa61d330b2b320cb96eb235df\t{\"key\": \"make-fetch-happen:request-cache:https://registry.npmjs.org/@radix-ui/react-checkbox/-/react-checkbox-1.3.3.tgz\", \"integrity\": \"sha512-wBbpv+NQftHDdG86Qc0pIyXk5IR3tM8Vd0nWLKDcX8nNn4nXFOFwsKuqw2okA/1D/mpaAkmuyndrPJTYDNZtFw==\", \"time\": 0, \"size\": 10744, \"metadata\": {\"url\": \"https://registry.npmjs.org/@radix-ui/react-checkbox/-/react-checkbox-1.3.3.tgz\", \"reqHeaders\": {}, \"resHeaders\": {}}}",
+        "dest-filename": "61ef4c73c2a4a1a021b2b9d9d54cd0acbea9f5e44cebff230278f27bd92a",
+        "dest": "flatpak-node/npm-cache/_cacache/index-v5/d4/a2"
     },
     {
         "type": "inline",

@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { Skeleton } from '@/components/ui/skeleton'
 import { ProgressModal } from '@/components/ProgressModal'
 import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { ConsolidatedWarningBanner } from '@/components/ConsolidatedWarningBanner'
@@ -29,6 +30,8 @@ import { CheckOSDialog } from '@/components/CheckOSDialog'
 import { SupportBundlePage } from '@/components/SupportBundlePage'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
+import { ImportPDFDialog } from '@/components/ImportPDFDialog'
+import { SoftwareManagerDialog } from '@/components/SoftwareManagerDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
@@ -48,6 +51,7 @@ interface PackageInfo {
   osMin: string | null
   osMax: string | null
   osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
+  compatible: boolean
 }
 
 interface MaintenanceCommandInfo {
@@ -229,7 +233,14 @@ declare global {
           ReadConfigFile(): Promise<string>
           WriteConfigFile(content: string): Promise<void>
           BackupConfigFile(): Promise<string>
-          ListConfigBackups(): Promise<Array<{name: string; timestamp: number; size: number}>>
+          SelectPDFFile(): Promise<string>
+          SelectPDFFiles(): Promise<string[]>
+          SelectImportFiles(): Promise<string[]>
+          GetPDFFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number }>
+          GetImportFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number; fileType: string; visibleName: string }>
+          ImportPDFFromPath(localPath: string, visibleName: string, restartXochitl: boolean, pageCountOverride: number, coverPageNumber: number | null): Promise<void>
+          ImportRmdocFromPath(localPath: string, visibleName: string, restartXochitl: boolean): Promise<void>
+          ListConfigBackups(): Promise<Array<{ name: string; timestamp: number; size: number }>>
           RestoreConfigBackup(backupName: string): Promise<void>
           SelectBackupFile(): Promise<string>
           CreateDeviceBackup(destPath: string): void
@@ -239,6 +250,21 @@ declare global {
           RevealInFileManager(path: string): void
           RetryRestoreFilesystem(): Promise<void>
           RebootDevice(): Promise<void>
+          GetPartitionInfo(): Promise<{
+            active: { number: number; version: string; label: string; isActive: boolean; isNextBoot: boolean }
+            fallback: { number: number; version: string; label: string; isActive: boolean; isNextBoot: boolean }
+            deviceType: string
+            encrypted: boolean
+            updatePending: boolean
+          }>
+          SwitchBootPartition(partitionNumber: number): Promise<{
+            success: boolean; method: string; previousBoot: number; newBoot: number; message: string
+          }>
+          GetAvailableOSVersions(): Promise<{
+            version: string; isLatest: boolean; isInstalled: boolean; filename: string; size: number
+          }[]>
+          InstallOSVersion(version: string): void
+          CancelOSInstall(): void
           IsSleepScreenSupported(): Promise<boolean>
           SetSleepScreen(imagePath: string): Promise<void>
           RestartXochitl(): Promise<void>
@@ -282,6 +308,7 @@ export default function App() {
   const [installedPackages, setInstalledPackages] = useState<Map<string, string>>(new Map())
   const [refreshingPackages, setRefreshingPackages] = useState(false)
   const [vellumInstalled, setVellumInstalled] = useState<boolean | null>(null)
+  const [warningsChecked, setWarningsChecked] = useState(false)
   const [bootstrapping, setBootstrapping] = useState(false)
   const [bootstrapOutput, setBootstrapOutput] = useState('')
   const [bootstrapError, setBootstrapError] = useState<string | null>(null)
@@ -330,6 +357,8 @@ export default function App() {
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [showSupportBundles, setShowSupportBundles] = useState(false)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
+  const [showImportPDF, setShowImportPDF] = useState(false)
+  const [showSoftwareManager, setShowSoftwareManager] = useState(false)
   const [showConfigEditor, setShowConfigEditor] = useState(false)
   const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
   const [isTerminalRunning, setIsTerminalRunning] = useState(false)
@@ -490,34 +519,10 @@ export default function App() {
     return editorTheme === 'dark' ? 'dark' : 'light'
   }, [editorTheme, resolvedAppTheme])
 
-  const compareVersions = (a: string, b: string): number => {
-    const aParts = a.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
-    const bParts = b.split('.').map(p => parseInt(p.split('-')[0], 10) || 0)
-    const maxLen = Math.max(aParts.length, bParts.length)
-    for (let i = 0; i < maxLen; i++) {
-      const aNum = aParts[i] || 0
-      const bNum = bParts[i] || 0
-      if (aNum > bNum) return 1
-      if (aNum < bNum) return -1
-    }
-    return 0
-  }
-
-  const isPackageCompatible = (pkg: PackageInfo, osVersion: string): boolean => {
-    if (!osVersion) return true
-    if (pkg.osMin && compareVersions(osVersion, pkg.osMin) < 0) return false
-    if (pkg.osMax && compareVersions(osVersion, pkg.osMax) >= 0) return false
-    return true
-  }
-
   const filteredPackages = useMemo(() => {
-    const firmware = deviceInfo.firmware || ''
     return [...packages]
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
       .filter(pkg => {
-        if (!isPackageCompatible(pkg, firmware)) {
-          return false
-        }
         if (search && !pkg.name.toLowerCase().includes(search.toLowerCase()) &&
             !pkg.description.toLowerCase().includes(search.toLowerCase())) {
           return false
@@ -530,17 +535,20 @@ export default function App() {
         }
         return true
       })
-  }, [packages, search, categoryFilter, developerFilter, deviceInfo.firmware])
+  }, [packages, search, categoryFilter, developerFilter])
 
   const installedFiltered = useMemo(() =>
     filteredPackages.filter(pkg => installedPackages.has(pkg.name)),
     [filteredPackages, installedPackages]
   )
 
-  const availableFiltered = useMemo(() =>
-    filteredPackages.filter(pkg => !installedPackages.has(pkg.name)),
-    [filteredPackages, installedPackages]
-  )
+  const availableFiltered = useMemo(() => {
+    const available = filteredPackages.filter(pkg => !installedPackages.has(pkg.name))
+    return available.sort((a, b) => {
+      if (a.compatible !== b.compatible) return a.compatible ? -1 : 1
+      return 0
+    })
+  }, [filteredPackages, installedPackages])
 
   useEffect(() => {
     if (selectedPackage) {
@@ -689,6 +697,72 @@ export default function App() {
     }
   }
 
+  const resetOperationState = () => {
+    setInstallQueue(new Set())
+    setUninstallQueue(new Set())
+    setOutput('')
+    setHashtabMismatch(null)
+    setOsMismatchDetected(false)
+    osMismatchDetectedRef.current = false
+    setOsUpgradeDetected(false)
+    setCompatibilityStatus(null)
+    setStoredOsVersion('')
+    setCurrentOsVersion('')
+    setChecklistLoading(false)
+    setWarningsChecked(false)
+    setBootstrapping(false)
+    setBootstrapOutput('')
+    setBootstrapError(null)
+    setVellumUninstalling(false)
+    setVellumUninstallOutput('')
+    setVellumBrokenInstall(null)
+    setVellumCleaning(false)
+    setConnectionError(null)
+    setReconnectAttempt(0)
+    setShowFileBrowser(false)
+    setShowConfigEditor(false)
+    setWriteableRootBusy(false)
+    setUpgradesAvailable(false)
+    setSettingTimezone(false)
+    settingTimezoneRef.current = false
+    setCommandRunning(false)
+    runningSystemTaskRef.current = null
+    setRunningSystemTask(null)
+    setInstalling(false)
+    setUninstalling(false)
+    setRunningReenable(false)
+    setSimulatingUpgrade(false)
+  }
+
+  const refreshDeviceState = async (deviceType: string) => {
+    const info = await window.go.main.App.GetDeviceInfo()
+    setDeviceInfo(info)
+
+    const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
+    const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
+    setPackages(filteredPkgs || [])
+
+    const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
+    debugLog('refreshDeviceState: GetInstalledPackagesWithOsCheck result:', installedResult)
+    const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
+    setInstalledPackages(new Map(Object.entries(installedVersions || {})))
+    if (installedResult.osUpgraded) {
+      debugLog('refreshDeviceState: osUpgradeDetected=true', installedResult.prevVersion, '->', installedResult.newVersion)
+      setOsUpgradeDetected(true)
+      setPrevOsVersion(installedResult.prevVersion)
+      setNewOsVersion(installedResult.newVersion)
+    }
+
+    const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
+    for (const pkg of filteredPkgs) {
+      const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
+      if (cmds && cmds.length > 0) {
+        maintCmds[pkg.name] = cmds
+      }
+    }
+    setMaintenanceCommands(maintCmds)
+  }
+
   const handleConnectToSavedDevice = async (id: string) => {
     const thisAttempt = ++connectAttemptRef.current
     setConnecting(true)
@@ -701,34 +775,9 @@ export default function App() {
 
       if (result.success) {
         setConnectedDeviceId(id)
-        const info = await window.go.main.App.GetDeviceInfo()
         const deviceType = result.device || 'unknown'
         setDevice(deviceType)
-        setDeviceInfo(info)
-
-        const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
-        const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
-        setPackages(filteredPkgs || [])
-
-        debugLog('[DEBUG] handleConnectToSavedDevice: calling GetInstalledPackagesWithOsCheck')
-        const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
-        debugLog('[DEBUG] handleConnectToSavedDevice: result =', installedResult)
-        const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
-        setInstalledPackages(new Map(Object.entries(installedVersions || {})))
-        if (installedResult.osUpgraded) {
-          setOsUpgradeDetected(true)
-          setPrevOsVersion(installedResult.prevVersion)
-          setNewOsVersion(installedResult.newVersion)
-        }
-
-        const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-        for (const pkg of filteredPkgs) {
-          const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
-          if (cmds && cmds.length > 0) {
-            maintCmds[pkg.name] = cmds
-          }
-        }
-        setMaintenanceCommands(maintCmds)
+        await refreshDeviceState(deviceType)
         setStep('select')
       } else {
         toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
@@ -1076,27 +1125,49 @@ export default function App() {
       setVellumCleaning(false)
     })
 
-    const unsubscribeHashtabMismatch = window.runtime.EventsOn('hashtab:version-mismatch', (...args: unknown[]) => {
-      const status = args[0] as HashtabVersionStatus
-      debugLog('Received hashtab:version-mismatch:', status)
-      setHashtabMismatch(status)
-    })
-
-    const unsubscribeTimezoneStatus = window.runtime.EventsOn('timezone:status', (...args: unknown[]) => {
-      const status = args[0] as TimezoneStatus
-      debugLog('Received timezone:status:', status)
-      if (status.deviceTimezone) {
-        setDeviceTimezone(status.deviceTimezone)
-        setSelectedTimezone(status.savedTimezone || status.deviceTimezone)
+    const unsubscribeConnectWarnings = window.runtime.EventsOn('connect:warnings', (...args: unknown[]) => {
+      const w = args[0] as {
+        osMismatch?: { prevVersion: string; newVersion: string }
+        reenableStatus?: string
+        hashtabMismatch?: HashtabVersionStatus
+        autoUpdateEnabled?: { enabled: boolean; running: boolean }
+        timezoneStatus?: TimezoneStatus
+        timezoneMismatch?: TimezoneStatus
       }
-    })
+      debugLog('Received connect:warnings:', w)
+      setWarningsChecked(true)
 
-    const unsubscribeTimezoneMismatch = window.runtime.EventsOn('timezone:mismatch', (...args: unknown[]) => {
-      const status = args[0] as TimezoneStatus
-      debugLog('Received timezone:mismatch:', status)
-      setTimezoneMismatch(status)
-      setDeviceTimezone(status.deviceTimezone)
-      setSelectedTimezone(status.savedTimezone || status.deviceTimezone)
+      if (w.osMismatch) {
+        debugLog('connect:warnings — setting osMismatchDetected=true', w.osMismatch)
+        setOsMismatchDetected(true)
+        osMismatchDetectedRef.current = true
+        setStoredOsVersion(w.osMismatch.prevVersion)
+        setCurrentOsVersion(w.osMismatch.newVersion)
+      } else {
+        debugLog('connect:warnings — no osMismatch, clearing')
+        setOsMismatchDetected(false)
+        osMismatchDetectedRef.current = false
+      }
+      if (w.reenableStatus) {
+        setReenableStatus(w.reenableStatus)
+      }
+      if (w.hashtabMismatch) {
+        setHashtabMismatch(w.hashtabMismatch)
+      } else {
+        setHashtabMismatch(null)
+      }
+      if (w.autoUpdateEnabled) {
+        setShowAutoUpdateBanner(true)
+      }
+      if (w.timezoneStatus?.deviceTimezone) {
+        setDeviceTimezone(w.timezoneStatus.deviceTimezone)
+        setSelectedTimezone(w.timezoneStatus.savedTimezone || w.timezoneStatus.deviceTimezone)
+      }
+      if (w.timezoneMismatch) {
+        setTimezoneMismatch(w.timezoneMismatch)
+        setDeviceTimezone(w.timezoneMismatch.deviceTimezone)
+        setSelectedTimezone(w.timezoneMismatch.savedTimezone || w.timezoneMismatch.deviceTimezone)
+      }
     })
 
     const unsubscribeTimezoneComplete = window.runtime.EventsOn('timezone:complete', (...args: unknown[]) => {
@@ -1121,19 +1192,6 @@ export default function App() {
       setCommandRunning(false)
     })
 
-    const unsubscribeOsMismatch = window.runtime.EventsOn('os:mismatch', (...args: unknown[]) => {
-      const data = args[0] as { prevVersion: string; newVersion: string }
-      debugLog('Received os:mismatch:', data)
-      setOsMismatchDetected(true)
-      osMismatchDetectedRef.current = true
-      setStoredOsVersion(data.prevVersion)
-      setCurrentOsVersion(data.newVersion)
-    })
-
-    const unsubscribeReenableStatus = window.runtime.EventsOn('reenable:status', (...args: unknown[]) => {
-      debugLog('Received reenable:status:', args[0])
-      setReenableStatus(args[0] as string)
-    })
 
     const unsubscribeUpgradeBlocked = window.runtime.EventsOn('upgrade:blocked', (...args: unknown[]) => {
       const compat = args[0] as {
@@ -1250,14 +1308,11 @@ export default function App() {
       setRunningSystemTask(null)
     })
 
-    const unsubscribeAutoUpdate = window.runtime.EventsOn('autoupdate:enabled', () => {
-      debugLog('Received autoupdate:enabled')
-      setTimeout(() => setShowAutoUpdateBanner(true), 1000)
-    })
 
     const unsubscribeConnectionLost = window.runtime.EventsOn('connection:lost', (...args: unknown[]) => {
       const data = args[0] as { reason: string; code?: string; deviceId: string }
       debugLog('Received connection:lost:', data)
+      resetOperationState()
       setConnectionStatus('lost')
       setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
     })
@@ -1273,43 +1328,21 @@ export default function App() {
     const unsubscribeConnectionRestored = window.runtime.EventsOn('connection:restored', async (...args: unknown[]) => {
       const data = args[0] as { deviceId: string; device: string }
       debugLog('Received connection:restored:', data)
+      resetOperationState()
       setConnectionStatus('connected')
-      setConnectionError(null)
-      setReconnectAttempt(0)
+
+      const deviceType = data.device || device
+      if (data.device) {
+        setDevice(data.device)
+      }
 
       try {
-        const info = await window.go.main.App.GetDeviceInfo()
-        debugLog('Refreshed device info on reconnect:', info)
-        setDeviceInfo(info)
-        if (data.device) {
-          setDevice(data.device)
-        }
+        await refreshDeviceState(deviceType)
       } catch (err) {
         debugLog('Failed to refresh device info on reconnect:', err)
       }
 
       await rescanAllPackages()
-
-      try {
-        const [updateStatus, hashtabStatus, tzStatus] = await Promise.all([
-          window.go.main.App.GetUpdateServiceStatus(),
-          window.go.main.App.CheckHashtabVersion(),
-          window.go.main.App.GetTimezoneStatus(),
-        ])
-        setUpdateServiceStatus(updateStatus)
-        if (hashtabStatus.needsRebuild) {
-          setHashtabMismatch(hashtabStatus)
-        } else {
-          setHashtabMismatch(null)
-        }
-        if (tzStatus.needsUpdate) {
-          setTimezoneMismatch(tzStatus)
-        } else {
-          setTimezoneMismatch(null)
-        }
-      } catch (err) {
-        debugLog('Failed to refresh status on reconnect:', err)
-      }
     })
 
     const unsubscribeConnectionFailed = window.runtime.EventsOn('connection:failed', (...args: unknown[]) => {
@@ -1363,19 +1396,14 @@ export default function App() {
       unsubscribeCleanupStart()
       unsubscribeCleanupComplete()
       unsubscribeCleanupError()
-      unsubscribeHashtabMismatch()
-      unsubscribeTimezoneStatus()
-      unsubscribeTimezoneMismatch()
+      unsubscribeConnectWarnings()
       unsubscribeTimezoneComplete()
       unsubscribeTimezoneError()
-      unsubscribeOsMismatch()
-      unsubscribeReenableStatus()
       unsubscribeUpgradeBlocked()
       unsubscribeUpgradeError()
       unsubscribeUpgradeComplete()
       unsubscribePackageUpgradeComplete()
       unsubscribeSystemTaskComplete()
-      unsubscribeAutoUpdate()
       unsubscribeConnectionLost()
       unsubscribeConnectionReconnecting()
       unsubscribeConnectionRestored()
@@ -1388,8 +1416,10 @@ export default function App() {
 
   useEffect(() => {
     if (osMismatchDetected && !compatibilityStatus) {
+      debugLog('useEffect: osMismatchDetected=true, compatibilityStatus=null — fetching compatibility')
       setChecklistLoading(true)
       window.go.main.App.GetPackageCompatibilityStatus().then(status => {
+        debugLog('useEffect: GetPackageCompatibilityStatus result:', status)
         setCompatibilityStatus(status)
         setChecklistLoading(false)
       }).catch(() => {
@@ -1417,36 +1447,12 @@ export default function App() {
       }
 
       if (result.success) {
-        const info = await window.go.main.App.GetDeviceInfo()
         const deviceType = result.device || 'unknown'
         setDevice(deviceType)
-        setDeviceInfo(info)
-
-        const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
-        const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
-        setPackages(filteredPkgs || [])
-
-        debugLog('[DEBUG] handleConnect: calling GetInstalledPackagesWithOsCheck')
-        const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
-        debugLog('[DEBUG] handleConnect: result =', installedResult)
-        const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
-        setInstalledPackages(new Map(Object.entries(installedVersions || {})))
-        if (installedResult.osUpgraded) {
-          setOsUpgradeDetected(true)
-          setPrevOsVersion(installedResult.prevVersion)
-          setNewOsVersion(installedResult.newVersion)
-        }
-
-        const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
-        for (const pkg of filteredPkgs) {
-          const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
-          if (cmds && cmds.length > 0) {
-            maintCmds[pkg.name] = cmds
-          }
-        }
-        setMaintenanceCommands(maintCmds)
+        await refreshDeviceState(deviceType)
 
         if (saveAfterConnect) {
+          const info = await window.go.main.App.GetDeviceInfo()
           const displayName = getDisplayName(info.machine || '')
           setDeviceName(displayName || host)
           setShowSaveDeviceDialog(true)
@@ -1501,36 +1507,14 @@ export default function App() {
 
   const handleDisconnect = async () => {
     await window.go.main.App.Disconnect()
+    resetOperationState()
+    setDeviceInfo({})
+    setInstalledPackages(new Map())
+    setVellumInstalled(null)
     setStep('connect')
     setDevice('')
     setConnectedDeviceId('')
-    setDeviceInfo({})
-    setInstalledPackages(new Map())
-    setInstallQueue(new Set())
-    setUninstallQueue(new Set())
-    setOutput('')
-    setHashtabMismatch(null)
-    setOsMismatchDetected(false)
-    osMismatchDetectedRef.current = false
-    setOsUpgradeDetected(false)
-    setCompatibilityStatus(null)
-    setStoredOsVersion('')
-    setCurrentOsVersion('')
-    setChecklistLoading(false)
-    setVellumInstalled(null)
-    setBootstrapping(false)
-    setBootstrapOutput('')
-    setBootstrapError(null)
-    setVellumUninstalling(false)
-    setVellumUninstallOutput('')
-    setVellumBrokenInstall(null)
-    setVellumCleaning(false)
-    setConnectionError(null)
     setConnectionStatus('connected')
-    setReconnectAttempt(0)
-    setShowFileBrowser(false)
-    setShowConfigEditor(false)
-    setWriteableRootBusy(false)
 
     const devices = await window.go.main.App.GetSavedDevices()
     setSavedDevices(devices || [])
@@ -2321,7 +2305,7 @@ export default function App() {
         )}
 
         {/* Warning Banner */}
-        {step !== 'connect' && (
+        {step !== 'connect' && warningsChecked && (
           <div className="mb-4">
             <ConsolidatedWarningBanner
               warnings={{
@@ -2337,6 +2321,7 @@ export default function App() {
                 setHashtabMismatch(null)
                 setTimezoneMismatch(null)
                 setShowAutoUpdateBanner(false)
+                setReenableStatus('')
               }}
             />
           </div>
@@ -2353,7 +2338,44 @@ export default function App() {
 
             {tabVisibility.mods && (
             <TabsContent value="mods">
-              {vellumInstalled === null ? null : vellumBrokenInstall !== null ? (
+              {vellumInstalled === null || (vellumInstalled && !warningsChecked) || (osMismatchDetected && !compatibilityStatus) ? (
+                <div className="space-y-6">
+                  <div className="flex flex-wrap gap-2">
+                    <Skeleton className="h-9 flex-1 min-w-[200px]" />
+                    <Skeleton className="h-9 w-9" />
+                    <Skeleton className="h-9 w-32" />
+                    <Skeleton className="h-9 w-32" />
+                  </div>
+                  <Card>
+                    <div className="px-6 py-4">
+                      <Skeleton className="h-4 w-32" />
+                    </div>
+                    <div className="divide-y px-6 pb-4">
+                      {Array.from({ length: 8 }).map((_, i) => (
+                        <div key={i} className="py-3 flex items-center gap-4">
+                          <div className="flex-1 min-w-0">
+                            {viewMode === 'compact' ? (
+                              <div className="flex items-center gap-2">
+                                <Skeleton className="h-4 w-[160px] shrink-0" />
+                                <Skeleton className="h-4 flex-1" />
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <Skeleton className="h-4 w-32" />
+                                  <Skeleton className="h-5 w-16 rounded-full" />
+                                </div>
+                                <Skeleton className="h-4 w-3/4" />
+                              </div>
+                            )}
+                          </div>
+                          <Skeleton className="h-8 w-20 shrink-0" />
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                </div>
+              ) : vellumBrokenInstall !== null ? (
                 <Card>
                   <CardHeader>
                     <div className="flex items-center gap-2">
@@ -2406,6 +2428,7 @@ export default function App() {
                     onAddToUninstallQueue={addToUninstallQueue}
                     onRemoveFromUninstallQueue={removeFromUninstallQueue}
                     onRunUpgrade={handleChecklistUpgrade}
+                    onGoToUtilities={() => setActiveTab('utilities')}
                     onSelectPackage={handleSelectPackageForOS}
                   />
                 </div>
@@ -2500,20 +2523,22 @@ export default function App() {
                                 const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
                                 const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
                                 return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
-                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
+                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(!pkg.compatible); setSelectedPackage(pkg) }}
                                   >
                                     {viewMode === 'compact' ? (
                                       <div className="flex items-center gap-2">
                                         <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
+                                        {!pkg.compatible && <AlertTriangle className="h-3 w-3 text-yellow-500 shrink-0" />}
                                         <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
                                       </div>
                                     ) : (
                                       <>
                                         <div className="flex items-center gap-2">
                                           <span className="font-medium">{pkg.name}</span>
+                                          {!pkg.compatible && <AlertTriangle className="h-3 w-3 text-yellow-500" />}
                                           {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
                                         </div>
                                         <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
@@ -2561,7 +2586,7 @@ export default function App() {
                       <Accordion type="single" collapsible defaultValue="available">
                         <AccordionItem value="available" className="border-none">
                           <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
-                            Available ({availableFiltered.length})
+                            Available ({availableFiltered.filter(p => p.compatible).length}{availableFiltered.some(p => !p.compatible) && ` · ${availableFiltered.filter(p => !p.compatible).length} incompatible`})
                           </AccordionTrigger>
                           <AccordionContent>
                             <div className="divide-y px-6 pb-4">
@@ -2571,10 +2596,10 @@ export default function App() {
                                 const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
                                 const conflict = getConflict(pkg)
                                 return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
-                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
+                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(!pkg.compatible); setSelectedPackage(pkg) }}
                                   >
                                     {viewMode === 'compact' ? (
                                       <div className="flex items-center gap-2">
@@ -2596,7 +2621,22 @@ export default function App() {
                                       </>
                                     )}
                                   </div>
-                                  {isQueued ? (
+                                  {!pkg.compatible ? (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled
+                                          >
+                                            Incompatible
+                                          </Button>
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Does not support your current OS</TooltipContent>
+                                    </Tooltip>
+                                  ) : isQueued ? (
                                     <Button
                                       variant="outline"
                                       size="sm"
@@ -2915,6 +2955,38 @@ export default function App() {
                       </Button>
                     </CardContent>
                   </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Document Import</CardTitle>
+                      <CardDescription>Upload documents to your reMarkable library</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => setShowImportPDF(true)}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Import
+                      </Button>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>OS Manager</CardTitle>
+                      <CardDescription>View, install, and switch OS versions.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => setShowSoftwareManager(true)}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Manage
+                      </Button>
+                    </CardContent>
+                  </Card>
                 </div>
               </TabsContent>
             )}
@@ -3196,6 +3268,20 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
+      <ImportPDFDialog
+        open={showImportPDF}
+        isConnected={connectionStatus === 'connected'}
+        onOpenChange={setShowImportPDF}
+      />
+
+      <SoftwareManagerDialog
+        open={showSoftwareManager}
+        onOpenChange={setShowSoftwareManager}
+        isConnected={connectionStatus === 'connected'}
+        vellumInstalled={vellumInstalled}
+        onSelectPackageForOS={handleSelectPackageForOS}
+      />
+
       {/* Backup & Restore Dialog */}
       <BackupRestoreDialog
         mode={backupDialogMode}
@@ -3228,80 +3314,6 @@ export default function App() {
             <Button onClick={() => confirmOrphanRemoval(true)}>
               Remove All
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Hook Dialog (e.g., Rebuild Qt Resources) */}
-      <Dialog open={showRebuildDialog} onOpenChange={(open) => {
-        setShowRebuildDialog(open)
-        if (!open && !dialogRespondedRef.current) {
-          dialogRespondedRef.current = true
-          manuallyStoppedRef.current = true
-          setDialogRequest(null)
-          window.go.main.App.RespondToDialog(false)
-        }
-      }} priority>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              {dialogRequest?.infoOnly
-                ? <Info className="h-5 w-5 text-blue-500" />
-                : <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              }
-              {dialogRequest?.title || 'Confirmation Required'}
-            </DialogTitle>
-            <DialogDescription>
-              <div className="space-y-4 pt-4">
-                <p>{dialogRequest?.message}</p>
-                {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
-                  <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
-                    {dialogRequest.steps.map((step, idx) => (
-                      <li key={idx}>{step}</li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            {dialogRequest?.infoOnly ? (
-              <Button
-                onClick={() => {
-                  dialogRespondedRef.current = true
-                  setShowRebuildDialog(false)
-                  setDialogRequest(null)
-                  window.go.main.App.RespondToDialog(true)
-                }}
-              >
-                {dialogRequest?.confirmText || 'Got it'}
-              </Button>
-            ) : (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    dialogRespondedRef.current = true
-                    manuallyStoppedRef.current = true
-                    setShowRebuildDialog(false)
-                    setDialogRequest(null)
-                    window.go.main.App.RespondToDialog(false)
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => {
-                    dialogRespondedRef.current = true
-                    setShowRebuildDialog(false)
-                    setDialogRequest(null)
-                    window.go.main.App.RespondToDialog(true)
-                  }}
-                >
-                  {dialogRequest?.confirmText || 'Proceed'}
-                </Button>
-              </>
-            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -3494,6 +3506,80 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
+      {/* Hook Dialog (e.g., Rebuild Qt Resources) — must render after Progress Modal so it layers on top */}
+      <Dialog open={showRebuildDialog} onOpenChange={(open) => {
+        setShowRebuildDialog(open)
+        if (!open && !dialogRespondedRef.current) {
+          dialogRespondedRef.current = true
+          manuallyStoppedRef.current = true
+          setDialogRequest(null)
+          window.go.main.App.RespondToDialog(false)
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {dialogRequest?.infoOnly
+                ? <Info className="h-5 w-5 text-blue-500" />
+                : <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              }
+              {dialogRequest?.title || 'Confirmation Required'}
+            </DialogTitle>
+            <DialogDescription>
+              <div className="space-y-4 pt-4">
+                <p>{dialogRequest?.message}</p>
+                {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
+                  <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
+                    {dialogRequest.steps.map((step, idx) => (
+                      <li key={idx}>{step}</li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            {dialogRequest?.infoOnly ? (
+              <Button
+                onClick={() => {
+                  dialogRespondedRef.current = true
+                  setShowRebuildDialog(false)
+                  setDialogRequest(null)
+                  window.go.main.App.RespondToDialog(true)
+                }}
+              >
+                {dialogRequest?.confirmText || 'Got it'}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    dialogRespondedRef.current = true
+                    manuallyStoppedRef.current = true
+                    setShowRebuildDialog(false)
+                    setDialogRequest(null)
+                    window.go.main.App.RespondToDialog(false)
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    dialogRespondedRef.current = true
+                    setShowRebuildDialog(false)
+                    setDialogRequest(null)
+                    window.go.main.App.RespondToDialog(true)
+                  }}
+                >
+                  {dialogRequest?.confirmText || 'Proceed'}
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Remove Confirmation Dialog */}
       <Dialog open={deviceToDelete !== null} onOpenChange={(open) => !open && setDeviceToDelete(null)}>
         <DialogContent>
@@ -3585,9 +3671,10 @@ export default function App() {
                   setSelectedPackage(pkg)
                 }
               }}
+              allPackages={packages}
               firmware={deviceInfo.firmware || ''}
               conflict={getConflict(selectedPackage)}
-              isOsCompatible={isPackageCompatible(selectedPackage, deviceInfo.firmware || '')}
+              isOsCompatible={selectedPackage.compatible}
               viewOnly={sidebarViewOnly}
               showIncompatible={sidebarIncompatible}
             />

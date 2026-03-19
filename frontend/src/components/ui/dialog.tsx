@@ -1,4 +1,5 @@
 import * as React from "react"
+import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { cn } from "@/lib/utils"
 
 interface DialogProps {
@@ -7,42 +8,31 @@ interface DialogProps {
   children: React.ReactNode
   closable?: boolean
   className?: string
-  priority?: boolean
-  lowPriority?: boolean
 }
 
-export function Dialog({ open, onOpenChange, children, closable = true, className, priority = false, lowPriority = false }: DialogProps) {
-  React.useEffect(() => {
-    if (open) {
-      document.body.style.overflow = 'hidden'
-      return () => {
-        document.body.style.overflow = ''
-      }
-    }
-  }, [open])
-
-  if (!open) return null
-
-  let backdropZ = 'z-[55]'
-  let contentZ = 'z-[60]'
-  if (priority) {
-    backdropZ = 'z-[65]'
-    contentZ = 'z-[70]'
-  } else if (lowPriority) {
-    backdropZ = 'z-[35]'
-    contentZ = 'z-[40]'
-  }
-
+export function Dialog({ open, onOpenChange, children, closable = true, className }: DialogProps) {
   return (
-    <div className={cn(`fixed inset-0 ${contentZ} flex items-center justify-center`, className)}>
-      <div
-        className={`fixed inset-0 ${backdropZ} bg-black/50 backdrop-blur-[1px]`}
-        onClick={() => closable && onOpenChange(false)}
-      />
-      <div className={`relative ${contentZ} w-full px-4 flex justify-center pointer-events-none`}>
-        <div className="pointer-events-auto">{children}</div>
-      </div>
-    </div>
+    <DialogPrimitive.Root open={open} onOpenChange={closable ? onOpenChange : undefined}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[1px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+          onClick={(e) => {
+            if (closable) {
+              e.stopPropagation()
+              onOpenChange(false)
+            }
+          }}
+        />
+        <DialogPrimitive.Content
+          className={cn("fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 w-full px-4 flex justify-center pointer-events-none", className)}
+          onInteractOutside={(e) => { if (!closable) e.preventDefault() }}
+          onEscapeKeyDown={(e) => { if (!closable) e.preventDefault() }}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <div className="pointer-events-auto">{children}</div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 }
 
@@ -82,10 +72,12 @@ export function DialogTitle({
   ...props
 }: React.HTMLAttributes<HTMLHeadingElement>) {
   return (
-    <h2
-      className={cn("text-lg font-semibold leading-none tracking-tight", className)}
-      {...props}
-    />
+    <DialogPrimitive.Title asChild>
+      <h2
+        className={cn("text-lg font-semibold leading-none tracking-tight", className)}
+        {...props}
+      />
+    </DialogPrimitive.Title>
   )
 }
 
@@ -94,10 +86,12 @@ export function DialogDescription({
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div
-      className={cn("text-sm text-muted-foreground", className)}
-      {...props}
-    />
+    <DialogPrimitive.Description asChild>
+      <div
+        className={cn("text-sm text-muted-foreground", className)}
+        {...props}
+      />
+    </DialogPrimitive.Description>
   )
 }
 

@@ -34,17 +34,26 @@ import (
 	"reManager/internal/commands"
 	"reManager/internal/component"
 	"reManager/internal/debug"
-	"reManager/internal/httputil"
 	"reManager/internal/device"
 	apperrors "reManager/internal/errors"
 	"reManager/internal/executor"
+	"reManager/internal/httputil"
 	"reManager/internal/installer"
 	"reManager/internal/logger"
+	"reManager/internal/pdfimport"
+	"reManager/internal/rmdocimport"
 	"reManager/internal/platform"
 	"reManager/internal/sshagent"
 	"reManager/internal/storage"
 	"reManager/internal/support"
+	"reManager/internal/swupdate"
 	"reManager/internal/vellum"
+
+	rmdevice "github.com/rmitchellscott/remarkable-go/device"
+	rmexecutor "github.com/rmitchellscott/remarkable-go/executor"
+	rmfilesystem "github.com/rmitchellscott/remarkable-go/filesystem"
+	"github.com/rmitchellscott/remarkable-go/partition"
+	rmupdate "github.com/rmitchellscott/remarkable-go/update"
 )
 
 func openFileDialog(ctx context.Context, title string) (string, error) {
@@ -137,18 +146,19 @@ type App struct {
 	vellumClient   *vellum.Client
 	metadata       *vellum.MetadataStore
 
-	logger            *logger.Logger
-	operationLog      *logger.CommandLog
-	supportBundleID   string
+	logger          *logger.Logger
+	operationLog    *logger.CommandLog
+	supportBundleID string
 
-	keepaliveStop     chan struct{}
-	connectedDeviceID   string
-	connectedDeviceType string
-	writeableRootBusy   bool
-	reconnecting        bool
-	reconnectMu       sync.Mutex
-	fastDialMode      bool
+	keepaliveStop          chan struct{}
+	connectedDeviceID      string
+	connectedDeviceType    string
+	writeableRootBusy      bool
+	reconnecting           bool
+	reconnectMu            sync.Mutex
+	fastDialMode           bool
 	installCancelCh        chan struct{}
+	osInstallCancelCh      chan struct{}
 	backupCancelCh         chan struct{}
 	backupMu               sync.Mutex
 	folderTransferCancelCh chan struct{}
@@ -804,6 +814,10 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		debug.Println("[DEBUG] Checking if vellum is installed...")
 		installed, err := a.vellumClient.IsInstalled()
 		debug.Printf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
+
+		warnings := map[string]interface{}{}
+		vellumReady := false
+
 		if err == nil && !installed {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
 		} else if err == nil && installed {
@@ -812,62 +826,53 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			runtime.EventsEmit(a.ctx, "vellum:ready", nil)
 			if verr == nil && !valid {
 				runtime.EventsEmit(a.ctx, "vellum:broken-install", missing)
-				return
-			}
+			} else {
+				vellumReady = true
 
-			osState, err := a.vellumClient.GetOSVersionState()
-			if err == nil && osState.Mismatch {
-				debug.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
-					osState.StoredVersion, osState.CurrentVersion)
-				runtime.EventsEmit(a.ctx, "os:mismatch", map[string]string{
-					"prevVersion": osState.StoredVersion,
-					"newVersion":  osState.CurrentVersion,
-				})
-			}
-
-			reenableStatus, reenableErr := a.vellumClient.ReenableStatus()
-			if reenableErr == nil && reenableStatus != "" {
-				debug.Printf("[DEBUG] Reenable status: %s\n", reenableStatus)
-				runtime.EventsEmit(a.ctx, "reenable:status", reenableStatus)
-			}
-
-			status := a.CheckHashtabVersion()
-			debug.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
-				status.Installed, status.HashtabVersion, status.FirmwareVersion, status.NeedsRebuild)
-			if status.NeedsRebuild {
-				runtime.EventsEmit(a.ctx, "hashtab:version-mismatch", status)
-			}
-
-			updateStatus := a.GetUpdateServiceStatus()
-			debug.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
-			if updateStatus.Enabled || updateStatus.Running {
-				runtime.EventsEmit(a.ctx, "autoupdate:enabled", updateStatus)
-			}
-
-			timezoneStatus := a.GetTimezoneStatus()
-			debug.Printf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
-				timezoneStatus.DeviceTimezone, timezoneStatus.SavedTimezone, timezoneStatus.NeedsUpdate)
-
-			// Auto-save device timezone if no preference saved yet
-			if timezoneStatus.DeviceTimezone != "" && timezoneStatus.SavedTimezone == "" {
-				a.mu.Lock()
-				deviceID := a.connectedDeviceID
-				a.mu.Unlock()
-				if deviceID != "" && a.deviceStore != nil {
-					if err := a.deviceStore.UpdateTimezone(deviceID, timezoneStatus.DeviceTimezone); err == nil {
-						debug.Printf("[DEBUG] Auto-saved device timezone: %s\n", timezoneStatus.DeviceTimezone)
-						timezoneStatus.SavedTimezone = timezoneStatus.DeviceTimezone
-					}
+				reenableStatus, reenableErr := a.vellumClient.ReenableStatus()
+				if reenableErr == nil && reenableStatus != "" {
+					debug.Printf("[DEBUG] Reenable status: %s\n", reenableStatus)
+					warnings["reenableStatus"] = reenableStatus
 				}
 			}
+		}
 
-			if timezoneStatus.DeviceTimezone != "" {
-				runtime.EventsEmit(a.ctx, "timezone:status", timezoneStatus)
-			}
-			if timezoneStatus.NeedsUpdate {
-				runtime.EventsEmit(a.ctx, "timezone:mismatch", timezoneStatus)
-			}
+		hashtabStatus := a.CheckHashtabVersion()
+		debug.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
+			hashtabStatus.Installed, hashtabStatus.HashtabVersion, hashtabStatus.FirmwareVersion, hashtabStatus.NeedsRebuild)
+		if hashtabStatus.NeedsRebuild {
+			warnings["hashtabMismatch"] = hashtabStatus
+		}
 
+		updateStatus := a.GetUpdateServiceStatus()
+		debug.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
+		if updateStatus.Enabled || updateStatus.Running {
+			warnings["autoUpdateEnabled"] = updateStatus
+		}
+
+		timezoneStatus := a.GetTimezoneStatus()
+		debug.Printf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
+			timezoneStatus.DeviceTimezone, timezoneStatus.SavedTimezone, timezoneStatus.NeedsUpdate)
+
+		if timezoneStatus.DeviceTimezone != "" && timezoneStatus.SavedTimezone == "" {
+			a.mu.Lock()
+			deviceID := a.connectedDeviceID
+			a.mu.Unlock()
+			if deviceID != "" && a.deviceStore != nil {
+				if err := a.deviceStore.UpdateTimezone(deviceID, timezoneStatus.DeviceTimezone); err == nil {
+					debug.Printf("[DEBUG] Auto-saved device timezone: %s\n", timezoneStatus.DeviceTimezone)
+					timezoneStatus.SavedTimezone = timezoneStatus.DeviceTimezone
+				}
+			}
+		}
+		if timezoneStatus.DeviceTimezone != "" {
+			warnings["timezoneStatus"] = timezoneStatus
+		}
+		if timezoneStatus.NeedsUpdate {
+			warnings["timezoneMismatch"] = timezoneStatus
+		}
+
+		if vellumReady {
 			settings, _ := a.settingsStore.Load()
 			proxyEnabled := settings == nil || settings.ProxyMode
 
@@ -885,12 +890,28 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			}
 
 			upgradeResult, simErr := a.vellumClient.SimulateUpgrade()
+
+			osState, err := a.vellumClient.GetOSVersionState()
+			debug.Printf("[DEBUG] GetOSVersionState: stored=%q, current=%q, mismatch=%v, err=%v\n", osState.StoredVersion, osState.CurrentVersion, osState.Mismatch, err)
+			if err == nil && osState.Mismatch {
+				debug.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
+					osState.StoredVersion, osState.CurrentVersion)
+				warnings["osMismatch"] = map[string]string{
+					"prevVersion": osState.StoredVersion,
+					"newVersion":  osState.CurrentVersion,
+				}
+			}
+
 			if simErr == nil && upgradeResult.HasUpgrades {
-				runtime.EventsEmit(a.ctx, "packages:upgrades-available", map[string]interface{}{
-					"packages": upgradeResult.Packages,
-				})
+				if _, hasMismatch := warnings["osMismatch"]; !hasMismatch {
+					runtime.EventsEmit(a.ctx, "packages:upgrades-available", map[string]interface{}{
+						"packages": upgradeResult.Packages,
+					})
+				}
 			}
 		}
+
+		runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
 	}()
 
 	a.mu.Lock()
@@ -1094,6 +1115,7 @@ func (a *App) handleConnectionLost(err error) {
 		a.agentConn = nil
 	}
 	a.vellumClient = nil
+	a.writeableRootBusy = false
 	deviceID := a.connectedDeviceID
 	a.keepaliveStop = nil
 	a.mu.Unlock()
@@ -1787,19 +1809,20 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 }
 
 type PackageInfo struct {
-	Name           string              `json:"name"`
-	Version        string              `json:"version"`
-	Description    string              `json:"description"`
-	UpstreamAuthor string              `json:"upstreamAuthor"`
-	Categories     []string            `json:"categories"`
-	URL            string              `json:"url"`
-	License        string              `json:"license"`
-	Devices        []string            `json:"devices"`
-	Depends        []string            `json:"depends"`
-	Conflicts      []string            `json:"conflicts"`
-	OSMin          *string             `json:"osMin"`
-	OSMax          *string             `json:"osMax"`
+	Name           string                `json:"name"`
+	Version        string                `json:"version"`
+	Description    string                `json:"description"`
+	UpstreamAuthor string                `json:"upstreamAuthor"`
+	Categories     []string              `json:"categories"`
+	URL            string                `json:"url"`
+	License        string                `json:"license"`
+	Devices        []string              `json:"devices"`
+	Depends        []string              `json:"depends"`
+	Conflicts      []string              `json:"conflicts"`
+	OSMin          *string               `json:"osMin"`
+	OSMax          *string               `json:"osMax"`
 	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
+	Compatible     bool                  `json:"compatible"`
 }
 
 var hiddenPackages = map[string]bool{
@@ -1852,6 +1875,7 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 			OSMin:          pkg.OSMin,
 			OSMax:          pkg.OSMax,
 			OSConstraints:  pkg.OSConstraints,
+			Compatible:     pkg.Compatible,
 		})
 	}
 
@@ -3579,6 +3603,271 @@ func (a *App) RebootDevice() error {
 	return nil
 }
 
+func (a *App) getPartitionManager() (partition.Manager, error) {
+	a.mu.Lock()
+	client := a.client
+	deviceType := a.connectedDeviceType
+	a.mu.Unlock()
+
+	if client == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	exec := rmexecutor.NewSSH(client)
+	fs, err := rmfilesystem.NewSSH(client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create filesystem client: %w", err)
+	}
+
+	return partition.NewManager(exec, fs, rmdevice.Type(deviceType)), nil
+}
+
+func (a *App) GetPartitionInfo() (*partition.SystemInfo, error) {
+	mgr, err := a.getPartitionManager()
+	if err != nil {
+		return nil, err
+	}
+	return mgr.GetSystemInfo(context.Background())
+}
+
+func (a *App) SwitchBootPartition(partitionNumber int) (*partition.SwitchResult, error) {
+	mgr, err := a.getPartitionManager()
+	if err != nil {
+		return nil, err
+	}
+	return mgr.SwitchBoot(context.Background(), partitionNumber)
+}
+
+func (a *App) GetAvailableOSVersions() ([]swupdate.OSVersionInfo, error) {
+	a.mu.Lock()
+	deviceType := a.connectedDeviceType
+	a.mu.Unlock()
+
+	if deviceType == "" {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	return swupdate.ListVersions(deviceType, nil)
+}
+
+func (a *App) CancelOSInstall() {
+	a.mu.Lock()
+	ch := a.osInstallCancelCh
+	a.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+func (a *App) InstallOSVersion(version string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		deviceType := a.connectedDeviceType
+		deviceID := a.connectedDeviceID
+		cancelCh := make(chan struct{})
+		a.osInstallCancelCh = cancelCh
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "not connected"})
+			return
+		}
+
+		versions, err := swupdate.ListVersions(deviceType, nil)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": err.Error()})
+			return
+		}
+
+		var filename string
+		for _, v := range versions {
+			if v.Version == version {
+				filename = v.Filename
+				break
+			}
+		}
+		if filename == "" {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "version not found"})
+			return
+		}
+
+		url := "https://remarkable-software.s3.us-east-2.amazonaws.com/" + filename
+
+		// Phase 1: Download to desktop
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "downloading", "percent": 0.0, "message": "Downloading..."})
+
+		tmpFile, err := os.CreateTemp("", "remanager-swu-*.swu")
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "failed to create temp file: " + err.Error()})
+			return
+		}
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath)
+
+		resp, err := http.Get(url)
+		if err != nil {
+			tmpFile.Close()
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "download failed: " + err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			tmpFile.Close()
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": fmt.Sprintf("download failed: HTTP %d", resp.StatusCode)})
+			return
+		}
+
+		cancelled := func() bool {
+			select {
+			case <-cancelCh:
+				return true
+			default:
+				return false
+			}
+		}
+
+		totalSize := resp.ContentLength
+		var downloaded int64
+		buf := make([]byte, 32*1024)
+		for {
+			if cancelled() {
+				tmpFile.Close()
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "cancelled"})
+				return
+			}
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
+					tmpFile.Close()
+					runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "write error: " + writeErr.Error()})
+					return
+				}
+				downloaded += int64(n)
+				if totalSize > 0 {
+					pct := float64(downloaded) / float64(totalSize) * 50.0
+					runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "downloading", "percent": pct, "message": "Downloading..."})
+				}
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				tmpFile.Close()
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "download error: " + readErr.Error()})
+				return
+			}
+		}
+		tmpFile.Close()
+
+		// Phase 2: Upload to device via SFTP
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "uploading", "percent": 50.0, "message": "Uploading to device..."})
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "SFTP error: " + err.Error()})
+			return
+		}
+		defer sftpClient.Close()
+
+		remotePath := "/tmp/" + filename
+		localFile, err := os.Open(tmpPath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "failed to open temp file: " + err.Error()})
+			return
+		}
+		defer localFile.Close()
+
+		remoteFile, err := sftpClient.Create(remotePath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "failed to create remote file: " + err.Error()})
+			return
+		}
+
+		stat, _ := localFile.Stat()
+		uploadSize := stat.Size()
+		var uploaded int64
+		for {
+			if cancelled() {
+				remoteFile.Close()
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "cancelled"})
+				return
+			}
+			n, readErr := localFile.Read(buf)
+			if n > 0 {
+				if _, writeErr := remoteFile.Write(buf[:n]); writeErr != nil {
+					remoteFile.Close()
+					runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "upload error: " + writeErr.Error()})
+					return
+				}
+				uploaded += int64(n)
+				if uploadSize > 0 {
+					pct := 50.0 + float64(uploaded)/float64(uploadSize)*50.0
+					runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "uploading", "percent": pct, "message": "Uploading to device..."})
+				}
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				remoteFile.Close()
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "upload read error: " + readErr.Error()})
+				return
+			}
+		}
+		remoteFile.Close()
+
+		// Phase 3: Install via swupdate-from-file
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "installing", "percent": 100.0, "message": "Installing..."})
+
+		exec := rmexecutor.NewSSH(client)
+		updater := rmupdate.NewManager(exec)
+
+		var outputBuf bytes.Buffer
+		var outputWriter io.Writer = &outputBuf
+		var cmdLog *logger.CommandLog
+		if a.logger != nil {
+			cmdLog = a.logger.StartCommandLog(deviceID, "swupdate-install")
+			defer func() {
+				cmdLog.Close()
+			}()
+			outputWriter = io.MultiWriter(&outputBuf, &cmdLogWriter{cmdLog: cmdLog})
+		}
+
+		result, err := updater.Install(context.Background(), remotePath, outputWriter)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]interface{}{"error": "install failed: " + err.Error(), "output": outputBuf.String()})
+			return
+		}
+		if !result.Success {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]interface{}{"error": "install failed: " + result.Message, "output": outputBuf.String()})
+			return
+		}
+
+		// Phase 4: Finalize
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "finalizing", "percent": 100.0, "message": "Finalizing..."})
+
+		session, err := client.NewSession()
+		if err == nil {
+			session.Run("rm -f " + remotePath)
+			session.Close()
+		}
+
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "complete", "percent": 100.0, "message": "Complete"})
+		runtime.EventsEmit(a.ctx, "software:install-complete", map[string]interface{}{"version": version, "partition": "standby"})
+	}()
+}
+
+type cmdLogWriter struct {
+	cmdLog *logger.CommandLog
+}
+
+func (w *cmdLogWriter) Write(p []byte) (n int, err error) {
+	w.cmdLog.Write(string(p))
+	return len(p), nil
+}
+
 func (a *App) ListDirectory(dirPath string) ([]FileInfo, error) {
 	a.mu.Lock()
 	client := a.client
@@ -5207,6 +5496,219 @@ func (a *App) RestartXochitl() error {
 	return nil
 }
 
+// SelectPDFFile opens a native file dialog filtered to PDF files and returns
+// the chosen path, or an empty string if the user cancelled.
+func (a *App) SelectPDFFile() string {
+	if platform.IsRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", "Select PDF", &filechooser.OpenFileOptions{
+			CurrentFolder: home,
+		})
+		if err != nil || len(files) == 0 {
+			return ""
+		}
+		return strings.TrimPrefix(files[0], "file://")
+	}
+	home, _ := os.UserHomeDir()
+	p, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Select PDF",
+		DefaultDirectory: home,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "PDF files", Pattern: "*.pdf"},
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+type PDFFileInfo struct {
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	PageCount int    `json:"pageCount"`
+}
+
+func (a *App) SelectPDFFiles() []string {
+	return a.SelectImportFiles()
+}
+
+func (a *App) SelectImportFiles() []string {
+	if platform.IsRunningInFlatpak() {
+		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", "Select documents", &filechooser.OpenFileOptions{
+			CurrentFolder: home,
+			Multiple:      true,
+			Filters: []*filechooser.Filter{
+				{Name: "Documents", Rules: []filechooser.Rule{
+					{Type: filechooser.GlobPattern, Pattern: "*.pdf"},
+					{Type: filechooser.GlobPattern, Pattern: "*.rmdoc"},
+				}},
+			},
+		})
+		if err != nil || len(files) == 0 {
+			return []string{}
+		}
+		for i, f := range files {
+			files[i] = strings.TrimPrefix(f, "file://")
+		}
+		return files
+	}
+	home, _ := os.UserHomeDir()
+	files, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:            "Select documents",
+		DefaultDirectory: home,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Documents (PDF, rmdoc)", Pattern: "*.pdf;*.rmdoc"},
+		},
+	})
+	if err != nil {
+		return []string{}
+	}
+	return files
+}
+
+func (a *App) GetPDFFileInfo(localPath string) (PDFFileInfo, error) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return PDFFileInfo{}, fmt.Errorf("failed to stat file: %w", err)
+	}
+	pdfData, err := os.ReadFile(localPath)
+	if err != nil {
+		return PDFFileInfo{}, fmt.Errorf("failed to read file: %w", err)
+	}
+	return PDFFileInfo{
+		Path:      localPath,
+		Size:      info.Size(),
+		PageCount: pdfimport.EstimatePageCount(pdfData),
+	}, nil
+}
+
+type ImportFileInfo struct {
+	Path        string `json:"path"`
+	Size        int64  `json:"size"`
+	PageCount   int    `json:"pageCount"`
+	FileType    string `json:"fileType"`
+	VisibleName string `json:"visibleName"`
+}
+
+func (a *App) GetImportFileInfo(localPath string) (ImportFileInfo, error) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return ImportFileInfo{}, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	ext := strings.ToLower(filepath.Ext(localPath))
+	switch ext {
+	case ".pdf":
+		pdfData, err := os.ReadFile(localPath)
+		if err != nil {
+			return ImportFileInfo{}, fmt.Errorf("failed to read file: %w", err)
+		}
+		return ImportFileInfo{
+			Path:      localPath,
+			Size:      info.Size(),
+			PageCount: pdfimport.EstimatePageCount(pdfData),
+			FileType:  "pdf",
+		}, nil
+	case ".rmdoc":
+		zipData, err := os.ReadFile(localPath)
+		if err != nil {
+			return ImportFileInfo{}, fmt.Errorf("failed to read file: %w", err)
+		}
+		rmdocInfo, err := rmdocimport.Inspect(zipData)
+		if err != nil {
+			return ImportFileInfo{}, fmt.Errorf("failed to inspect rmdoc: %w", err)
+		}
+		return ImportFileInfo{
+			Path:        localPath,
+			Size:        info.Size(),
+			PageCount:   rmdocInfo.PageCount,
+			FileType:    "rmdoc",
+			VisibleName: rmdocInfo.VisibleName,
+		}, nil
+	default:
+		return ImportFileInfo{}, fmt.Errorf("unsupported file type: %s", ext)
+	}
+}
+
+func (a *App) ImportRmdocFromPath(localPath, visibleName string, restartXochitl bool) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	zipData, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read rmdoc: %w", err)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	if _, err := rmdocimport.Upload(sftpClient, zipData, visibleName); err != nil {
+		return err
+	}
+
+	if restartXochitl {
+		if err := a.RestartXochitl(); err != nil {
+			return fmt.Errorf("uploaded, but %w", err)
+		}
+	}
+
+	return nil
+}
+
+// ImportPDFFromPath reads the PDF at localPath, generates xochitl sidecar files,
+// and uploads the bundle over the active SFTP connection.
+// pageCountOverride can be set to a positive value when auto-detection fails.
+func (a *App) ImportPDFFromPath(localPath, visibleName string, restartXochitl bool, pageCountOverride int, coverPageNumber *int) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	pdfData, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read PDF: %w", err)
+	}
+
+	pageCount := pageCountOverride
+	if pageCount <= 0 {
+		pageCount = pdfimport.EstimatePageCount(pdfData)
+	}
+	if pageCount <= 0 {
+		return fmt.Errorf("Could not determine page count from PDF.")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	if _, err := pdfimport.Upload(sftpClient, pdfData, visibleName, "", pageCount, coverPageNumber); err != nil {
+		return err
+	}
+
+	if restartXochitl {
+		if err := a.RestartXochitl(); err != nil {
+			return fmt.Errorf("uploaded, but %w", err)
+		}
+	}
+
+	return nil
+}
+
 // Input event bytes for BTN_TOUCH (arm64: 24 bytes per event)
 // Layout: time_sec(8) + time_usec(8) + type(2) + code(2) + value(4)
 var (
@@ -5463,6 +5965,10 @@ func (a *App) buildGenerator(deviceID string, isConnectedDevice bool, deviceName
 			Installed:      hashtab.Installed,
 			HashtabVersion: hashtab.HashtabVersion,
 			NeedsRebuild:   hashtab.NeedsRebuild,
+		}
+
+		if partInfo, err := a.GetPartitionInfo(); err == nil {
+			gen.PartitionInfo = partInfo
 		}
 
 		if tz, err := a.GetDeviceTimezone(); err == nil {

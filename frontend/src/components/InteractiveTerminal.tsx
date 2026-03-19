@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm, ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
+import { Copy, CopyCheck } from 'lucide-react'
+import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
 import '@xterm/xterm/css/xterm.css'
 
 interface InteractiveTerminalProps {
@@ -64,6 +67,20 @@ export function InteractiveTerminal({ isConnected, visible, onRunningChange, the
   const cleanupRef = useRef<(() => void) | null>(null)
   const isDark = theme === 'dark'
   const [shellRunning, setShellRunning] = useState(false)
+  const { isCopied, copyToClipboard } = useCopyToClipboard()
+
+  const copyTerminalBuffer = useCallback(() => {
+    const term = xtermRef.current
+    if (!term) return
+    const buffer = term.buffer.active
+    const lines: string[] = []
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i)
+      if (line) lines.push(line.translateToString(true))
+    }
+    const text = lines.join('\n').trimEnd()
+    if (text) copyToClipboard(text)
+  }, [copyToClipboard])
 
   const initTerminal = useCallback(() => {
     if (!terminalRef.current || xtermRef.current) return
@@ -223,11 +240,34 @@ export function InteractiveTerminal({ isConnected, visible, onRunningChange, the
         )}
       </div>
       {shellRunning && (
-        <div
-          ref={terminalRef}
-          className="h-[calc(100vh-350px)] min-h-[200px] rounded-md overflow-hidden"
-          style={{ backgroundColor: isDark ? '#1a1a1a' : '#fafafa' }}
-        />
+        <div className="relative">
+          <div
+            ref={terminalRef}
+            className="h-[calc(100vh-350px)] min-h-[200px] rounded-md overflow-hidden"
+            style={{ backgroundColor: isDark ? '#1a1a1a' : '#fafafa' }}
+          />
+          <div className="absolute top-2 right-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={copyTerminalBuffer}
+                  className="h-8 w-8 bg-background/95 backdrop-blur-sm hover:bg-background"
+                >
+                  {isCopied ? (
+                    <CopyCheck className="h-4 w-4" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {isCopied ? 'Copied!' : 'Copy output'}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
       )}
     </div>
   )

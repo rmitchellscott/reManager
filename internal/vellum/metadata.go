@@ -91,6 +91,7 @@ type Package struct {
 	Depends             []string
 	Conflicts           []string
 	Arch                []string
+	Compatible          bool
 	MaintenanceCommands []MaintenanceCommand
 	Hooks               *PackageHooks
 }
@@ -328,6 +329,7 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 	for name, versions := range m.packages.Packages {
 		var bestVersion string
 		var bestInfo PackageVersion
+		compatible := true
 
 		for version, info := range versions {
 			if !isVersionCompatible(info, deviceType, firmware, arch) {
@@ -340,13 +342,26 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 		}
 
 		if bestVersion == "" {
+			compatible = false
+			for version, info := range versions {
+				if !isVersionCompatible(info, deviceType, "", arch) {
+					continue
+				}
+				if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+					bestVersion = version
+					bestInfo = info
+				}
+			}
+		}
+
+		if bestVersion == "" {
 			continue
 		}
 
-		if firmware != "" {
+		if compatible && firmware != "" {
 			visited := map[string]bool{}
 			if !m.depsInstallable(name, deviceType, firmware, arch, visited) {
-				continue
+				compatible = false
 			}
 		}
 
@@ -365,6 +380,7 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			Depends:        bestInfo.Depends,
 			Conflicts:      bestInfo.Conflicts,
 			Arch:           bestInfo.Arch,
+			Compatible:     compatible,
 		}
 
 		if rmInfo, ok := m.remanager.Packages[name]; ok {

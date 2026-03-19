@@ -14,6 +14,7 @@ interface UpgradeChecklistProps {
   onAddToUninstallQueue: (pkg: string) => void
   onRemoveFromUninstallQueue: (pkg: string) => void
   onRunUpgrade: () => void
+  onGoToUtilities: () => void
   onSelectPackage: (name: string, targetOS: string, isCompatible: boolean) => void
 }
 
@@ -28,6 +29,7 @@ export function UpgradeChecklist({
   onAddToUninstallQueue,
   onRemoveFromUninstallQueue,
   onRunUpgrade,
+  onGoToUtilities,
   onSelectPackage,
 }: UpgradeChecklistProps) {
   const canUpgrade = incompatiblePackages.length === 0
@@ -136,7 +138,7 @@ export function UpgradeChecklist({
         <div className="space-y-3 pt-4">
           {!canUpgrade && (
             <p className="text-sm text-muted-foreground">
-              Either wait for incompatible packages to be updated, or uninstall them before upgrading packages.
+              Uninstall incompatible packages to continue, or use the <button className="underline hover:text-foreground" onClick={onGoToUtilities}>OS Manager</button> to switch to a supported OS version.
             </p>
           )}
           <Button
