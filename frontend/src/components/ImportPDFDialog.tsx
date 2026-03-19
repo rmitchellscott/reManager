@@ -284,7 +284,7 @@ export function ImportPDFDialog({ open, isConnected, onOpenChange }: ImportPDFDi
               <Checkbox
                 id="pdfRestart"
                 checked={restartXochitl}
-                onCheckedChange={(v) => setRestartXochitl(!!v)}
+                onCheckedChange={(v: boolean | 'indeterminate') => setRestartXochitl(!!v)}
                 disabled={importing}
                 className="mt-[18px]"
               />

@@ -25,11 +25,11 @@ import { InteractiveTerminal } from '@/components/InteractiveTerminal'
 import { FileBrowser } from '@/components/FileBrowser'
 import { ConfigEditor } from '@/components/ConfigEditor'
 import { BackupRestoreDialog } from '@/components/BackupRestore'
-import { ImportPDFDialog } from '@/components/ImportPDFDialog'
 import { CheckOSDialog } from '@/components/CheckOSDialog'
 import { SupportBundlePage } from '@/components/SupportBundlePage'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
+import { ImportPDFDialog } from '@/components/ImportPDFDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
@@ -224,6 +224,12 @@ declare global {
           DownloadFolder(remotePath: string): void
           UploadFolder(remotePath: string): void
           CancelFolderTransfer(): void
+          DeletePath(path: string): Promise<void>
+          RenamePath(oldPath: string, newPath: string): Promise<void>
+          CreateDirectory(path: string): Promise<void>
+          ReadConfigFile(): Promise<string>
+          WriteConfigFile(content: string): Promise<void>
+          BackupConfigFile(): Promise<string>
           SelectPDFFile(): Promise<string>
           SelectPDFFiles(): Promise<string[]>
           SelectImportFiles(): Promise<string[]>
@@ -231,12 +237,6 @@ declare global {
           GetImportFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number; fileType: string; visibleName: string }>
           ImportPDFFromPath(localPath: string, visibleName: string, restartXochitl: boolean, pageCountOverride: number, coverPageNumber: number | null): Promise<void>
           ImportRmdocFromPath(localPath: string, visibleName: string, restartXochitl: boolean): Promise<void>
-          DeletePath(path: string): Promise<void>
-          RenamePath(oldPath: string, newPath: string): Promise<void>
-          CreateDirectory(path: string): Promise<void>
-          ReadConfigFile(): Promise<string>
-          WriteConfigFile(content: string): Promise<void>
-          BackupConfigFile(): Promise<string>
           ListConfigBackups(): Promise<Array<{ name: string; timestamp: number; size: number }>>
           RestoreConfigBackup(backupName: string): Promise<void>
           SelectBackupFile(): Promise<string>
@@ -338,9 +338,9 @@ export default function App() {
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [showSupportBundles, setShowSupportBundles] = useState(false)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
+  const [showImportPDF, setShowImportPDF] = useState(false)
   const [showConfigEditor, setShowConfigEditor] = useState(false)
   const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
-  const [showImportPDF, setShowImportPDF] = useState(false)
   const [isTerminalRunning, setIsTerminalRunning] = useState(false)
   const [appVersion, setAppVersion] = useState('dev')
   const [tabVisibility, setTabVisibility] = useState<Record<string, boolean>>({
@@ -528,7 +528,7 @@ export default function App() {
           return false
         }
         if (search && !pkg.name.toLowerCase().includes(search.toLowerCase()) &&
-          !pkg.description.toLowerCase().includes(search.toLowerCase())) {
+            !pkg.description.toLowerCase().includes(search.toLowerCase())) {
           return false
         }
         if (categoryFilter !== 'all' && !(pkg.categories || []).includes(categoryFilter)) {
@@ -641,7 +641,7 @@ export default function App() {
       if (scheme === 'dark' || scheme === 'light') {
         setSystemPrefersDark(scheme === 'dark')
       }
-    }).catch(() => { })
+    }).catch(() => {})
 
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     const handleChange = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches)
@@ -962,7 +962,7 @@ export default function App() {
       if (osMismatchDetectedRef.current) {
         window.go.main.App.GetPackageCompatibilityStatus().then(status => {
           setCompatibilityStatus(status)
-        }).catch(() => { })
+        }).catch(() => {})
       }
 
       // Re-check hashtab version (installs may update the hashtab)
@@ -1120,7 +1120,7 @@ export default function App() {
         if (status.needsUpdate) {
           setTimezoneMismatch(status)
         }
-      }).catch(() => { })
+      }).catch(() => {})
     })
 
     const unsubscribeTimezoneError = window.runtime.EventsOn('timezone:error', (...args: unknown[]) => {
@@ -1604,7 +1604,7 @@ export default function App() {
             duration: 6000,
           })
         }
-      }).catch(() => { })
+      }).catch(() => {})
     }
   }
 
@@ -2305,10 +2305,11 @@ export default function App() {
         {/* Connection Status Banner */}
         {step !== 'connect' && connectionStatus !== 'connected' && (
           <div className="mb-4">
-            <div className={`rounded-lg p-4 flex items-center justify-between gap-4 ${connectionStatus === 'failed'
-              ? 'bg-destructive/10 border border-destructive/20'
-              : 'bg-orange-500/10 border border-orange-500/20'
-              }`}>
+            <div className={`rounded-lg p-4 flex items-center justify-between gap-4 ${
+              connectionStatus === 'failed'
+                ? 'bg-destructive/10 border border-destructive/20'
+                : 'bg-orange-500/10 border border-orange-500/20'
+            }`}>
               <div className="flex items-center gap-3">
                 {connectionStatus === 'reconnecting' ? (
                   <Loader2 className="h-5 w-5 text-orange-500 animate-spin flex-shrink-0" />
@@ -2352,624 +2353,294 @@ export default function App() {
 
         {step !== 'connect' && (
           <>
-            <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as 'mods' | 'maintenance' | 'utilities')}>
-              <TabsList className={`grid w-full mb-4 grid-cols-${[tabVisibility.mods, true, tabVisibility.utilities].filter(Boolean).length}`}>
-                {tabVisibility.mods && <TabsTrigger value="mods">Mods</TabsTrigger>}
-                <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
-                {tabVisibility.utilities && <TabsTrigger value="utilities">Utilities</TabsTrigger>}
-              </TabsList>
+          <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as 'mods' | 'maintenance' | 'utilities')}>
+            <TabsList className={`grid w-full mb-4 grid-cols-${[tabVisibility.mods, true, tabVisibility.utilities].filter(Boolean).length}`}>
+              {tabVisibility.mods && <TabsTrigger value="mods">Mods</TabsTrigger>}
+              <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
+              {tabVisibility.utilities && <TabsTrigger value="utilities">Utilities</TabsTrigger>}
+            </TabsList>
 
-              {tabVisibility.mods && (
-                <TabsContent value="mods">
-                  {vellumInstalled === null ? null : vellumBrokenInstall !== null ? (
-                    <Card>
-                      <CardHeader>
-                        <div className="flex items-center gap-2">
-                          <AlertCircle className="h-5 w-5 text-destructive" />
-                          <CardTitle>Vellum Installation Incomplete</CardTitle>
-                        </div>
-                        <CardDescription>
-                          Your Vellum installation is missing core packages and needs to be reinstalled.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <p className="text-sm text-muted-foreground">
-                          Missing packages: {vellumBrokenInstall.join(', ')}
-                        </p>
-                        <div className="flex justify-end pt-2">
-                          <Button
-                            onClick={() => window.go.main.App.CleanupBrokenVellum()}
-                            disabled={vellumCleaning}
+            {tabVisibility.mods && (
+            <TabsContent value="mods">
+              {vellumInstalled === null ? null : vellumBrokenInstall !== null ? (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="h-5 w-5 text-destructive" />
+                      <CardTitle>Vellum Installation Incomplete</CardTitle>
+                    </div>
+                    <CardDescription>
+                      Your Vellum installation is missing core packages and needs to be reinstalled.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <p className="text-sm text-muted-foreground">
+                      Missing packages: {vellumBrokenInstall.join(', ')}
+                    </p>
+                    <div className="flex justify-end pt-2">
+                      <Button
+                        onClick={() => window.go.main.App.CleanupBrokenVellum()}
+                        disabled={vellumCleaning}
+                      >
+                        {vellumCleaning ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Cleaning up...
+                          </>
+                        ) : (
+                          'Clean up and reinstall'
+                        )}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : vellumInstalled === false ? (
+                <VellumInstallPrompt
+                  bootstrapping={bootstrapping}
+                  bootstrapOutput={bootstrapOutput}
+                  bootstrapError={bootstrapError}
+                  onInstall={() => window.go.main.App.BootstrapVellum()}
+                  terminalTheme={resolvedTerminalTheme}
+                />
+              ) : osMismatchDetected && compatibilityStatus ? (
+                <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
+                  <UpgradeChecklist
+                    storedOsVersion={compatibilityStatus.storedOsVersion || storedOsVersion}
+                    currentOsVersion={compatibilityStatus.currentOsVersion || currentOsVersion}
+                    compatiblePackages={compatibilityStatus.compatiblePackages || []}
+                    incompatiblePackages={compatibilityStatus.incompatiblePackages || []}
+                    loading={checklistLoading}
+                    fetchFailed={compatibilityStatus.fetchFailed || false}
+                    uninstallQueue={uninstallQueue}
+                    onAddToUninstallQueue={addToUninstallQueue}
+                    onRemoveFromUninstallQueue={removeFromUninstallQueue}
+                    onRunUpgrade={handleChecklistUpgrade}
+                    onSelectPackage={handleSelectPackageForOS}
+                  />
+                </div>
+              ) : (
+              <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
+                  {/* Filters */}
+                  <div className="flex flex-wrap gap-2">
+                    <div className="flex gap-2 w-full md:contents">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search mods..."
+                          value={search}
+                          onChange={(e) => setSearch(e.target.value)}
+                          className={`pl-9 ${search ? 'pr-8' : ''}`}
+                        />
+                        {search && (
+                          <button
+                            onClick={() => setSearch('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                           >
-                            {vellumCleaning ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Cleaning up...
-                              </>
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="md:order-last"
+                            onClick={handleRefreshPackages}
+                            disabled={refreshingPackages}
+                          >
+                            {refreshingPackages ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
                             ) : (
-                              'Clean up and reinstall'
+                              <RefreshCw className="h-4 w-4" />
                             )}
                           </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ) : vellumInstalled === false ? (
-                    <VellumInstallPrompt
-                      bootstrapping={bootstrapping}
-                      bootstrapOutput={bootstrapOutput}
-                      bootstrapError={bootstrapError}
-                      onInstall={() => window.go.main.App.BootstrapVellum()}
-                      terminalTheme={resolvedTerminalTheme}
-                    />
-                  ) : osMismatchDetected && compatibilityStatus ? (
-                    <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
-                      <UpgradeChecklist
-                        storedOsVersion={compatibilityStatus.storedOsVersion || storedOsVersion}
-                        currentOsVersion={compatibilityStatus.currentOsVersion || currentOsVersion}
-                        compatiblePackages={compatibilityStatus.compatiblePackages || []}
-                        incompatiblePackages={compatibilityStatus.incompatiblePackages || []}
-                        loading={checklistLoading}
-                        fetchFailed={compatibilityStatus.fetchFailed || false}
-                        uninstallQueue={uninstallQueue}
-                        onAddToUninstallQueue={addToUninstallQueue}
-                        onRemoveFromUninstallQueue={removeFromUninstallQueue}
-                        onRunUpgrade={handleChecklistUpgrade}
-                        onSelectPackage={handleSelectPackageForOS}
-                      />
+                        </TooltipTrigger>
+                        <TooltipContent>Refresh package list</TooltipContent>
+                      </Tooltip>
                     </div>
-                  ) : (
-                    <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
-                      {/* Filters */}
-                      <div className="flex flex-wrap gap-2">
-                        <div className="flex gap-2 w-full md:contents">
-                          <div className="relative flex-1">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                            <Input
-                              placeholder="Search mods..."
-                              value={search}
-                              onChange={(e) => setSearch(e.target.value)}
-                              className={`pl-9 ${search ? 'pr-8' : ''}`}
-                            />
-                            {search && (
-                              <button
-                                onClick={() => setSearch('')}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
-                            )}
-                          </div>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                className="md:order-last"
-                                onClick={handleRefreshPackages}
-                                disabled={refreshingPackages}
-                              >
-                                {refreshingPackages ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <RefreshCw className="h-4 w-4" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Refresh package list</TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <div className="flex gap-2 w-full md:contents">
-                          <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                            <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
-                              <SelectValue placeholder="Category" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="all">All Categories</SelectItem>
-                              {categories.map((cat) => (
-                                <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Select value={developerFilter} onValueChange={setDeveloperFilter}>
-                            <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
-                              <SelectValue placeholder="Developer" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="all">All Developers</SelectItem>
-                              {developers.map((dev) => (
-                                <SelectItem key={dev} value={dev}>{dev}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Select value={viewMode} onValueChange={(v) => setViewMode(v as 'full' | 'compact')}>
-                            <SelectTrigger className="flex-1 md:flex-none md:w-[120px]">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="full">Full</SelectItem>
-                              <SelectItem value="compact">Compact</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
+                    <div className="flex gap-2 w-full md:contents">
+                      <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                        <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
+                          <SelectValue placeholder="Category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Categories</SelectItem>
+                          {categories.map((cat) => (
+                            <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={developerFilter} onValueChange={setDeveloperFilter}>
+                        <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
+                          <SelectValue placeholder="Developer" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Developers</SelectItem>
+                          {developers.map((dev) => (
+                            <SelectItem key={dev} value={dev}>{dev}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={viewMode} onValueChange={(v) => setViewMode(v as 'full' | 'compact')}>
+                        <SelectTrigger className="flex-1 md:flex-none md:w-[120px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="full">Full</SelectItem>
+                          <SelectItem value="compact">Compact</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
 
-                      {/* Installed Section */}
-                      {installedFiltered.length > 0 && (
-                        <Card>
-                          <Accordion type="single" collapsible defaultValue="installed">
-                            <AccordionItem value="installed" className="border-none">
-                              <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
-                                Installed ({installedFiltered.length})
-                              </AccordionTrigger>
-                              <AccordionContent>
-                                <div className="divide-y px-6 pb-4">
-                                  {installedFiltered.map((pkg, index) => {
-                                    const isQueued = uninstallQueue.has(pkg.name)
-                                    const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
-                                    const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
-                                    return (
-                                      <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
-                                        <div
-                                          className="flex-1 min-w-0 cursor-pointer"
-                                          onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
-                                        >
-                                          {viewMode === 'compact' ? (
-                                            <div className="flex items-center gap-2">
-                                              <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
-                                              <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
-                                            </div>
-                                          ) : (
-                                            <>
-                                              <div className="flex items-center gap-2">
-                                                <span className="font-medium">{pkg.name}</span>
-                                                {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
-                                              </div>
-                                              <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
-                                              {pkg.upstreamAuthor && (
-                                                <span className="text-sm text-muted-foreground">
-                                                  by {pkg.upstreamAuthor}
-                                                </span>
-                                              )}
-                                            </>
-                                          )}
-                                        </div>
-                                        {isQueued ? (
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => removeFromUninstallQueue(pkg.name)}
-                                          >
-                                            <Check className="h-4 w-4 mr-1" />
-                                            Queued
-                                          </Button>
-                                        ) : (
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => addToUninstallQueue(pkg.name)}
-                                            disabled={installing || uninstalling || connectionStatus !== 'connected'}
-                                          >
-                                            <Trash2 className="h-4 w-4 mr-1" />
-                                            Remove
-                                          </Button>
-                                        )}
+                  {/* Installed Section */}
+                  {installedFiltered.length > 0 && (
+                    <Card>
+                      <Accordion type="single" collapsible defaultValue="installed">
+                        <AccordionItem value="installed" className="border-none">
+                          <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
+                            Installed ({installedFiltered.length})
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <div className="divide-y px-6 pb-4">
+                              {installedFiltered.map((pkg, index) => {
+                                const isQueued = uninstallQueue.has(pkg.name)
+                                const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
+                                const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
+                                return (
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div
+                                    className="flex-1 min-w-0 cursor-pointer"
+                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
+                                  >
+                                    {viewMode === 'compact' ? (
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
+                                        <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
                                       </div>
-                                    )
-                                  })}
-                                </div>
-                              </AccordionContent>
-                            </AccordionItem>
-                          </Accordion>
-                        </Card>
-                      )}
-
-                      {/* Available Section */}
-                      {availableFiltered.length > 0 && (
-                        <Card>
-                          <Accordion type="single" collapsible defaultValue="available">
-                            <AccordionItem value="available" className="border-none">
-                              <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
-                                Available ({availableFiltered.length})
-                              </AccordionTrigger>
-                              <AccordionContent>
-                                <div className="divide-y px-6 pb-4">
-                                  {availableFiltered.map((pkg, index) => {
-                                    const isQueued = installQueue.has(pkg.name)
-                                    const prevQueued = index > 0 && installQueue.has(availableFiltered[index - 1].name)
-                                    const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
-                                    const conflict = getConflict(pkg)
-                                    return (
-                                      <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
-                                        <div
-                                          className="flex-1 min-w-0 cursor-pointer"
-                                          onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
-                                        >
-                                          {viewMode === 'compact' ? (
-                                            <div className="flex items-center gap-2">
-                                              <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
-                                              <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
-                                            </div>
-                                          ) : (
-                                            <>
-                                              <div className="flex items-center gap-2">
-                                                <span className="font-medium">{pkg.name}</span>
-                                                {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
-                                              </div>
-                                              <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
-                                              {pkg.upstreamAuthor && (
-                                                <span className="text-sm text-muted-foreground">
-                                                  by {pkg.upstreamAuthor}
-                                                </span>
-                                              )}
-                                            </>
-                                          )}
+                                    ) : (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium">{pkg.name}</span>
+                                          {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
                                         </div>
-                                        {isQueued ? (
+                                        <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
+                                        {pkg.upstreamAuthor && (
+                                          <span className="text-sm text-muted-foreground">
+                                            by {pkg.upstreamAuthor}
+                                          </span>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                  {isQueued ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => removeFromUninstallQueue(pkg.name)}
+                                    >
+                                      <Check className="h-4 w-4 mr-1" />
+                                      Queued
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => addToUninstallQueue(pkg.name)}
+                                      disabled={installing || uninstalling || connectionStatus !== 'connected'}
+                                    >
+                                      <Trash2 className="h-4 w-4 mr-1" />
+                                      Remove
+                                    </Button>
+                                  )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
+                    </Card>
+                  )}
+
+                  {/* Available Section */}
+                  {availableFiltered.length > 0 && (
+                    <Card>
+                      <Accordion type="single" collapsible defaultValue="available">
+                        <AccordionItem value="available" className="border-none">
+                          <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
+                            Available ({availableFiltered.length})
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <div className="divide-y px-6 pb-4">
+                              {availableFiltered.map((pkg, index) => {
+                                const isQueued = installQueue.has(pkg.name)
+                                const prevQueued = index > 0 && installQueue.has(availableFiltered[index - 1].name)
+                                const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
+                                const conflict = getConflict(pkg)
+                                return (
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                  <div
+                                    className="flex-1 min-w-0 cursor-pointer"
+                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(false); setSelectedPackage(pkg) }}
+                                  >
+                                    {viewMode === 'compact' ? (
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
+                                        <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium">{pkg.name}</span>
+                                          {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
+                                        </div>
+                                        <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
+                                        {pkg.upstreamAuthor && (
+                                          <span className="text-sm text-muted-foreground">
+                                            by {pkg.upstreamAuthor}
+                                          </span>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                  {isQueued ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => removeFromQueue(pkg.name)}
+                                    >
+                                      <Check className="h-4 w-4 mr-1" />
+                                      Queued
+                                    </Button>
+                                  ) : conflict ? (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span>
                                           <Button
                                             variant="outline"
                                             size="sm"
-                                            onClick={() => removeFromQueue(pkg.name)}
-                                          >
-                                            <Check className="h-4 w-4 mr-1" />
-                                            Queued
-                                          </Button>
-                                        ) : conflict ? (
-                                          <Tooltip>
-                                            <TooltipTrigger asChild>
-                                              <span>
-                                                <Button
-                                                  variant="outline"
-                                                  size="sm"
-                                                  disabled
-                                                >
-                                                  <Plus className="h-4 w-4 mr-1" />
-                                                  Add
-                                                </Button>
-                                              </span>
-                                            </TooltipTrigger>
-                                            <TooltipContent>{conflict}</TooltipContent>
-                                          </Tooltip>
-                                        ) : (
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => addToQueue(pkg.name)}
-                                            disabled={installing || uninstalling || connectionStatus !== 'connected'}
+                                            disabled
                                           >
                                             <Plus className="h-4 w-4 mr-1" />
                                             Add
                                           </Button>
-                                        )}
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              </AccordionContent>
-                            </AccordionItem>
-                          </Accordion>
-                        </Card>
-                      )}
-
-                      {filteredPackages.length === 0 && (
-                        <p className="text-center text-muted-foreground py-8">
-                          {packages.length === 0 ? 'No mods available' : 'No mods match your filters'}
-                        </p>
-                      )}
-
-                      {/* Queue Error */}
-                      {queueError && (
-                        <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-lg text-sm">
-                          {queueError}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </TabsContent>
-              )}
-
-              <TabsContent value="maintenance">
-                <div className="space-y-6">
-                  {/* System Commands Section */}
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>System Commands</CardTitle>
-                      <CardDescription>Device-level maintenance tasks</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        {/* Auto-Update Status */}
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium">Auto-Update Status:</span>
-                          <Badge variant={updateServiceStatus.enabled ? 'default' : 'secondary'}>
-                            {updateServiceStatus.enabled ? 'Enabled' : 'Disabled'}
-                          </Badge>
-                          <Badge variant={updateServiceStatus.running ? 'default' : 'secondary'}>
-                            {updateServiceStatus.running ? 'Running' : 'Stopped'}
-                          </Badge>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                          {systemTasks.map((task) => {
-                            const isEnableDisabled = task.id === 'enable-updates' && updateServiceStatus.enabled && updateServiceStatus.running
-                            const isDisableDisabled = task.id === 'disable-updates' && !updateServiceStatus.enabled && !updateServiceStatus.running
-                            const shouldHighlight = task.id === 'disable-updates' && updateServiceStatus.enabled
-                            const isRunning = runningSystemTask === task.id
-                            return (
-                              <Button
-                                key={task.id}
-                                onClick={() => handleSystemTask(task.id)}
-                                disabled={commandRunning || isEnableDisabled || isDisableDisabled || connectionStatus !== 'connected' || (task.needsWriteableRoot && writeableRootBusy)}
-                                variant={shouldHighlight ? 'default' : 'outline'}
-                              >
-                                {isRunning ? (
-                                  <>
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    {task.label}
-                                  </>
-                                ) : (
-                                  task.label
-                                )}
-                              </Button>
-                            )
-                          })}
-                        </div>
-
-                        {/* Timezone */}
-                        <div className="grid grid-cols-2 gap-4 pt-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium whitespace-nowrap">Timezone:</span>
-                            <TimezoneCombobox
-                              value={selectedTimezone || timezoneMismatch?.deviceTimezone || ''}
-                              onChange={handleTimezoneChange}
-                              disabled={connectionStatus !== 'connected'}
-                            />
-                          </div>
-                          <Button
-                            onClick={handleSetTimezone}
-                            disabled={settingTimezone || connectionStatus !== 'connected' || !selectedTimezone || selectedTimezone === deviceTimezone || writeableRootBusy}
-                            variant={timezoneMismatch?.needsUpdate ? 'default' : 'outline'}
-                          >
-                            {settingTimezone ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Set Timezone
-                              </>
-                            ) : (
-                              'Set Timezone'
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  {/* Package Maintenance Section */}
-                  {vellumInstalled && (
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Package Maintenance</CardTitle>
-                        <CardDescription>Package-specific commands</CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        {/* Vellum Commands */}
-                        <div>
-                          <h4 className="font-medium mb-2">Vellum</h4>
-                          <div className="grid grid-cols-3 gap-2">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  onClick={handleRunReenable}
-                                  disabled={commandRunning || runningReenable || connectionStatus !== 'connected' || reenableStatus === 'unneeded' || writeableRootBusy}
-                                  variant={reenableStatus === 'needed' ? 'default' : 'outline'}
-                                  size="sm"
-                                  className="flex-1"
-                                >
-                                  Reenable
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Reenable packages that modify the system partition</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  onClick={handleCheckUpgrades}
-                                  disabled={commandRunning || simulatingUpgrade || connectionStatus !== 'connected'}
-                                  variant="outline"
-                                  size="sm"
-                                  className="flex-1"
-                                >
-                                  {simulatingUpgrade ? 'Checking...' : 'Upgrade'}
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Check for and install package updates</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  onClick={() => setShowCheckOSDialog(true)}
-                                  disabled={connectionStatus !== 'connected'}
-                                  variant="outline"
-                                  size="sm"
-                                  className="flex-1"
-                                >
-                                  Check OS
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Check package compatibility with a target OS version</TooltipContent>
-                            </Tooltip>
-                          </div>
-                        </div>
-
-                        {/* Separator if there are package commands */}
-                        {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length > 0 && (
-                          <div className="border-t" />
-                        )}
-
-                        {/* Package-specific Commands */}
-                        {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length > 0 && (
-                          <div className="space-y-4">
-                            {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]).sort((a, b) => a.name.localeCompare(b.name)).map((pkg) => (
-                              <div key={pkg.name}>
-                                <h4 className="font-medium mb-2">{pkg.name}</h4>
-                                <div className="grid grid-cols-3 gap-2">
-                                  {maintenanceCommands[pkg.name]?.map((cmd) => {
-                                    const isRunning = currentRunningCommand?.componentId === pkg.name &&
-                                      currentRunningCommand?.commandId === cmd.id
-                                    const isHashtabRebuild = pkg.name === 'qt-resource-rebuilder' && cmd.id === 'rebuild_hashtable'
-                                    const shouldHighlight = isHashtabRebuild && hashtabMismatch
-
-                                    return (
-                                      <div key={cmd.id} className="flex gap-2">
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <Button
-                                              onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
-                                              disabled={(commandRunning && !isRunning) || connectionStatus !== 'connected' || writeableRootBusy}
-                                              variant={shouldHighlight ? 'default' : 'outline'}
-                                              size="sm"
-                                              className="flex-1"
-                                            >
-                                              {cmd.label}
-                                            </Button>
-                                          </TooltipTrigger>
-                                          {cmd.description && (
-                                            <TooltipContent>{cmd.description}</TooltipContent>
-                                          )}
-                                        </Tooltip>
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </CardContent>
-                    </Card>
-                  )}
-                </div>
-              </TabsContent>
-
-              {tabVisibility.utilities && (
-                <TabsContent value="utilities" forceMount className={activeTab === 'utilities' ? '' : 'hidden'}>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <Card className={isTerminalRunning ? 'md:col-span-2' : ''}>
-                      <CardHeader>
-                        <CardTitle>Terminal</CardTitle>
-                        <CardDescription>Interactive SSH shell</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <InteractiveTerminal
-                          isConnected={connectionStatus === 'connected'}
-                          visible={activeTab === 'utilities'}
-                          onRunningChange={setIsTerminalRunning}
-                          theme={resolvedTerminalTheme}
-                        />
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>File Browser</CardTitle>
-                        <CardDescription>Browse and transfer files</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <Button
-                          className="w-full"
-                          variant="outline"
-                          onClick={() => setShowFileBrowser(true)}
-                          disabled={connectionStatus !== 'connected'}
-                        >
-                          Open File Browser
-                        </Button>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Configuration Editor</CardTitle>
-                        <CardDescription>Edit settings</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <Button
-                          className="w-full"
-                          variant="outline"
-                          onClick={() => setShowConfigEditor(true)}
-                          disabled={connectionStatus !== 'connected'}
-                        >
-                          xochitl.conf
-                        </Button>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Backup & Restore</CardTitle>
-                        <CardDescription>Manage device backups</CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex gap-2">
-                        <Button
-                          className="flex-1"
-                          variant="outline"
-                          onClick={() => setBackupDialogMode('backup')}
-                          disabled={connectionStatus !== 'connected'}
-                        >
-                          Backup
-                        </Button>
-                        <Button
-                          className="flex-1"
-                          variant="outline"
-                          onClick={() => setBackupDialogMode('restore')}
-                          disabled={connectionStatus !== 'connected'}
-                        >
-                          Restore
-                        </Button>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Document Import</CardTitle>
-                        <CardDescription>Upload documents to your reMarkable library</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <Button
-                          className="w-full"
-                          variant="outline"
-                          onClick={() => setShowImportPDF(true)}
-                          disabled={connectionStatus !== 'connected'}
-                        >
-                          Import
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  </div>
-                </TabsContent>
-              )}
-            </Tabs>
-
-            {/* Queue Section - Fixed at bottom, visible on all tabs */}
-            {(installQueue.size > 0 || uninstallQueue.size > 0) && (
-              <div className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4">
-                {/* Install Queue */}
-                {installQueue.size > 0 && (
-                  <div>
-                    <Accordion type="single" collapsible>
-                      <AccordionItem value="install-queue" className="border-none">
-                        <AccordionTrigger className="py-2 text-sm font-medium hover:no-underline">
-                          Install Queue ({installQueue.size})
-                        </AccordionTrigger>
-                        <AccordionContent>
-                          <div className="space-y-1 mb-3">
-                            {Array.from(installQueue).map((name) => {
-                              return (
-                                <div
-                                  key={name}
-                                  className="flex items-center justify-between text-sm py-1"
-                                >
-                                  <span>{name}</span>
-                                  <button
-                                    onClick={() => removeFromQueue(name)}
-                                    className="text-muted-foreground hover:text-foreground"
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </button>
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent>{conflict}</TooltipContent>
+                                    </Tooltip>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => addToQueue(pkg.name)}
+                                      disabled={installing || uninstalling || connectionStatus !== 'connected'}
+                                    >
+                                      <Plus className="h-4 w-4 mr-1" />
+                                      Add
+                                    </Button>
+                                  )}
                                 </div>
                               )
                             })}
@@ -3250,6 +2921,22 @@ export default function App() {
                         disabled={connectionStatus !== 'connected'}
                       >
                         Restore
+                      </Button>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Document Import</CardTitle>
+                      <CardDescription>Upload documents to your reMarkable library</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => setShowImportPDF(true)}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Import
                       </Button>
                     </CardContent>
                   </Card>
@@ -3534,16 +3221,16 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Backup & Restore Dialog */}
-      <BackupRestoreDialog
-        mode={backupDialogMode}
-        onClose={() => setBackupDialogMode(null)}
-      />
-
       <ImportPDFDialog
         open={showImportPDF}
         isConnected={connectionStatus === 'connected'}
         onOpenChange={setShowImportPDF}
+      />
+
+      {/* Backup & Restore Dialog */}
+      <BackupRestoreDialog
+        mode={backupDialogMode}
+        onClose={() => setBackupDialogMode(null)}
       />
 
       {/* Orphan Dependency Removal Dialog */}
