@@ -22,8 +22,10 @@ Powered by the [Vellum](https://github.com/vellum-dev) package manager. See the 
 - Utilities
   - Interactive terminal: Access a complete shell session on your reMarkable without leaving reManager.
   - File browser: Browse reMarkable's filesystem, transfer files to and from your reMarkable.
+    - Set as Sleep Screen for PNGs
   - Backup & Restore: Backup and restore reMarkable document library and configuration.
   - Configuration editor: Edit system configuration files with a WYSIWYG editor with syntax highlighting.
+  - Document import: Import PDFs and rmdocs directly into the reMarkable document library. 
  
 ## Where To Get Help
 
