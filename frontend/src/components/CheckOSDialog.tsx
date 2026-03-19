@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,6 +12,8 @@ interface CheckOSDialogProps {
   onOpenChange: (open: boolean) => void
   isConnected: boolean
   onSelectPackage: (name: string, targetOS: string, isCompatible: boolean) => void
+  initialVersion?: string
+  priority?: boolean
 }
 
 interface CompatibilityResult {
@@ -26,11 +28,41 @@ export function CheckOSDialog({
   onOpenChange,
   isConnected,
   onSelectPackage,
+  initialVersion,
+  priority: priorityProp,
 }: CheckOSDialogProps) {
   const [targetVersion, setTargetVersion] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<CompatibilityResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const autoChecked = useRef(false)
+
+  useEffect(() => {
+    if (open && initialVersion && !autoChecked.current) {
+      autoChecked.current = true
+      setTargetVersion(initialVersion)
+      setLoading(true)
+      setError(null)
+      setResult(null)
+      ;(async () => {
+        try {
+          const res = await (window as any).go.main.App.CheckOSCompatibility(initialVersion)
+          if (res.fetchFailed) {
+            setError('Could not fetch package index. Check your connection.')
+          } else {
+            setResult(res)
+          }
+        } catch {
+          setError('Failed to check compatibility')
+        } finally {
+          setLoading(false)
+        }
+      })()
+    }
+    if (!open) {
+      autoChecked.current = false
+    }
+  }, [open, initialVersion])
 
   const handleCheck = async () => {
     if (!targetVersion.trim()) return
@@ -64,7 +96,7 @@ export function CheckOSDialog({
   const incompatiblePackages = result?.incompatible ?? []
 
   return (
-    <Dialog open={open} onOpenChange={handleClose} lowPriority>
+    <Dialog open={open} onOpenChange={handleClose} lowPriority={!priorityProp} priority={priorityProp}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Check OS Compatibility</DialogTitle>
@@ -84,6 +116,7 @@ export function CheckOSDialog({
                 onChange={(e) => setTargetVersion(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleCheck()}
                 disabled={loading || !isConnected}
+                readOnly={!!initialVersion}
               />
               <Button
                 onClick={handleCheck}

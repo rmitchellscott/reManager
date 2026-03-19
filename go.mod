@@ -1,19 +1,22 @@
 module reManager
 
-go 1.23.0
+go 1.25.4
+
+replace github.com/rmitchellscott/remarkable-go => ../remarkable-go
 
 require (
 	github.com/Microsoft/go-winio v0.6.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.17.11
 	github.com/pkg/sftp v1.13.10
+	github.com/rmitchellscott/remarkable-go v0.0.0-20260124030457-109e5a924388
 	github.com/rymdport/portal v0.4.3-0.20260225172009-01112360d2cb
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
 	github.com/spf13/cobra v1.10.2
 	github.com/wailsapp/wails/v2 v2.11.0
 	github.com/zalando/go-keyring v0.2.6
-	golang.org/x/crypto v0.41.0
-	golang.org/x/term v0.34.0
+	golang.org/x/crypto v0.49.0
+	golang.org/x/term v0.41.0
 	gopkg.in/ini.v1 v1.67.1
 )
 
@@ -106,12 +109,12 @@ require (
 	github.com/yuin/goldmark v1.7.4 // indirect
 	github.com/yuin/goldmark-emoji v1.0.3 // indirect
 	golang.org/x/image v0.12.0 // indirect
-	golang.org/x/mod v0.26.0 // indirect
-	golang.org/x/net v0.42.0 // indirect
-	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
-	golang.org/x/tools v0.35.0 // indirect
+	golang.org/x/mod v0.33.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/tools v0.42.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.0 // indirect

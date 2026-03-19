@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { Skeleton } from '@/components/ui/skeleton'
 import { ProgressModal } from '@/components/ProgressModal'
 import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { ConsolidatedWarningBanner } from '@/components/ConsolidatedWarningBanner'
@@ -30,6 +31,7 @@ import { SupportBundlePage } from '@/components/SupportBundlePage'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
 import { ImportPDFDialog } from '@/components/ImportPDFDialog'
+import { SoftwareManagerDialog } from '@/components/SoftwareManagerDialog'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
@@ -247,6 +249,21 @@ declare global {
           RevealInFileManager(path: string): void
           RetryRestoreFilesystem(): Promise<void>
           RebootDevice(): Promise<void>
+          GetPartitionInfo(): Promise<{
+            active: { number: number; version: string; label: string; isActive: boolean; isNextBoot: boolean }
+            fallback: { number: number; version: string; label: string; isActive: boolean; isNextBoot: boolean }
+            deviceType: string
+            encrypted: boolean
+            updatePending: boolean
+          }>
+          SwitchBootPartition(partitionNumber: number): Promise<{
+            success: boolean; method: string; previousBoot: number; newBoot: number; message: string
+          }>
+          GetAvailableOSVersions(): Promise<{
+            version: string; isLatest: boolean; isInstalled: boolean; filename: string; size: number
+          }[]>
+          InstallOSVersion(version: string): void
+          CancelOSInstall(): void
           IsSleepScreenSupported(): Promise<boolean>
           SetSleepScreen(imagePath: string): Promise<void>
           RestartXochitl(): Promise<void>
@@ -290,6 +307,7 @@ export default function App() {
   const [installedPackages, setInstalledPackages] = useState<Map<string, string>>(new Map())
   const [refreshingPackages, setRefreshingPackages] = useState(false)
   const [vellumInstalled, setVellumInstalled] = useState<boolean | null>(null)
+  const [warningsChecked, setWarningsChecked] = useState(false)
   const [bootstrapping, setBootstrapping] = useState(false)
   const [bootstrapOutput, setBootstrapOutput] = useState('')
   const [bootstrapError, setBootstrapError] = useState<string | null>(null)
@@ -339,6 +357,7 @@ export default function App() {
   const [showSupportBundles, setShowSupportBundles] = useState(false)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
   const [showImportPDF, setShowImportPDF] = useState(false)
+  const [showSoftwareManager, setShowSoftwareManager] = useState(false)
   const [showConfigEditor, setShowConfigEditor] = useState(false)
   const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
   const [isTerminalRunning, setIsTerminalRunning] = useState(false)
@@ -1085,27 +1104,42 @@ export default function App() {
       setVellumCleaning(false)
     })
 
-    const unsubscribeHashtabMismatch = window.runtime.EventsOn('hashtab:version-mismatch', (...args: unknown[]) => {
-      const status = args[0] as HashtabVersionStatus
-      debugLog('Received hashtab:version-mismatch:', status)
-      setHashtabMismatch(status)
-    })
-
-    const unsubscribeTimezoneStatus = window.runtime.EventsOn('timezone:status', (...args: unknown[]) => {
-      const status = args[0] as TimezoneStatus
-      debugLog('Received timezone:status:', status)
-      if (status.deviceTimezone) {
-        setDeviceTimezone(status.deviceTimezone)
-        setSelectedTimezone(status.savedTimezone || status.deviceTimezone)
+    const unsubscribeConnectWarnings = window.runtime.EventsOn('connect:warnings', (...args: unknown[]) => {
+      const w = args[0] as {
+        osMismatch?: { prevVersion: string; newVersion: string }
+        reenableStatus?: string
+        hashtabMismatch?: HashtabVersionStatus
+        autoUpdateEnabled?: { enabled: boolean; running: boolean }
+        timezoneStatus?: TimezoneStatus
+        timezoneMismatch?: TimezoneStatus
       }
-    })
+      debugLog('Received connect:warnings:', w)
+      setWarningsChecked(true)
 
-    const unsubscribeTimezoneMismatch = window.runtime.EventsOn('timezone:mismatch', (...args: unknown[]) => {
-      const status = args[0] as TimezoneStatus
-      debugLog('Received timezone:mismatch:', status)
-      setTimezoneMismatch(status)
-      setDeviceTimezone(status.deviceTimezone)
-      setSelectedTimezone(status.savedTimezone || status.deviceTimezone)
+      if (w.osMismatch) {
+        setOsMismatchDetected(true)
+        osMismatchDetectedRef.current = true
+        setStoredOsVersion(w.osMismatch.prevVersion)
+        setCurrentOsVersion(w.osMismatch.newVersion)
+      }
+      if (w.reenableStatus) {
+        setReenableStatus(w.reenableStatus)
+      }
+      if (w.hashtabMismatch) {
+        setHashtabMismatch(w.hashtabMismatch)
+      }
+      if (w.autoUpdateEnabled) {
+        setShowAutoUpdateBanner(true)
+      }
+      if (w.timezoneStatus?.deviceTimezone) {
+        setDeviceTimezone(w.timezoneStatus.deviceTimezone)
+        setSelectedTimezone(w.timezoneStatus.savedTimezone || w.timezoneStatus.deviceTimezone)
+      }
+      if (w.timezoneMismatch) {
+        setTimezoneMismatch(w.timezoneMismatch)
+        setDeviceTimezone(w.timezoneMismatch.deviceTimezone)
+        setSelectedTimezone(w.timezoneMismatch.savedTimezone || w.timezoneMismatch.deviceTimezone)
+      }
     })
 
     const unsubscribeTimezoneComplete = window.runtime.EventsOn('timezone:complete', (...args: unknown[]) => {
@@ -1130,19 +1164,6 @@ export default function App() {
       setCommandRunning(false)
     })
 
-    const unsubscribeOsMismatch = window.runtime.EventsOn('os:mismatch', (...args: unknown[]) => {
-      const data = args[0] as { prevVersion: string; newVersion: string }
-      debugLog('Received os:mismatch:', data)
-      setOsMismatchDetected(true)
-      osMismatchDetectedRef.current = true
-      setStoredOsVersion(data.prevVersion)
-      setCurrentOsVersion(data.newVersion)
-    })
-
-    const unsubscribeReenableStatus = window.runtime.EventsOn('reenable:status', (...args: unknown[]) => {
-      debugLog('Received reenable:status:', args[0])
-      setReenableStatus(args[0] as string)
-    })
 
     const unsubscribeUpgradeBlocked = window.runtime.EventsOn('upgrade:blocked', (...args: unknown[]) => {
       const compat = args[0] as {
@@ -1259,16 +1280,19 @@ export default function App() {
       setRunningSystemTask(null)
     })
 
-    const unsubscribeAutoUpdate = window.runtime.EventsOn('autoupdate:enabled', () => {
-      debugLog('Received autoupdate:enabled')
-      setTimeout(() => setShowAutoUpdateBanner(true), 1000)
-    })
 
     const unsubscribeConnectionLost = window.runtime.EventsOn('connection:lost', (...args: unknown[]) => {
       const data = args[0] as { reason: string; code?: string; deviceId: string }
       debugLog('Received connection:lost:', data)
       setConnectionStatus('lost')
       setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
+      setOsMismatchDetected(false)
+      osMismatchDetectedRef.current = false
+      setWarningsChecked(false)
+      setUpgradesAvailable(false)
+      setCompatibilityStatus(null)
+      setStoredOsVersion('')
+      setCurrentOsVersion('')
     })
 
     const unsubscribeConnectionReconnecting = window.runtime.EventsOn('connection:reconnecting', (...args: unknown[]) => {
@@ -1290,35 +1314,37 @@ export default function App() {
         const info = await window.go.main.App.GetDeviceInfo()
         debugLog('Refreshed device info on reconnect:', info)
         setDeviceInfo(info)
+        const deviceType = data.device || device
         if (data.device) {
           setDevice(data.device)
         }
+
+        const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
+        const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
+        setPackages(filteredPkgs || [])
+
+        const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
+        const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
+        setInstalledPackages(new Map(Object.entries(installedVersions || {})))
+        if (installedResult.osUpgraded) {
+          setOsUpgradeDetected(true)
+          setPrevOsVersion(installedResult.prevVersion)
+          setNewOsVersion(installedResult.newVersion)
+        }
+
+        const maintCmds: Record<string, MaintenanceCommandInfo[]> = {}
+        for (const pkg of filteredPkgs) {
+          const cmds = await window.go.main.App.GetMaintenanceCommands(pkg.name)
+          if (cmds && cmds.length > 0) {
+            maintCmds[pkg.name] = cmds
+          }
+        }
+        setMaintenanceCommands(maintCmds)
       } catch (err) {
         debugLog('Failed to refresh device info on reconnect:', err)
       }
 
       await rescanAllPackages()
-
-      try {
-        const [updateStatus, hashtabStatus, tzStatus] = await Promise.all([
-          window.go.main.App.GetUpdateServiceStatus(),
-          window.go.main.App.CheckHashtabVersion(),
-          window.go.main.App.GetTimezoneStatus(),
-        ])
-        setUpdateServiceStatus(updateStatus)
-        if (hashtabStatus.needsRebuild) {
-          setHashtabMismatch(hashtabStatus)
-        } else {
-          setHashtabMismatch(null)
-        }
-        if (tzStatus.needsUpdate) {
-          setTimezoneMismatch(tzStatus)
-        } else {
-          setTimezoneMismatch(null)
-        }
-      } catch (err) {
-        debugLog('Failed to refresh status on reconnect:', err)
-      }
     })
 
     const unsubscribeConnectionFailed = window.runtime.EventsOn('connection:failed', (...args: unknown[]) => {
@@ -1372,19 +1398,14 @@ export default function App() {
       unsubscribeCleanupStart()
       unsubscribeCleanupComplete()
       unsubscribeCleanupError()
-      unsubscribeHashtabMismatch()
-      unsubscribeTimezoneStatus()
-      unsubscribeTimezoneMismatch()
+      unsubscribeConnectWarnings()
       unsubscribeTimezoneComplete()
       unsubscribeTimezoneError()
-      unsubscribeOsMismatch()
-      unsubscribeReenableStatus()
       unsubscribeUpgradeBlocked()
       unsubscribeUpgradeError()
       unsubscribeUpgradeComplete()
       unsubscribePackageUpgradeComplete()
       unsubscribeSystemTaskComplete()
-      unsubscribeAutoUpdate()
       unsubscribeConnectionLost()
       unsubscribeConnectionReconnecting()
       unsubscribeConnectionRestored()
@@ -1527,6 +1548,7 @@ export default function App() {
     setCurrentOsVersion('')
     setChecklistLoading(false)
     setVellumInstalled(null)
+    setWarningsChecked(false)
     setBootstrapping(false)
     setBootstrapOutput('')
     setBootstrapError(null)
@@ -2330,7 +2352,7 @@ export default function App() {
         )}
 
         {/* Warning Banner */}
-        {step !== 'connect' && (
+        {step !== 'connect' && warningsChecked && (
           <div className="mb-4">
             <ConsolidatedWarningBanner
               warnings={{
@@ -2346,6 +2368,7 @@ export default function App() {
                 setHashtabMismatch(null)
                 setTimezoneMismatch(null)
                 setShowAutoUpdateBanner(false)
+                setReenableStatus('')
               }}
             />
           </div>
@@ -2362,7 +2385,44 @@ export default function App() {
 
             {tabVisibility.mods && (
             <TabsContent value="mods">
-              {vellumInstalled === null ? null : vellumBrokenInstall !== null ? (
+              {vellumInstalled === null || (vellumInstalled && !warningsChecked) || (osMismatchDetected && !compatibilityStatus) ? (
+                <div className="space-y-6">
+                  <div className="flex flex-wrap gap-2">
+                    <Skeleton className="h-9 flex-1 min-w-[200px]" />
+                    <Skeleton className="h-9 w-9" />
+                    <Skeleton className="h-9 w-32" />
+                    <Skeleton className="h-9 w-32" />
+                  </div>
+                  <Card>
+                    <div className="px-6 py-4">
+                      <Skeleton className="h-4 w-32" />
+                    </div>
+                    <div className="divide-y px-6 pb-4">
+                      {Array.from({ length: 8 }).map((_, i) => (
+                        <div key={i} className="py-3 flex items-center gap-4">
+                          <div className="flex-1 min-w-0">
+                            {viewMode === 'compact' ? (
+                              <div className="flex items-center gap-2">
+                                <Skeleton className="h-4 w-[160px] shrink-0" />
+                                <Skeleton className="h-4 flex-1" />
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <Skeleton className="h-4 w-32" />
+                                  <Skeleton className="h-5 w-16 rounded-full" />
+                                </div>
+                                <Skeleton className="h-4 w-3/4" />
+                              </div>
+                            )}
+                          </div>
+                          <Skeleton className="h-8 w-20 shrink-0" />
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                </div>
+              ) : vellumBrokenInstall !== null ? (
                 <Card>
                   <CardHeader>
                     <div className="flex items-center gap-2">
@@ -2415,6 +2475,7 @@ export default function App() {
                     onAddToUninstallQueue={addToUninstallQueue}
                     onRemoveFromUninstallQueue={removeFromUninstallQueue}
                     onRunUpgrade={handleChecklistUpgrade}
+                    onGoToUtilities={() => setActiveTab('utilities')}
                     onSelectPackage={handleSelectPackageForOS}
                   />
                 </div>
@@ -2940,6 +3001,22 @@ export default function App() {
                       </Button>
                     </CardContent>
                   </Card>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>OS Manager</CardTitle>
+                      <CardDescription>View, install, and switch OS versions.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Button
+                        className="w-full"
+                        variant="outline"
+                        onClick={() => setShowSoftwareManager(true)}
+                        disabled={connectionStatus !== 'connected'}
+                      >
+                        Manage
+                      </Button>
+                    </CardContent>
+                  </Card>
                 </div>
               </TabsContent>
             )}
@@ -3225,6 +3302,14 @@ export default function App() {
         open={showImportPDF}
         isConnected={connectionStatus === 'connected'}
         onOpenChange={setShowImportPDF}
+      />
+
+      <SoftwareManagerDialog
+        open={showSoftwareManager}
+        onOpenChange={setShowSoftwareManager}
+        isConnected={connectionStatus === 'connected'}
+        vellumInstalled={vellumInstalled}
+        onSelectPackageForOS={handleSelectPackageForOS}
       />
 
       {/* Backup & Restore Dialog */}

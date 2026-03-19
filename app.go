@@ -46,7 +46,14 @@ import (
 	"reManager/internal/sshagent"
 	"reManager/internal/storage"
 	"reManager/internal/support"
+	"reManager/internal/swupdate"
 	"reManager/internal/vellum"
+
+	rmdevice "github.com/rmitchellscott/remarkable-go/device"
+	rmexecutor "github.com/rmitchellscott/remarkable-go/executor"
+	rmfilesystem "github.com/rmitchellscott/remarkable-go/filesystem"
+	"github.com/rmitchellscott/remarkable-go/partition"
+	rmupdate "github.com/rmitchellscott/remarkable-go/update"
 )
 
 func openFileDialog(ctx context.Context, title string) (string, error) {
@@ -151,6 +158,7 @@ type App struct {
 	reconnectMu            sync.Mutex
 	fastDialMode           bool
 	installCancelCh        chan struct{}
+	osInstallCancelCh      chan struct{}
 	backupCancelCh         chan struct{}
 	backupMu               sync.Mutex
 	folderTransferCancelCh chan struct{}
@@ -806,6 +814,10 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		debug.Println("[DEBUG] Checking if vellum is installed...")
 		installed, err := a.vellumClient.IsInstalled()
 		debug.Printf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
+
+		warnings := map[string]interface{}{}
+		vellumReady := false
+
 		if err == nil && !installed {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
 		} else if err == nil && installed {
@@ -814,62 +826,65 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			runtime.EventsEmit(a.ctx, "vellum:ready", nil)
 			if verr == nil && !valid {
 				runtime.EventsEmit(a.ctx, "vellum:broken-install", missing)
-				return
-			}
+			} else {
+				vellumReady = true
 
-			osState, err := a.vellumClient.GetOSVersionState()
-			if err == nil && osState.Mismatch {
-				debug.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
-					osState.StoredVersion, osState.CurrentVersion)
-				runtime.EventsEmit(a.ctx, "os:mismatch", map[string]string{
-					"prevVersion": osState.StoredVersion,
-					"newVersion":  osState.CurrentVersion,
-				})
-			}
-
-			reenableStatus, reenableErr := a.vellumClient.ReenableStatus()
-			if reenableErr == nil && reenableStatus != "" {
-				debug.Printf("[DEBUG] Reenable status: %s\n", reenableStatus)
-				runtime.EventsEmit(a.ctx, "reenable:status", reenableStatus)
-			}
-
-			status := a.CheckHashtabVersion()
-			debug.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
-				status.Installed, status.HashtabVersion, status.FirmwareVersion, status.NeedsRebuild)
-			if status.NeedsRebuild {
-				runtime.EventsEmit(a.ctx, "hashtab:version-mismatch", status)
-			}
-
-			updateStatus := a.GetUpdateServiceStatus()
-			debug.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
-			if updateStatus.Enabled || updateStatus.Running {
-				runtime.EventsEmit(a.ctx, "autoupdate:enabled", updateStatus)
-			}
-
-			timezoneStatus := a.GetTimezoneStatus()
-			debug.Printf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
-				timezoneStatus.DeviceTimezone, timezoneStatus.SavedTimezone, timezoneStatus.NeedsUpdate)
-
-			// Auto-save device timezone if no preference saved yet
-			if timezoneStatus.DeviceTimezone != "" && timezoneStatus.SavedTimezone == "" {
-				a.mu.Lock()
-				deviceID := a.connectedDeviceID
-				a.mu.Unlock()
-				if deviceID != "" && a.deviceStore != nil {
-					if err := a.deviceStore.UpdateTimezone(deviceID, timezoneStatus.DeviceTimezone); err == nil {
-						debug.Printf("[DEBUG] Auto-saved device timezone: %s\n", timezoneStatus.DeviceTimezone)
-						timezoneStatus.SavedTimezone = timezoneStatus.DeviceTimezone
+				osState, err := a.vellumClient.GetOSVersionState()
+				if err == nil && osState.Mismatch {
+					debug.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
+						osState.StoredVersion, osState.CurrentVersion)
+					warnings["osMismatch"] = map[string]string{
+						"prevVersion": osState.StoredVersion,
+						"newVersion":  osState.CurrentVersion,
 					}
 				}
-			}
 
-			if timezoneStatus.DeviceTimezone != "" {
-				runtime.EventsEmit(a.ctx, "timezone:status", timezoneStatus)
+				reenableStatus, reenableErr := a.vellumClient.ReenableStatus()
+				if reenableErr == nil && reenableStatus != "" {
+					debug.Printf("[DEBUG] Reenable status: %s\n", reenableStatus)
+					warnings["reenableStatus"] = reenableStatus
+				}
 			}
-			if timezoneStatus.NeedsUpdate {
-				runtime.EventsEmit(a.ctx, "timezone:mismatch", timezoneStatus)
-			}
+		}
 
+		hashtabStatus := a.CheckHashtabVersion()
+		debug.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
+			hashtabStatus.Installed, hashtabStatus.HashtabVersion, hashtabStatus.FirmwareVersion, hashtabStatus.NeedsRebuild)
+		if hashtabStatus.NeedsRebuild {
+			warnings["hashtabMismatch"] = hashtabStatus
+		}
+
+		updateStatus := a.GetUpdateServiceStatus()
+		debug.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
+		if updateStatus.Enabled || updateStatus.Running {
+			warnings["autoUpdateEnabled"] = updateStatus
+		}
+
+		timezoneStatus := a.GetTimezoneStatus()
+		debug.Printf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
+			timezoneStatus.DeviceTimezone, timezoneStatus.SavedTimezone, timezoneStatus.NeedsUpdate)
+
+		if timezoneStatus.DeviceTimezone != "" && timezoneStatus.SavedTimezone == "" {
+			a.mu.Lock()
+			deviceID := a.connectedDeviceID
+			a.mu.Unlock()
+			if deviceID != "" && a.deviceStore != nil {
+				if err := a.deviceStore.UpdateTimezone(deviceID, timezoneStatus.DeviceTimezone); err == nil {
+					debug.Printf("[DEBUG] Auto-saved device timezone: %s\n", timezoneStatus.DeviceTimezone)
+					timezoneStatus.SavedTimezone = timezoneStatus.DeviceTimezone
+				}
+			}
+		}
+		if timezoneStatus.DeviceTimezone != "" {
+			warnings["timezoneStatus"] = timezoneStatus
+		}
+		if timezoneStatus.NeedsUpdate {
+			warnings["timezoneMismatch"] = timezoneStatus
+		}
+
+		runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
+
+		if vellumReady {
 			settings, _ := a.settingsStore.Load()
 			proxyEnabled := settings == nil || settings.ProxyMode
 
@@ -888,9 +903,15 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 			upgradeResult, simErr := a.vellumClient.SimulateUpgrade()
 			if simErr == nil && upgradeResult.HasUpgrades {
-				runtime.EventsEmit(a.ctx, "packages:upgrades-available", map[string]interface{}{
-					"packages": upgradeResult.Packages,
-				})
+				hasMismatch := false
+				if m, ok := warnings["osMismatch"]; ok && m != nil {
+					hasMismatch = true
+				}
+				if !hasMismatch {
+					runtime.EventsEmit(a.ctx, "packages:upgrades-available", map[string]interface{}{
+						"packages": upgradeResult.Packages,
+					})
+				}
 			}
 		}
 	}()
@@ -3581,6 +3602,271 @@ func (a *App) RebootDevice() error {
 	return nil
 }
 
+func (a *App) getPartitionManager() (partition.Manager, error) {
+	a.mu.Lock()
+	client := a.client
+	deviceType := a.connectedDeviceType
+	a.mu.Unlock()
+
+	if client == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	exec := rmexecutor.NewSSH(client)
+	fs, err := rmfilesystem.NewSSH(client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create filesystem client: %w", err)
+	}
+
+	return partition.NewManager(exec, fs, rmdevice.Type(deviceType)), nil
+}
+
+func (a *App) GetPartitionInfo() (*partition.SystemInfo, error) {
+	mgr, err := a.getPartitionManager()
+	if err != nil {
+		return nil, err
+	}
+	return mgr.GetSystemInfo(context.Background())
+}
+
+func (a *App) SwitchBootPartition(partitionNumber int) (*partition.SwitchResult, error) {
+	mgr, err := a.getPartitionManager()
+	if err != nil {
+		return nil, err
+	}
+	return mgr.SwitchBoot(context.Background(), partitionNumber)
+}
+
+func (a *App) GetAvailableOSVersions() ([]swupdate.OSVersionInfo, error) {
+	a.mu.Lock()
+	deviceType := a.connectedDeviceType
+	a.mu.Unlock()
+
+	if deviceType == "" {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	return swupdate.ListVersions(deviceType, nil)
+}
+
+func (a *App) CancelOSInstall() {
+	a.mu.Lock()
+	ch := a.osInstallCancelCh
+	a.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+func (a *App) InstallOSVersion(version string) {
+	go func() {
+		a.mu.Lock()
+		client := a.client
+		deviceType := a.connectedDeviceType
+		deviceID := a.connectedDeviceID
+		cancelCh := make(chan struct{})
+		a.osInstallCancelCh = cancelCh
+		a.mu.Unlock()
+
+		if client == nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "not connected"})
+			return
+		}
+
+		versions, err := swupdate.ListVersions(deviceType, nil)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": err.Error()})
+			return
+		}
+
+		var filename string
+		for _, v := range versions {
+			if v.Version == version {
+				filename = v.Filename
+				break
+			}
+		}
+		if filename == "" {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "version not found"})
+			return
+		}
+
+		url := "https://remarkable-software.s3.us-east-2.amazonaws.com/" + filename
+
+		// Phase 1: Download to desktop
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "downloading", "percent": 0.0, "message": "Downloading..."})
+
+		tmpFile, err := os.CreateTemp("", "remanager-swu-*.swu")
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "failed to create temp file: " + err.Error()})
+			return
+		}
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath)
+
+		resp, err := http.Get(url)
+		if err != nil {
+			tmpFile.Close()
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "download failed: " + err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			tmpFile.Close()
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": fmt.Sprintf("download failed: HTTP %d", resp.StatusCode)})
+			return
+		}
+
+		cancelled := func() bool {
+			select {
+			case <-cancelCh:
+				return true
+			default:
+				return false
+			}
+		}
+
+		totalSize := resp.ContentLength
+		var downloaded int64
+		buf := make([]byte, 32*1024)
+		for {
+			if cancelled() {
+				tmpFile.Close()
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "cancelled"})
+				return
+			}
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
+					tmpFile.Close()
+					runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "write error: " + writeErr.Error()})
+					return
+				}
+				downloaded += int64(n)
+				if totalSize > 0 {
+					pct := float64(downloaded) / float64(totalSize) * 50.0
+					runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "downloading", "percent": pct, "message": "Downloading..."})
+				}
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				tmpFile.Close()
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "download error: " + readErr.Error()})
+				return
+			}
+		}
+		tmpFile.Close()
+
+		// Phase 2: Upload to device via SFTP
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "uploading", "percent": 50.0, "message": "Uploading to device..."})
+
+		sftpClient, err := sftp.NewClient(client)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "SFTP error: " + err.Error()})
+			return
+		}
+		defer sftpClient.Close()
+
+		remotePath := "/tmp/" + filename
+		localFile, err := os.Open(tmpPath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "failed to open temp file: " + err.Error()})
+			return
+		}
+		defer localFile.Close()
+
+		remoteFile, err := sftpClient.Create(remotePath)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "failed to create remote file: " + err.Error()})
+			return
+		}
+
+		stat, _ := localFile.Stat()
+		uploadSize := stat.Size()
+		var uploaded int64
+		for {
+			if cancelled() {
+				remoteFile.Close()
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "cancelled"})
+				return
+			}
+			n, readErr := localFile.Read(buf)
+			if n > 0 {
+				if _, writeErr := remoteFile.Write(buf[:n]); writeErr != nil {
+					remoteFile.Close()
+					runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "upload error: " + writeErr.Error()})
+					return
+				}
+				uploaded += int64(n)
+				if uploadSize > 0 {
+					pct := 50.0 + float64(uploaded)/float64(uploadSize)*50.0
+					runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "uploading", "percent": pct, "message": "Uploading to device..."})
+				}
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				remoteFile.Close()
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "upload read error: " + readErr.Error()})
+				return
+			}
+		}
+		remoteFile.Close()
+
+		// Phase 3: Install via swupdate-from-file
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "installing", "percent": 100.0, "message": "Installing..."})
+
+		exec := rmexecutor.NewSSH(client)
+		updater := rmupdate.NewManager(exec)
+
+		var outputBuf bytes.Buffer
+		var outputWriter io.Writer = &outputBuf
+		var cmdLog *logger.CommandLog
+		if a.logger != nil {
+			cmdLog = a.logger.StartCommandLog(deviceID, "swupdate-install")
+			defer func() {
+				cmdLog.Close()
+			}()
+			outputWriter = io.MultiWriter(&outputBuf, &cmdLogWriter{cmdLog: cmdLog})
+		}
+
+		result, err := updater.Install(context.Background(), remotePath, outputWriter)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]interface{}{"error": "install failed: " + err.Error(), "output": outputBuf.String()})
+			return
+		}
+		if !result.Success {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]interface{}{"error": "install failed: " + result.Message, "output": outputBuf.String()})
+			return
+		}
+
+		// Phase 4: Finalize
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "finalizing", "percent": 100.0, "message": "Finalizing..."})
+
+		session, err := client.NewSession()
+		if err == nil {
+			session.Run("rm -f " + remotePath)
+			session.Close()
+		}
+
+		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "complete", "percent": 100.0, "message": "Complete"})
+		runtime.EventsEmit(a.ctx, "software:install-complete", map[string]interface{}{"version": version, "partition": "standby"})
+	}()
+}
+
+type cmdLogWriter struct {
+	cmdLog *logger.CommandLog
+}
+
+func (w *cmdLogWriter) Write(p []byte) (n int, err error) {
+	w.cmdLog.Write(string(p))
+	return len(p), nil
+}
+
 func (a *App) ListDirectory(dirPath string) ([]FileInfo, error) {
 	a.mu.Lock()
 	client := a.client
@@ -5678,6 +5964,10 @@ func (a *App) buildGenerator(deviceID string, isConnectedDevice bool, deviceName
 			Installed:      hashtab.Installed,
 			HashtabVersion: hashtab.HashtabVersion,
 			NeedsRebuild:   hashtab.NeedsRebuild,
+		}
+
+		if partInfo, err := a.GetPartitionInfo(); err == nil {
+			gen.PartitionInfo = partInfo
 		}
 
 		if tz, err := a.GetDeviceTimezone(); err == nil {
