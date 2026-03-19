@@ -9,11 +9,11 @@ const errorMessages: Record<string, string> = {
   ERR_AUTH_FAILED:
     "Authentication failed. Please check your password or SSH key.",
   ERR_CONNECTION_REFUSED:
-    "Could not connect to device. Make sure it's powered on and SSH is enabled.",
-  ERR_TIMEOUT: "Connection timed out. The device may be busy or unreachable.",
+    "Could not connect to reMarkable. Make sure it's powered on, SSH is enabled, and try restarting the reMarkable.",
+  ERR_TIMEOUT: "Connection timed out. The reMarkable may be busy or unreachable.",
   ERR_NETWORK_UNREACHABLE: "Network unreachable. Check your network connection.",
   ERR_HOST_DOWN:
-    "Device appears to be offline or connection was interrupted.",
+    "reMarkable appears to be offline or connection was interrupted.",
   ERR_DNS_FAILED:
     "Could not resolve hostname. Check the address or try using an IP address.",
 
@@ -27,7 +27,7 @@ const errorMessages: Record<string, string> = {
   ERR_FILE_NOT_FOUND: "File or directory not found.",
   ERR_PERMISSION_DENIED:
     "Permission denied. You may not have access to this resource.",
-  ERR_DISK_FULL: "Not enough storage space on device.",
+  ERR_DISK_FULL: "Not enough storage space on reMarkable.",
   ERR_PATH_INVALID: "Invalid file path.",
 
   // Storage/keyring errors
@@ -36,8 +36,8 @@ const errorMessages: Record<string, string> = {
   ERR_STORAGE_FAILED: "Failed to save data.",
 
   // Device errors
-  ERR_DEVICE_NOT_FOUND: "Device not found.",
-  ERR_DEVICE_DETECTION: "Could not detect device type.",
+  ERR_DEVICE_NOT_FOUND: "reMarkable not found.",
+  ERR_DEVICE_DETECTION: "Could not detect reMarkable type.",
   ERR_UNSUPPORTED_DEVICE: "This device is not supported.",
 
   // Operation errors
@@ -46,7 +46,7 @@ const errorMessages: Record<string, string> = {
   ERR_SFTP_FAILED: "File transfer operation failed.",
 
   // Fallback
-  ERR_UNKNOWN: "An unexpected error occurred.",
+  ERR_UNKNOWN: "An unexpected error occurred. Try restarting the reMarkable.",
 };
 
 const errorPatterns: Array<{ pattern: RegExp; message: string }> = [
