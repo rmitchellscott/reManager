@@ -2522,8 +2522,8 @@ export default function App() {
                                 const isQueued = uninstallQueue.has(pkg.name)
                                 const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
                                 const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
-                                return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                                const row = (
+                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : !pkg.compatible ? 'border-l-4 border-yellow-500 pl-3 border-t border-t-yellow-500' : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                                   <div
                                     className="flex-1 min-w-0 cursor-pointer"
                                     onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(!pkg.compatible); setSelectedPackage(pkg) }}
@@ -2531,14 +2531,12 @@ export default function App() {
                                     {viewMode === 'compact' ? (
                                       <div className="flex items-center gap-2">
                                         <span className="font-medium w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0 truncate">{pkg.name}</span>
-                                        {!pkg.compatible && <AlertTriangle className="h-3 w-3 text-yellow-500 shrink-0" />}
                                         <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
                                       </div>
                                     ) : (
                                       <>
                                         <div className="flex items-center gap-2">
                                           <span className="font-medium">{pkg.name}</span>
-                                          {!pkg.compatible && <AlertTriangle className="h-3 w-3 text-yellow-500" />}
                                           {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
                                         </div>
                                         <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
@@ -2572,6 +2570,12 @@ export default function App() {
                                   )}
                                   </div>
                                 )
+                                return !pkg.compatible ? (
+                                  <Tooltip key={pkg.name}>
+                                    <TooltipTrigger asChild>{row}</TooltipTrigger>
+                                    <TooltipContent>Does not support your current OS</TooltipContent>
+                                  </Tooltip>
+                                ) : row
                               })}
                             </div>
                           </AccordionContent>

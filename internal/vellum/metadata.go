@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -475,10 +476,11 @@ func (m *MetadataStore) depsInstallable(name, deviceType, firmware, arch string,
 	}
 
 	for _, dep := range bestInfo.Depends {
-		if dep == "/bin/sh" {
+		depName := stripDepVersion(dep)
+		if depName == "/bin/sh" {
 			continue
 		}
-		if !m.depsInstallable(dep, deviceType, firmware, arch, visited) {
+		if !m.depsInstallable(depName, deviceType, firmware, arch, visited) {
 			return false
 		}
 	}
@@ -555,6 +557,15 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 	}
 
 	return true
+}
+
+func stripDepVersion(dep string) string {
+	for _, op := range []string{">=", "<=", "=", ">", "<"} {
+		if i := strings.Index(dep, op); i > 0 {
+			return dep[:i]
+		}
+	}
+	return dep
 }
 
 func compareVersions(a, b string) int {
