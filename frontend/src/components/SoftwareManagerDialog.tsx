@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { RefreshCw, Download, Check, Loader2, X, AlertCircle } from 'lucide-react'
+import { Download, Check, Loader2, X, AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 import { CheckOSDialog } from '@/components/CheckOSDialog'
@@ -247,11 +247,6 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     }
   }
 
-  const getNextBootSlot = () => {
-    if (!systemInfo) return null
-    return systemInfo.active.isNextBoot ? systemInfo.fallback : systemInfo.active
-  }
-
   const getCurrentBootSlot = () => {
     if (!systemInfo) return null
     return systemInfo.active.isNextBoot ? systemInfo.active : systemInfo.fallback
@@ -304,7 +299,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     )
   }
 
-  const renderSlotCard = (slot: PartitionSlot | null, label: string) => {
+  const renderSlotCard = (slot: PartitionSlot | null, label: string, clickable: boolean) => {
     if (!slot) return null
     const isRunning = slot.isActive
     const isNextBoot = slot.isNextBoot && !slot.isActive
@@ -326,7 +321,10 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     }
 
     return (
-      <div className={`border rounded-[10px] p-4 transition-colors ${highlighted ? 'border-foreground' : ''}`}>
+      <div
+        className={`border rounded-[10px] p-4 transition-colors ${highlighted ? 'border-foreground' : ''} ${clickable ? 'cursor-pointer hover:border-foreground' : ''}`}
+        onClick={clickable ? () => setShowSwitchConfirm(true) : undefined}
+      >
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-sm font-semibold">Partition {label}</span>
           <Badge variant={badgeVariant} className="text-[11px] px-2 py-0">
@@ -409,29 +407,13 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
           ) : systemInfo ? (
             <>
               <div className="grid grid-cols-2 gap-3">
-                {renderSlotCard(slotA, 'A')}
-                {renderSlotCard(slotB, 'B')}
+                {renderSlotCard(slotA, 'A', !!(slotA && !slotA.isNextBoot && !installNeedsReboot && !systemInfo?.updatePending))}
+                {renderSlotCard(slotB, 'B', !!(slotB && !slotB.isNextBoot && !installNeedsReboot && !systemInfo?.updatePending))}
               </div>
 
               <div className="h-px bg-border my-4" />
 
               <div className="flex flex-col gap-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium">Switch boot partition</div>
-                    <div className="text-xs text-muted-foreground">Set the active boot partition.</div>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowSwitchConfirm(true)}
-                    disabled={installNeedsReboot || systemInfo?.updatePending}
-                    className="shrink-0"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-                    Switch
-                  </Button>
-                </div>
 
                 <div className="flex flex-col gap-2.5">
                   <div>
@@ -494,23 +476,26 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
               On next restart, your reMarkable will boot from a different partition.
             </DialogDescription>
           </DialogHeader>
-          {systemInfo && (
-            <div className="flex gap-3 items-center">
-              <div className="flex-1 p-2.5 rounded-lg border bg-muted">
-                <div className="text-[11px] text-muted-foreground mb-0.5">Current</div>
-                <div className="text-[13px] font-semibold">{getCurrentBootSlot()?.version}</div>
-                <div className="text-xs text-muted-foreground">Partition {getCurrentBootSlot()?.label}</div>
+          {systemInfo && (() => {
+            const aIsCurrent = getCurrentBootSlot()!.label === 'A'
+            return (
+              <div className="flex gap-3 items-center">
+                <div className={`flex-1 p-2.5 rounded-lg border ${aIsCurrent ? 'bg-muted' : 'border-foreground'}`}>
+                  <div className="text-[11px] text-muted-foreground mb-0.5">{aIsCurrent ? 'Current' : 'Next boot'}</div>
+                  <div className="text-[13px] font-semibold">{slotA?.version}</div>
+                  <div className="text-xs text-muted-foreground">Partition A</div>
+                </div>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`text-muted-foreground shrink-0 ${!aIsCurrent ? 'rotate-180' : ''}`}>
+                  <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
+                </svg>
+                <div className={`flex-1 p-2.5 rounded-lg border ${aIsCurrent ? 'border-foreground' : 'bg-muted'}`}>
+                  <div className="text-[11px] text-muted-foreground mb-0.5">{aIsCurrent ? 'Next boot' : 'Current'}</div>
+                  <div className="text-[13px] font-semibold">{slotB?.version}</div>
+                  <div className="text-xs text-muted-foreground">Partition B</div>
+                </div>
               </div>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground shrink-0">
-                <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
-              </svg>
-              <div className="flex-1 p-2.5 rounded-lg border border-foreground">
-                <div className="text-[11px] text-muted-foreground mb-0.5">Next boot</div>
-                <div className="text-[13px] font-semibold">{getNextBootSlot()?.version}</div>
-                <div className="text-xs text-muted-foreground">Partition {getNextBootSlot()?.label}</div>
-              </div>
-            </div>
-          )}
+            )
+          })()}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowSwitchConfirm(false)}>Cancel</Button>
             <Button onClick={handleSwitchConfirm} disabled={switching}>
