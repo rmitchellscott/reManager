@@ -127,7 +127,7 @@ type CompatibilityResult struct {
 }
 
 var osUpgradeRegex = regexp.MustCompile(`OS updated \(([^\s]+) → ([^\s]+)\)`)
-var installedPkgRegex = regexp.MustCompile(`^(.+)-(\d+(?:\.\d+)+-r\d+)\s+\S+\s+\{`)
+var installedPkgRegex = regexp.MustCompile(`^(.+)-(\d+(?:\.\d+)+(?:_\w+)?-r\d+)\s+\S+\s+\{`)
 
 func (c *Client) ListInstalledWithVersions() (map[string]string, error) {
 	cmd := fmt.Sprintf("%s list -I", VellumBin)
