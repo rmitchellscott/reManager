@@ -286,7 +286,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <button onClick={() => setCheckOSVersion(version)}>
+          <button onClick={(e) => { e.stopPropagation(); setCheckOSVersion(version) }}>
             {hasIncompat ? (
               <X className="h-4 w-4 text-destructive" />
             ) : (
