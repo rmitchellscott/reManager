@@ -2141,12 +2141,12 @@ func (a *App) CheckOSCompatibility(targetOS string) CompatibilityResultJSON {
 }
 
 type PackageCompatibilityStatus struct {
-	InstalledPackages    []string `json:"installedPackages"`
-	CompatiblePackages   []string `json:"compatiblePackages"`
-	IncompatiblePackages []string `json:"incompatiblePackages"`
-	CurrentOsVersion     string   `json:"currentOsVersion"`
-	StoredOsVersion      string   `json:"storedOsVersion"`
-	FetchFailed          bool     `json:"fetchFailed"`
+	InstalledPackages    []string          `json:"installedPackages"`
+	CompatiblePackages   []string          `json:"compatiblePackages"`
+	IncompatiblePackages []string          `json:"incompatiblePackages"`
+	CurrentOsVersion     string            `json:"currentOsVersion"`
+	StoredOsVersion      string            `json:"storedOsVersion"`
+	FetchFailed          bool              `json:"fetchFailed"`
 }
 
 func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
@@ -2456,8 +2456,16 @@ func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResu
 
 	simResult, err := a.vellumClient.SimulateDel(packageNames...)
 	if err != nil {
-		debug.Printf("[DEBUG] SimulateDel failed: %v\n", err)
-		return &UninstallSimulationResult{Packages: packageNames}, nil
+		debug.Printf("[DEBUG] SimulateDel failed: %v, trying recursive\n", err)
+		recursiveList, rErr := a.vellumClient.SimulateDelRecursive(packageNames...)
+		if rErr != nil {
+			debug.Printf("[DEBUG] SimulateDelRecursive also failed: %v\n", rErr)
+			return &UninstallSimulationResult{Packages: packageNames}, nil
+		}
+		return &UninstallSimulationResult{
+			Packages:          packageNames,
+			RecursivePackages: recursiveList,
+		}, nil
 	}
 
 	packages := simResult.Packages
@@ -2783,8 +2791,13 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		if a.vellumClient != nil {
 			simResult, err := a.vellumClient.SimulateDel(packageNames...)
 			if err != nil {
-				debug.Printf("[DEBUG] SimulateDel failed: %v, using packageNames only\n", err)
-				allPackages = packageNames
+				debug.Printf("[DEBUG] SimulateDel failed: %v, trying recursive\n", err)
+				useRecursive = true
+				allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
+				if err != nil {
+					debug.Printf("[DEBUG] SimulateDelRecursive also failed: %v\n", err)
+					allPackages = packageNames
+				}
 			} else if len(simResult.Blocked) > 0 || len(simResult.Packages) == 0 {
 				worldToRemove, allAffected, wErr := a.resolveWorldDeps(packageNames)
 				if wErr != nil || len(worldToRemove) == 0 {
@@ -5406,6 +5419,110 @@ func (a *App) IsSleepScreenSupported() bool {
 		return (minor >= 2 && minor <= 13) || minor >= 20
 	}
 	return major > 3
+}
+
+func (a *App) GetSleepScreen() (string, error) {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	configPath := "/home/root/.config/remarkable/xochitl.conf"
+
+	file, err := sftpClient.Open(configPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open config file: %w", err)
+	}
+	content, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		return "", fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	cfg, err := ini.Load(content)
+	if err != nil {
+		return "", fmt.Errorf("invalid config file syntax: %w", err)
+	}
+
+	section := cfg.Section("General")
+	if !section.HasKey("SleepScreenPath") {
+		return "", nil
+	}
+	return section.Key("SleepScreenPath").String(), nil
+}
+
+func (a *App) ResetSleepScreen() error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	configPath := "/home/root/.config/remarkable/xochitl.conf"
+
+	file, err := sftpClient.Open(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to open config file: %w", err)
+	}
+	content, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	cfg, err := ini.Load(content)
+	if err != nil {
+		return fmt.Errorf("invalid config file syntax: %w", err)
+	}
+
+	section := cfg.Section("General")
+	section.DeleteKey("SleepScreenPath")
+
+	var buf bytes.Buffer
+	_, err = cfg.WriteTo(&buf)
+	if err != nil {
+		return fmt.Errorf("failed to serialize config: %w", err)
+	}
+
+	tmpPath := configPath + ".tmp"
+	tmpFile, err := sftpClient.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	_, err = tmpFile.Write(buf.Bytes())
+	if err != nil {
+		tmpFile.Close()
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	_ = sftpClient.Remove(configPath)
+	err = sftpClient.Rename(tmpPath, configPath)
+	if err != nil {
+		sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	return nil
 }
 
 func (a *App) SetSleepScreen(imagePath string) error {

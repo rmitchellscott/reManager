@@ -127,7 +127,7 @@ type CompatibilityResult struct {
 }
 
 var osUpgradeRegex = regexp.MustCompile(`OS updated \(([^\s]+) → ([^\s]+)\)`)
-var installedPkgRegex = regexp.MustCompile(`^(.+)-(\d+(?:\.\d+)+(?:_\w+)?-r\d+)\s+\S+\s+\{`)
+var installedPkgRegex = regexp.MustCompile(`^(.+)-(\d+(?:\.\d+)*(?:_\w+)?(?:-r\d+)?)\s+\S+\s+\{`)
 
 func (c *Client) ListInstalledWithVersions() (map[string]string, error) {
 	cmd := fmt.Sprintf("%s list -I", VellumBin)
@@ -292,14 +292,23 @@ func (c *Client) SimulateUpgrade() (*UpgradeSimulationResult, error) {
 	}, nil
 }
 
-var upgradeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Upgrading|Installing)\s+([^\s]+)\s+\(`)
+var upgradeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(Upgrading|Installing|Downgrading)\s+([^\s]+)\s+\(`)
+var downgradeTargetRegex = regexp.MustCompile(`->\s+([^\s)]+)`)
 
 func parseUpgradeSimulationOutput(output string) []string {
 	var packages []string
 	for _, line := range strings.Split(output, "\n") {
 		matches := upgradeLineRegex.FindStringSubmatch(line)
-		if len(matches) >= 2 {
-			packages = append(packages, matches[1])
+		if len(matches) >= 3 {
+			action := matches[1]
+			pkgName := matches[2]
+			if action == "Downgrading" {
+				if target := downgradeTargetRegex.FindStringSubmatch(line); len(target) >= 2 {
+					packages = append(packages, pkgName+"="+target[1])
+					continue
+				}
+			}
+			packages = append(packages, pkgName)
 		}
 	}
 	return packages

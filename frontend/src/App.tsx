@@ -266,7 +266,9 @@ declare global {
           InstallOSVersion(version: string): void
           CancelOSInstall(): void
           IsSleepScreenSupported(): Promise<boolean>
+          GetSleepScreen(): Promise<string>
           SetSleepScreen(imagePath: string): Promise<void>
+          ResetSleepScreen(): Promise<void>
           RestartXochitl(): Promise<void>
           DeleteAllLogs(): Promise<void>
           GetSupportBundlePreview(): Promise<{ included: string[]; excluded: string[] }>

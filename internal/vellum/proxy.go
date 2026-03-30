@@ -48,6 +48,10 @@ func NewProxy(client *Client, sshClient *ssh.Client, arch string) *Proxy {
 	}
 }
 
+type proxyPackage struct {
+	name, version, url string
+}
+
 type ProxyProgress struct {
 	Phase   string // "index", "resolving", "downloading", "transferring", "complete"
 	Current int
@@ -248,18 +252,25 @@ func parseAPKINDEX(data []byte) (map[string]string, error) {
 		}
 
 		scanner := bufio.NewScanner(tr)
-		var currentC string
+		var currentC, currentP, currentV string
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "C:") {
 				currentC = strings.TrimPrefix(line, "C:")
 			} else if strings.HasPrefix(line, "P:") {
-				pkgName := strings.TrimPrefix(line, "P:")
-				if currentC != "" {
-					checksums[pkgName] = currentC
-				}
+				currentP = strings.TrimPrefix(line, "P:")
+			} else if strings.HasPrefix(line, "V:") {
+				currentV = strings.TrimPrefix(line, "V:")
 			} else if line == "" {
+				if currentC != "" && currentP != "" {
+					checksums[currentP] = currentC
+					if currentV != "" {
+						checksums[currentP+"-"+currentV] = currentC
+					}
+				}
 				currentC = ""
+				currentP = ""
+				currentV = ""
 			}
 		}
 
@@ -309,56 +320,75 @@ func (p *Proxy) ProxyUpgradeDownload(onProgress func(ProxyProgress)) error {
 
 	debug.Printf("[DEBUG] ProxyUpgradeDownload: %d upgradable packages: %v\n", len(upgradeResult.Packages), upgradeResult.Packages)
 
-	urls, err := p.client.FetchURLs(upgradeResult.Packages...)
-	if err != nil {
-		return fmt.Errorf("failed to get package URLs: %w", err)
+	var pinnedPkgs []proxyPackage
+	var bareNames []string
+	for _, pkg := range upgradeResult.Packages {
+		if name, version, ok := strings.Cut(pkg, "="); ok {
+			pinnedPkgs = append(pinnedPkgs, proxyPackage{
+				name:    name,
+				version: version,
+				url:     fmt.Sprintf("%s/%s/%s-%s.apk", VellumRepoBaseURL, p.arch, name, version),
+			})
+		} else {
+			bareNames = append(bareNames, pkg)
+		}
 	}
 
-	for i, url := range urls {
-		if !strings.HasPrefix(url, "https://") {
-			continue
+	if len(bareNames) > 0 {
+		urls, err := p.client.FetchURLs(bareNames...)
+		if err != nil {
+			return fmt.Errorf("failed to get package URLs: %w", err)
 		}
-
-		pkgName, pkgVersion := parsePackageURL(url)
-		if pkgName == "" {
-			continue
+		for _, url := range urls {
+			if !strings.HasPrefix(url, "https://") {
+				continue
+			}
+			name, version := parsePackageURL(url)
+			if name != "" {
+				pinnedPkgs = append(pinnedPkgs, proxyPackage{name: name, version: version, url: url})
+			}
 		}
+	}
 
+	for i, pkg := range pinnedPkgs {
 		onProgress(ProxyProgress{
 			Phase:   "downloading",
 			Current: i + 1,
-			Total:   len(urls),
-			Package: pkgName,
-			Message: fmt.Sprintf("Downloading %s (%d/%d)...", pkgName, i+1, len(urls)),
+			Total:   len(pinnedPkgs),
+			Package: pkg.name,
+			Message: fmt.Sprintf("Downloading %s (%d/%d)...", pkg.name, i+1, len(pinnedPkgs)),
 		})
 
-		pkgData, err := downloadFile(url)
+		pkgData, err := downloadFile(pkg.url)
 		if err != nil {
-			return fmt.Errorf("failed to download %s: %w", pkgName, err)
+			return fmt.Errorf("failed to download %s: %w", pkg.name, err)
 		}
 
-		cField, ok := checksums[pkgName]
+		cField, ok := checksums[pkg.name+"-"+pkg.version]
 		if !ok {
-			return fmt.Errorf("checksum not found for package: %s", pkgName)
+			cField, ok = checksums[pkg.name]
+		}
+		if !ok {
+			return fmt.Errorf("checksum not found for package: %s", pkg.name)
 		}
 		hash8 := computePackageHash(cField)
-		cacheFilename := fmt.Sprintf("%s-%s.%s.apk", pkgName, pkgVersion, hash8)
+		cacheFilename := fmt.Sprintf("%s-%s.%s.apk", pkg.name, pkg.version, hash8)
 
 		pkgRemotePath := fmt.Sprintf("%s/%s", VellumCacheDir, cacheFilename)
 		onProgress(ProxyProgress{
 			Phase:   "transferring",
 			Current: i + 1,
-			Total:   len(urls),
-			Package: pkgName,
-			Message: fmt.Sprintf("Transferring %s (%d/%d)...", pkgName, i+1, len(urls)),
+			Total:   len(pinnedPkgs),
+			Package: pkg.name,
+			Message: fmt.Sprintf("Transferring %s (%d/%d)...", pkg.name, i+1, len(pinnedPkgs)),
 		})
 
 		if err := p.uploadToDevice(pkgData, pkgRemotePath); err != nil {
-			return fmt.Errorf("failed to upload %s: %w", pkgName, err)
+			return fmt.Errorf("failed to upload %s: %w", pkg.name, err)
 		}
 	}
 
-	onProgress(ProxyProgress{Phase: "complete", Total: len(urls), Current: len(urls), Message: "All upgrade packages downloaded and cached"})
+	onProgress(ProxyProgress{Phase: "complete", Total: len(pinnedPkgs), Current: len(pinnedPkgs), Message: "All upgrade packages downloaded and cached"})
 	return nil
 }
 

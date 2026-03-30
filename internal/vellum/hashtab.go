@@ -32,7 +32,7 @@ func (h *HashtabChecker) CheckHashtabExists() (bool, error) {
 }
 
 func (h *HashtabChecker) GetHashtabVersion() (string, error) {
-	cmd := fmt.Sprintf("xxd -l 128 -p %s", HashtabPath)
+	cmd := fmt.Sprintf("hexdump -v -e '1/1 \"%%02x\"' -n 128 %s", HashtabPath)
 	output, err := h.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		return "", err

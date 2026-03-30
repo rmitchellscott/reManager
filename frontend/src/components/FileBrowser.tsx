@@ -169,6 +169,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
   const [contextMenu, setContextMenu] = useState<{ file: FileInfo; x: number; y: number } | null>(null)
   const [systemFileWarning, setSystemFileWarning] = useState<SystemFileWarning | null>(null)
   const [sleepScreenSupported, setSleepScreenSupported] = useState(false)
+  const [currentSleepScreen, setCurrentSleepScreen] = useState<string | null>(null)
   const [restartXochitlDialog, setRestartXochitlDialog] = useState<{
     message: string
     onRestart: () => void
@@ -209,9 +210,11 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
     if (isConnected) {
       loadDirectory(currentPath)
       window.go.main.App.IsSleepScreenSupported().then(setSleepScreenSupported).catch(() => setSleepScreenSupported(false))
+      window.go.main.App.GetSleepScreen().then(path => setCurrentSleepScreen(path || null)).catch(() => setCurrentSleepScreen(null))
     } else {
       setFiles([])
       setSleepScreenSupported(false)
+      setCurrentSleepScreen(null)
     }
   }, [isConnected])
 
@@ -504,6 +507,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
     closeContextMenu()
     try {
       await window.go.main.App.SetSleepScreen(file.path)
+      setCurrentSleepScreen(file.path)
       setRestartXochitlDialog({
         message: `Sleep screen set to "${file.name}". Restart reMarkable UI to apply the change?`,
         onRestart: async () => {
@@ -517,6 +521,26 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
       })
     } catch (err) {
       setError(handleError(err, 'Set sleep screen'))
+    }
+  }
+
+  const handleResetSleepScreen = async () => {
+    try {
+      await window.go.main.App.ResetSleepScreen()
+      setCurrentSleepScreen(null)
+      setRestartXochitlDialog({
+        message: 'Sleep screen reset to default. Restart reMarkable UI to apply the change?',
+        onRestart: async () => {
+          try {
+            await window.go.main.App.RestartXochitl()
+          } catch (err) {
+            setError(handleError(err, 'Restart UI'))
+          }
+          setRestartXochitlDialog(null)
+        }
+      })
+    } catch (err) {
+      setError(handleError(err, 'Reset sleep screen'))
     }
   }
 
@@ -659,6 +683,19 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
+
+          {sleepScreenSupported && currentSleepScreen && (
+            <div className="text-sm text-muted-foreground px-1">
+              Custom sleep screen: {currentSleepScreen.split('/').pop()}
+              {' · '}
+              <button
+                className="text-primary hover:underline cursor-pointer"
+                onClick={handleResetSleepScreen}
+              >
+                Reset to default
+              </button>
+            </div>
+          )}
 
           {/* Error display */}
           {error && (
