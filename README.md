@@ -55,7 +55,12 @@ Download and run the [latest release](https://github.com/rmitchellscott/reManage
 Built for x86_64 (amd64) and aarch64 (arm64)
 
 ### macOS
+#### Homebrew
+```shell
+brew install --cask remanager
+```
 
+#### Manual
 Download and run the [latest release](https://github.com/rmitchellscott/reManager/releases/latest).  
 Universal binary supports both Intel and Apple Silicon. 
 
