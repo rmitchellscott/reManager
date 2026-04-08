@@ -181,7 +181,7 @@ export function ImportPDFDialog({ open, isConnected, onOpenChange }: ImportPDFDi
             false,
           )
         } else {
-          const coverPageNumber = file.coverPage === 'first' ? 0 : null
+          const coverPageNumber = file.coverPage === 'first' ? 0 : -1
           await window.go.main.App.ImportPDFFromPath(
             file.path,
             file.editedName.trim(),
@@ -479,7 +479,7 @@ function FileCard({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="first">First page</SelectItem>
-              <SelectItem value="none">None</SelectItem>
+              <SelectItem value="none">Last visited</SelectItem>
             </SelectContent>
           </Select>
         ) : (

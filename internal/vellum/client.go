@@ -294,6 +294,7 @@ func (c *Client) SimulateUpgrade() (*UpgradeSimulationResult, error) {
 
 var upgradeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(Upgrading|Installing|Downgrading)\s+([^\s]+)\s+\(`)
 var downgradeTargetRegex = regexp.MustCompile(`->\s+([^\s)]+)`)
+var upgradeVersionRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Upgrading|Installing|Downgrading)\s+[^\s]+\s+\(([^)]+)\)`)
 
 func parseUpgradeSimulationOutput(output string) []string {
 	var packages []string
@@ -312,6 +313,38 @@ func parseUpgradeSimulationOutput(output string) []string {
 		}
 	}
 	return packages
+}
+
+func parseUpgradeSimulationOutputWithVersions(output string) []SimulatedPackage {
+	var packages []SimulatedPackage
+	for _, line := range strings.Split(output, "\n") {
+		matches := upgradeLineRegex.FindStringSubmatch(line)
+		if len(matches) < 3 {
+			continue
+		}
+		pkgName := matches[2]
+
+		var version string
+		if target := downgradeTargetRegex.FindStringSubmatch(line); len(target) >= 2 {
+			version = target[1]
+		} else if vMatch := upgradeVersionRegex.FindStringSubmatch(line); len(vMatch) >= 2 {
+			version = vMatch[1]
+		}
+
+		if version != "" {
+			packages = append(packages, SimulatedPackage{Name: pkgName, Version: version})
+		}
+	}
+	return packages
+}
+
+func (c *Client) SimulateUpgradeWithVersions() ([]SimulatedPackage, error) {
+	cmd := fmt.Sprintf("%s upgrade --simulate", VellumBin)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, nil
+	}
+	return parseUpgradeSimulationOutputWithVersions(output), nil
 }
 
 func (c *Client) IsPackageInstalled(pkg string) (bool, error) {
@@ -430,6 +463,39 @@ func parseSimulationOutput(output string) []string {
 		}
 	}
 	return packages
+}
+
+type SimulatedPackage struct {
+	Name    string
+	Version string
+}
+
+var simulationLineWithVersionRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Installing|Purging)\s+([^\s]+)\s+\(([^)]+)\)`)
+
+func parseSimulationOutputWithVersions(output string) []SimulatedPackage {
+	var packages []SimulatedPackage
+	for _, line := range strings.Split(output, "\n") {
+		matches := simulationLineWithVersionRegex.FindStringSubmatch(line)
+		if len(matches) >= 3 {
+			packages = append(packages, SimulatedPackage{Name: matches[1], Version: matches[2]})
+		}
+	}
+	return packages
+}
+
+func (c *Client) SimulateAddWithVersions(packages ...string) ([]SimulatedPackage, error) {
+	if len(packages) == 0 {
+		return nil, nil
+	}
+	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, strings.Join(packages, " "))
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		if output != "" {
+			return nil, fmt.Errorf("%s", strings.TrimSpace(output))
+		}
+		return nil, err
+	}
+	return parseSimulationOutputWithVersions(output), nil
 }
 
 // parseBlockedPackages extracts blocked package info from vellum simulation output
