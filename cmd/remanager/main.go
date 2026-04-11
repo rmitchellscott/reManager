@@ -42,6 +42,7 @@ func main() {
 	rootCmd.AddCommand(bootstrapCmd())
 	rootCmd.AddCommand(importPDFCmd())
 	rootCmd.AddCommand(importRmdocCmd())
+	rootCmd.AddCommand(importEpubCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

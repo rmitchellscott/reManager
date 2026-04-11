@@ -452,7 +452,7 @@ func (c *Client) DelRecursiveStreaming(onOutput func(line string), packages ...s
 // Example lines: "( 1/20) Purging hide-dev-mode-icon (1.0.0-r0)"
 //
 //	"(10/20) Installing qt-resource-rebuilder (16.0.0-r0)"
-var simulationLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Installing|Purging)\s+([^\s]+)\s+\(`)
+var simulationLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Installing|Upgrading|Downgrading|Purging)\s+([^\s]+)\s+\(`)
 
 func parseSimulationOutput(output string) []string {
 	var packages []string
@@ -470,14 +470,18 @@ type SimulatedPackage struct {
 	Version string
 }
 
-var simulationLineWithVersionRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Installing|Purging)\s+([^\s]+)\s+\(([^)]+)\)`)
+var simulationLineWithVersionRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Installing|Upgrading|Downgrading|Purging)\s+([^\s]+)\s+\(([^)]+)\)`)
 
 func parseSimulationOutputWithVersions(output string) []SimulatedPackage {
 	var packages []SimulatedPackage
 	for _, line := range strings.Split(output, "\n") {
 		matches := simulationLineWithVersionRegex.FindStringSubmatch(line)
 		if len(matches) >= 3 {
-			packages = append(packages, SimulatedPackage{Name: matches[1], Version: matches[2]})
+			version := matches[2]
+			if parts := strings.Split(version, " -> "); len(parts) == 2 {
+				version = parts[1]
+			}
+			packages = append(packages, SimulatedPackage{Name: matches[1], Version: version})
 		}
 	}
 	return packages

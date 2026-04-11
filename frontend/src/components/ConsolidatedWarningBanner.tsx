@@ -26,7 +26,7 @@ export function ConsolidatedWarningBanner({
   return (
     <Alert className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400">
       <AlertTriangle className="h-4 w-4" />
-      <AlertTitle className="text-amber-900 dark:text-amber-50">Changes Detected</AlertTitle>
+      <AlertTitle className="text-amber-900 dark:text-amber-50">Action Required</AlertTitle>
       <AlertDescription>
         <ul className="space-y-1 list-disc pl-4">
           {warnings.osUpgrade && (

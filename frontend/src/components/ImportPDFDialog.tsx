@@ -17,7 +17,7 @@ interface StagedFile {
   pageCount: number
   pageCountOverride: number | null
   coverPage: 'first' | 'none'
-  fileType: 'pdf' | 'rmdoc'
+  fileType: 'pdf' | 'epub' | 'rmdoc'
   status: 'staged' | 'uploading' | 'done' | 'error'
   error?: string
 }
@@ -55,10 +55,10 @@ export function ImportPDFDialog({ open, isConnected, onOpenChange }: ImportPDFDi
   const addPaths = useCallback(async (paths: string[]) => {
     const validPaths = paths.filter((p) => {
       const lower = p.toLowerCase()
-      return lower.endsWith('.pdf') || lower.endsWith('.rmdoc')
+      return lower.endsWith('.pdf') || lower.endsWith('.epub') || lower.endsWith('.rmdoc')
     })
     if (validPaths.length === 0) {
-      setError('Please select PDF or rmdoc files.')
+      setError('Please select PDF, ePub, or rmdoc files.')
       return
     }
     setError(null)
@@ -75,12 +75,12 @@ export function ImportPDFDialog({ open, isConnected, onOpenChange }: ImportPDFDi
           filename,
           editedName: isRmdoc && info.visibleName
             ? info.visibleName
-            : filename.replace(/\.(pdf|rmdoc)$/i, ''),
+            : filename.replace(/\.(pdf|epub|rmdoc)$/i, ''),
           size: info.size,
           pageCount: info.pageCount,
           pageCountOverride: null,
-          coverPage: isRmdoc ? 'none' : 'first',
-          fileType: info.fileType as 'pdf' | 'rmdoc',
+          coverPage: info.fileType === 'pdf' ? 'first' : 'none',
+          fileType: info.fileType as 'pdf' | 'epub' | 'rmdoc',
           status: 'staged',
         })
       } catch (err) {
@@ -176,6 +176,12 @@ export function ImportPDFDialog({ open, isConnected, onOpenChange }: ImportPDFDi
       try {
         if (file.fileType === 'rmdoc') {
           await window.go.main.App.ImportRmdocFromPath(
+            file.path,
+            file.editedName.trim(),
+            false,
+          )
+        } else if (file.fileType === 'epub') {
+          await window.go.main.App.ImportEpubFromPath(
             file.path,
             file.editedName.trim(),
             false,
@@ -459,6 +465,8 @@ function FileCard({
               </div>
             </PopoverContent>
           </Popover>
+        ) : file.fileType === 'epub' ? (
+          <span className="text-[11px] text-muted-foreground">ePub</span>
         ) : (
           <span className="text-[11px] text-muted-foreground">
             {effectivePages} page{effectivePages !== 1 ? 's' : ''}
@@ -482,6 +490,10 @@ function FileCard({
               <SelectItem value="none">Last visited</SelectItem>
             </SelectContent>
           </Select>
+        ) : file.fileType === 'epub' ? (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+            ePub
+          </span>
         ) : (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
             Notebook

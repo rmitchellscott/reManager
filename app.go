@@ -40,6 +40,7 @@ import (
 	"reManager/internal/httputil"
 	"reManager/internal/installer"
 	"reManager/internal/logger"
+	"reManager/internal/epubimport"
 	"reManager/internal/pdfimport"
 	"reManager/internal/rmdocimport"
 	"reManager/internal/platform"
@@ -850,6 +851,12 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			warnings["autoUpdateEnabled"] = updateStatus
 		}
 
+		xochitlRunning := a.GetXochitlStatus()
+		debug.Printf("[DEBUG] Xochitl check: running=%v\n", xochitlRunning)
+		if !xochitlRunning {
+			warnings["xochitlNotRunning"] = true
+		}
+
 		timezoneStatus := a.GetTimezoneStatus()
 		debug.Printf("[DEBUG] Timezone check: device=%s, saved=%s, needsUpdate=%v\n",
 			timezoneStatus.DeviceTimezone, timezoneStatus.SavedTimezone, timezoneStatus.NeedsUpdate)
@@ -1622,6 +1629,21 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 
 	debug.Printf("[DEBUG] GetUpdateServiceStatus: returning enabled=%v, running=%v\n", status.Enabled, status.Running)
 	return status
+}
+
+func (a *App) GetXochitlStatus() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.client == nil {
+		return false
+	}
+
+	output, err := a.runCommand("systemctl is-active xochitl")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(output) == "active"
 }
 
 type HashtabVersionStatus struct {
@@ -5659,6 +5681,7 @@ func (a *App) SelectImportFiles() []string {
 			Filters: []*filechooser.Filter{
 				{Name: "Documents", Rules: []filechooser.Rule{
 					{Type: filechooser.GlobPattern, Pattern: "*.pdf"},
+					{Type: filechooser.GlobPattern, Pattern: "*.epub"},
 					{Type: filechooser.GlobPattern, Pattern: "*.rmdoc"},
 				}},
 			},
@@ -5676,7 +5699,7 @@ func (a *App) SelectImportFiles() []string {
 		Title:            "Select documents",
 		DefaultDirectory: home,
 		Filters: []runtime.FileFilter{
-			{DisplayName: "Documents (PDF, rmdoc)", Pattern: "*.pdf;*.rmdoc"},
+			{DisplayName: "Documents (PDF, ePub, rmdoc)", Pattern: "*.pdf;*.epub;*.rmdoc"},
 		},
 	})
 	if err != nil {
@@ -5744,9 +5767,48 @@ func (a *App) GetImportFileInfo(localPath string) (ImportFileInfo, error) {
 			FileType:    "rmdoc",
 			VisibleName: rmdocInfo.VisibleName,
 		}, nil
+	case ".epub":
+		return ImportFileInfo{
+			Path:     localPath,
+			Size:     info.Size(),
+			FileType: "epub",
+		}, nil
 	default:
 		return ImportFileInfo{}, fmt.Errorf("unsupported file type: %s", ext)
 	}
+}
+
+func (a *App) ImportEpubFromPath(localPath, visibleName string, restartXochitl bool) error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	epubData, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read ePub: %w", err)
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	if _, err := epubimport.Upload(sftpClient, epubData, visibleName, ""); err != nil {
+		return err
+	}
+
+	if restartXochitl {
+		if err := a.RestartXochitl(); err != nil {
+			return fmt.Errorf("uploaded, but %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (a *App) ImportRmdocFromPath(localPath, visibleName string, restartXochitl bool) error {

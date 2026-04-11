@@ -53,7 +53,7 @@ var SystemTasks = []SystemTask{
 	},
 	{
 		ID:          "restart-xochitl",
-		Label:       "Restart Xochitl",
+		Label:       "Restart reMarkable UI",
 		Description: "Restart the Xochitl UI service",
 		Command: func(ctx component.CommandContext) []component.CommandResult {
 			return []component.CommandResult{

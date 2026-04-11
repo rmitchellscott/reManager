@@ -11,7 +11,7 @@ import (
 	"reManager/internal/vellum"
 )
 
-var installProgressRegex = regexp.MustCompile(`\(\s*(\d+)/(\d+)\)\s+Installing\s+([^\s]+)\s+\(`)
+var installProgressRegex = regexp.MustCompile(`\(\s*(\d+)/(\d+)\)\s+(?:Installing|Upgrading|Downgrading)\s+([^\s]+)\s+\(`)
 
 func parseInstallProgress(line string) (idx int, total int, pkgName string) {
 	matches := installProgressRegex.FindStringSubmatch(line)
