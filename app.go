@@ -6435,6 +6435,38 @@ func (a *App) CopyToClipboard(text string) {
 	runtime.ClipboardSetText(a.ctx, text)
 }
 
+func (a *App) SubmitProblemReport(description, email, bundleURL string) error {
+	env := runtime.Environment(a.ctx)
+	hostOS := env.Platform
+	if hostOS == "darwin" {
+		hostOS = "macOS"
+	}
+	if platform.IsRunningInFlatpak() {
+		hostOS += " (Flatpak)"
+	}
+
+	a.mu.Lock()
+	deviceInfo := make(map[string]string)
+	if a.client != nil {
+		a.mu.Unlock()
+		deviceInfo = a.GetDeviceInfo()
+	} else {
+		a.mu.Unlock()
+	}
+
+	report := support.ReportRequest{
+		Description: description,
+		Email:       email,
+		AppVersion:  version,
+		HostOS:      hostOS,
+		DeviceModel: deviceInfo["machine"],
+		Firmware:    deviceInfo["firmware"],
+		BundleURL:   bundleURL,
+	}
+
+	return support.SubmitReport(support.GetSupportURL(), report)
+}
+
 func (a *App) GetSupportBundleSessionID() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
