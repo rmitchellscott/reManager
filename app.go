@@ -143,7 +143,8 @@ type App struct {
 	dialogResponse chan bool
 	deviceStore    *storage.DeviceStore
 	settingsStore  *storage.SettingsStore
-	bundleStore    *storage.BundleStore
+	bundleStore      *storage.BundleStore
+	deviceInfoCache  *storage.DeviceInfoCacheStore
 	vellumClient   *vellum.Client
 	metadata       *vellum.MetadataStore
 
@@ -211,6 +212,12 @@ func (a *App) startup(ctx context.Context) {
 		fmt.Printf("Warning: could not initialize bundle store: %v\n", err)
 	}
 	a.bundleStore = bundleStore
+
+	deviceInfoCache, err := storage.NewDeviceInfoCacheStore()
+	if err != nil {
+		fmt.Printf("Warning: could not initialize device info cache: %v\n", err)
+	}
+	a.deviceInfoCache = deviceInfoCache
 
 	a.metadata = vellum.NewMetadataStore()
 	if err := a.metadata.Load(); err != nil {
@@ -358,7 +365,13 @@ func (a *App) DeleteSavedDevice(id string) error {
 	if a.deviceStore == nil {
 		return fmt.Errorf("device store not initialized")
 	}
-	return a.deviceStore.Delete(id)
+	if err := a.deviceStore.Delete(id); err != nil {
+		return err
+	}
+	if a.deviceInfoCache != nil {
+		_ = a.deviceInfoCache.Delete(id)
+	}
+	return nil
 }
 
 func (a *App) UpdateDeviceName(id string, name string) error {
@@ -818,6 +831,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 		warnings := map[string]interface{}{}
 		vellumReady := false
+		var osVersionStored string
 
 		if err == nil && !installed {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
@@ -900,6 +914,9 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 
 			osState, err := a.vellumClient.GetOSVersionState()
 			debug.Printf("[DEBUG] GetOSVersionState: stored=%q, current=%q, mismatch=%v, err=%v\n", osState.StoredVersion, osState.CurrentVersion, osState.Mismatch, err)
+			if err == nil {
+				osVersionStored = osState.StoredVersion
+			}
 			if err == nil && osState.Mismatch {
 				debug.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
 					osState.StoredVersion, osState.CurrentVersion)
@@ -914,6 +931,39 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 					runtime.EventsEmit(a.ctx, "packages:upgrades-available", map[string]interface{}{
 						"packages": upgradeResult.Packages,
 					})
+				}
+			}
+		}
+
+		if a.deviceInfoCache != nil {
+			a.mu.Lock()
+			cacheDeviceID := a.connectedDeviceID
+			a.mu.Unlock()
+			if cacheDeviceID != "" {
+				cached := storage.CachedDeviceInfo{
+					Timezone:             timezoneStatus.DeviceTimezone,
+					HashtabInstalled:     hashtabStatus.Installed,
+					HashtabVersion:       hashtabStatus.HashtabVersion,
+					HashtabNeedsRebuild:  hashtabStatus.NeedsRebuild,
+					UpdateServiceEnabled: updateStatus.Enabled,
+					UpdateServiceRunning: updateStatus.Running,
+					OSVersion:            osVersionStored,
+					CachedAt:             time.Now().Unix(),
+				}
+				if devInfo := a.GetDeviceInfo(); len(devInfo) > 0 {
+					cached.MachineType = devInfo["machine"]
+					cached.FirmwareVersion = devInfo["firmware"]
+				}
+				if a.vellumClient != nil {
+					if versions, err := a.vellumClient.ListInstalledWithVersions(); err == nil {
+						cached.InstalledPackages = versions
+					}
+				}
+				if partInfo, err := a.GetPartitionInfo(); err == nil {
+					cached.PartitionInfo = partInfo
+				}
+				if err := a.deviceInfoCache.Set(cacheDeviceID, cached); err != nil {
+					debug.Printf("[DEBUG] Failed to cache device info: %v\n", err)
 				}
 			}
 		}
@@ -6153,6 +6203,26 @@ func (a *App) buildGenerator(deviceID string, isConnectedDevice bool, deviceName
 		if tz, err := a.GetDeviceTimezone(); err == nil {
 			gen.Timezone = tz
 		}
+	} else if deviceID != "" && a.deviceInfoCache != nil {
+		if cached, _ := a.deviceInfoCache.Get(deviceID); cached != nil {
+			gen.Device = &support.DeviceInfo{
+				MachineType:     cached.MachineType,
+				FirmwareVersion: cached.FirmwareVersion,
+			}
+			gen.InstalledPackages = cached.InstalledPackages
+			gen.OSVer = cached.OSVersion
+			gen.UpdateService = &support.UpdateServiceStatus{
+				Enabled: cached.UpdateServiceEnabled,
+				Running: cached.UpdateServiceRunning,
+			}
+			gen.Hashtab = &support.HashtabInfo{
+				Installed:      cached.HashtabInstalled,
+				HashtabVersion: cached.HashtabVersion,
+				NeedsRebuild:   cached.HashtabNeedsRebuild,
+			}
+			gen.PartitionInfo = cached.PartitionInfo
+			gen.Timezone = cached.Timezone
+		}
 	}
 
 	return gen
@@ -6435,7 +6505,7 @@ func (a *App) CopyToClipboard(text string) {
 	runtime.ClipboardSetText(a.ctx, text)
 }
 
-func (a *App) SubmitProblemReport(description, email, bundleURL string) error {
+func (a *App) SubmitProblemReport(description, email, bundleURL, deviceID string) error {
 	env := runtime.Environment(a.ctx)
 	hostOS := env.Platform
 	if hostOS == "darwin" {
@@ -6447,11 +6517,16 @@ func (a *App) SubmitProblemReport(description, email, bundleURL string) error {
 
 	a.mu.Lock()
 	deviceInfo := make(map[string]string)
-	if a.client != nil {
-		a.mu.Unlock()
+	isConnectedDevice := deviceID != "" && deviceID == a.connectedDeviceID && a.client != nil
+	a.mu.Unlock()
+
+	if isConnectedDevice {
 		deviceInfo = a.GetDeviceInfo()
-	} else {
-		a.mu.Unlock()
+	} else if deviceID != "" && a.deviceInfoCache != nil {
+		if cached, _ := a.deviceInfoCache.Get(deviceID); cached != nil {
+			deviceInfo["machine"] = cached.MachineType
+			deviceInfo["firmware"] = cached.FirmwareVersion
+		}
 	}
 
 	report := support.ReportRequest{

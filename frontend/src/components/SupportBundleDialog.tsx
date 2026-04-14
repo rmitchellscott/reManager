@@ -149,7 +149,7 @@ export function SupportBundleDialog({ open, onOpenChange, isConnected, savedDevi
                 {selectedDeviceId && !isSelectedDeviceConnected && (
                   <div className="flex items-start gap-2 text-xs text-muted-foreground">
                     <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
-                    <span>Not connected to this device. Bundle will include logs only, without live device data.</span>
+                    <span>Not connected to this device. Bundle will include cached device data, which may be outdated.</span>
                   </div>
                 )}
               </div>
@@ -235,7 +235,7 @@ export function SupportBundleDialog({ open, onOpenChange, isConnected, savedDevi
         <DialogFooter className="flex-col sm:flex-row gap-2">
           {stage === 'consent' && (
             <>
-              <Button variant="outline" onClick={() => onOpenChange(false)} className="mr-auto">
+              <Button variant="outline" onClick={() => onOpenChange(false)} className="">
                 Cancel
               </Button>
               <Button variant="outline" onClick={handleGenerate}>
@@ -254,7 +254,7 @@ export function SupportBundleDialog({ open, onOpenChange, isConnected, savedDevi
           {stage === 'error' && (
             <>
               <Button variant="outline" onClick={() => setStage('consent')}>
-                Back
+                Retry
               </Button>
               <Button onClick={() => onOpenChange(false)}>
                 Close

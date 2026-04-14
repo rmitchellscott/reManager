@@ -3,8 +3,11 @@ import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Copy, Check, Plus, Trash2, RefreshCw, Loader2, AlertCircle, AlertTriangle, ChevronRight, ChevronLeft, CheckCircle2, MessageSquare, Package, Info } from 'lucide-react'
+import { Copy, Check, Plus, Trash2, RefreshCw, Loader2, AlertCircle, AlertTriangle, CheckCircle2, MessageSquare, Package } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
+import { Label } from '@/components/ui/label'
 import { SupportBundleDialog } from '@/components/SupportBundleDialog'
 
 interface BundleRecord {
@@ -52,12 +55,13 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [confirmDeleteBundle, setConfirmDeleteBundle] = useState<BundleRecord | null>(null)
   const [showNewBundle, setShowNewBundle] = useState(false)
-  const [bundlesExpanded, setBundlesExpanded] = useState(false)
+
 
 
   const [reportDescription, setReportDescription] = useState('')
   const [reportEmail, setReportEmail] = useState('')
   const [reportBundleURL, setReportBundleURL] = useState('')
+  const [reportDeviceId, setReportDeviceId] = useState('')
   const [reportSubmitting, setReportSubmitting] = useState(false)
   const [showReportBundleDialog, setShowReportBundleDialog] = useState(false)
 
@@ -75,10 +79,10 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
       loadBundles()
       setScreen('main')
       setConfirmDeleteBundle(null)
-      setBundlesExpanded(false)
       setReportDescription('')
       setReportEmail('')
       setReportBundleURL('')
+      setReportDeviceId(connectedDeviceId || '')
       setChatBundleURL('')
     }
   }, [open, loadBundles])
@@ -86,6 +90,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
   const handleAppendComplete = useCallback(() => {
     setAppendingId(null)
     loadBundles()
+    toast.success('Bundle updated successfully')
   }, [loadBundles])
 
   const handleAppendError = useCallback((...args: unknown[]) => {
@@ -155,6 +160,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
         reportDescription.trim(),
         reportEmail.trim(),
         reportBundleURL,
+        reportDeviceId,
       )
       setScreen('report-sent')
     } catch (err) {
@@ -183,7 +189,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
       window.go.main.App.CopyToClipboard(chatBundleURL)
       toast.success('Bundle URL copied to clipboard')
     }
-    window.runtime.BrowserOpenURL('https://discord.gg/remanager')
+    window.runtime.BrowserOpenURL('https://discord.com/invite/u3P9sDW')
   }
 
   const bundleList = (
@@ -282,7 +288,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
             <DialogHeader className="flex-shrink-0">
               <DialogTitle>Support</DialogTitle>
               <DialogDescription>
-                Get help, report issues, or connect with the community.
+                Report issues or get community support.
               </DialogDescription>
             </DialogHeader>
 
@@ -292,7 +298,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
                   className="border rounded-lg py-5 px-4 flex flex-col items-center text-center gap-3 hover:bg-accent hover:border-ring transition-colors"
                   onClick={() => setScreen('report')}
                 >
-                  <Info className="h-8 w-8 text-muted-foreground" />
+                  <AlertTriangle className="h-8 w-8 text-muted-foreground" />
                   <span className="text-sm font-medium">Report a Problem</span>
                   <span className="text-xs text-muted-foreground">Let the developer know what went wrong</span>
                 </button>
@@ -307,31 +313,71 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
                 </button>
 
                 <button
-                  className="border rounded-lg py-5 px-4 flex flex-col items-center text-center gap-3 hover:bg-accent hover:border-ring transition-colors"
+                  className="border rounded-lg py-5 px-4 flex flex-col items-center text-center gap-3 hover:bg-accent hover:border-ring transition-colors relative"
                   onClick={() => setScreen('bundles')}
                 >
                   <Package className="h-8 w-8 text-muted-foreground" />
                   <span className="text-sm font-medium">Support Bundles</span>
                   <span className="text-xs text-muted-foreground">Generate & manage diagnostics</span>
+                  {bundles.length > 0 && (
+                    <Badge className="absolute top-2 right-2 rounded-full h-5 min-w-5 flex items-center justify-center px-1.5 text-[0.625rem]">
+                      {bundles.length}
+                    </Badge>
+                  )}
                 </button>
               </div>
 
-              {bundles.length > 0 && (
-                <div className="border-t mt-4 pt-3">
-                  <button
-                    className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => setBundlesExpanded(!bundlesExpanded)}
-                  >
-                    <ChevronRight className={`h-4 w-4 transition-transform ${bundlesExpanded ? 'rotate-90' : ''}`} />
-                    Uploaded Bundles ({bundles.length})
-                  </button>
-                  {bundlesExpanded && <div className="mt-3">{bundleList}</div>}
-                </div>
-              )}
+              {(() => {
+                const activeBundles = bundles.filter(b => !b.expiresAt || b.expiresAt > Date.now() / 1000)
+                const latestBundle = activeBundles[0]
+                if (!latestBundle) return null
+                const updatedAt = latestBundle.lastAppended || latestBundle.uploadedAt
+                return (
+                  <div className="border rounded-lg p-3.5 mt-4 flex items-center gap-3">
+                    <Package className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">{latestBundle.deviceName || 'Unknown device'}</div>
+                      <div className="text-xs text-muted-foreground">
+                        Bundle last updated {formatDate(updatedAt)}
+                      </div>
+                    </div>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 flex-shrink-0"
+                          onClick={() => handleCopy(latestBundle.remoteId, latestBundle.url)}
+                        >
+                          {copiedId === latestBundle.remoteId ? (
+                            <Check className="h-3.5 w-3.5" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Copy URL</TooltipContent>
+                    </Tooltip>
+                    <Button
+                      size="sm"
+                      onClick={() => handleAppend(latestBundle.remoteId)}
+                      disabled={appendingId === latestBundle.remoteId}
+                    >
+                      {appendingId === latestBundle.remoteId ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                      )}
+                      Update Bundle
+                    </Button>
+                  </div>
+                )
+              })()}
+
             </div>
 
             <DialogFooter className="flex-shrink-0">
-              <Button variant="outline" onClick={() => onOpenChange(false)} className="mr-auto">
+              <Button variant="outline" onClick={() => onOpenChange(false)} className="">
                 Close
               </Button>
             </DialogFooter>
@@ -341,35 +387,29 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
         {screen === 'report' && (
           <>
             <DialogHeader className="flex-shrink-0">
-              <button
-                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-3 self-start"
-                onClick={() => setScreen('main')}
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-                Back
-              </button>
               <DialogTitle>Report a Problem</DialogTitle>
               <DialogDescription>
                 Describe what happened so the developer can look into it.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex-1 overflow-y-auto space-y-5 px-1">
-              <div className="space-y-2">
-                <label className="text-[0.8125rem] font-medium">What went wrong?</label>
+            <div className="flex-1 overflow-y-auto space-y-4 px-1">
+              <div>
+                <Label>What went wrong?</Label>
                 <textarea
-                  className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[6rem] resize-y"
+                  className="mt-2 flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[6rem] resize-y"
                   placeholder="Describe the issue you experienced..."
                   value={reportDescription}
                   onChange={(e) => setReportDescription(e.target.value)}
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="text-[0.8125rem] font-medium">
+              <div>
+                <Label>
                   Email <span className="font-normal text-muted-foreground">(optional)</span>
-                </label>
+                </Label>
                 <Input
+                  className="mt-2"
                   type="email"
                   placeholder="your@email.com"
                   value={reportEmail}
@@ -377,10 +417,28 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
                 />
               </div>
 
+              {savedDevices.length > 0 && (
+                <div>
+                  <Label>
+                    Device <span className="font-normal text-muted-foreground">(optional)</span>
+                  </Label>
+                  <Select value={reportDeviceId} onValueChange={setReportDeviceId}>
+                    <SelectTrigger className="mt-2 w-full">
+                      <SelectValue placeholder="Select a device" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {savedDevices.map(d => (
+                        <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
               <div className="border rounded-lg p-3.5 bg-muted/50 flex items-start gap-3">
                 <Package className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-[0.8125rem] font-medium">Include a diagnostic bundle?</div>
+                  <div className="text-sm font-medium">Include a diagnostic bundle?</div>
                   <div className="text-xs text-muted-foreground">Helps investigate the issue faster. No personal data is included.</div>
                 </div>
                 {reportBundleURL ? (
@@ -429,7 +487,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
             </div>
 
             <DialogFooter className="flex-shrink-0">
-              <Button onClick={() => { setScreen('main'); setReportDescription(''); setReportEmail(''); setReportBundleURL('') }}>
+              <Button onClick={() => { setScreen('main'); setReportDescription(''); setReportEmail(''); setReportBundleURL(''); setReportDeviceId('') }}>
                 Done
               </Button>
             </DialogFooter>
@@ -439,13 +497,6 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
         {screen === 'chat' && (
           <>
             <DialogHeader className="flex-shrink-0">
-              <button
-                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-3 self-start"
-                onClick={() => setScreen('main')}
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-                Back
-              </button>
               <DialogTitle>Community Chat</DialogTitle>
               <DialogDescription>
                 Join the Discord to get help from other users and the developer.
@@ -456,7 +507,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
               <div className="border rounded-lg p-3.5 bg-muted/50 flex items-start gap-3">
                 <Package className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-[0.8125rem] font-medium">Generate a support bundle first?</div>
+                  <div className="text-sm font-medium">Generate a support bundle first?</div>
                   <div className="text-xs text-muted-foreground">You can share the link in Discord so others can help diagnose your issue.</div>
                 </div>
                 {chatBundleURL ? (
@@ -473,8 +524,8 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
 
               <p className="text-xs text-muted-foreground">
                 {chatBundleURL
-                  ? 'The bundle URL will be copied to your clipboard when you open Discord.'
-                  : "You'll be taken to Discord in your browser."
+                  ? <>The bundle URL will be copied to your clipboard when you open Discord. Open a thread in the <a href="https://discord.com/channels/385916768696139794/1180628656851275938" className="underline hover:text-foreground" onClick={(e) => { e.preventDefault(); window.runtime.BrowserOpenURL('https://discord.com/channels/385916768696139794/1180628656851275938') }}>#support channel</a> and paste it there.</>
+                  : <>You'll be taken to Discord in your browser. Open a thread in the <a href="https://discord.com/channels/385916768696139794/1180628656851275938" className="underline hover:text-foreground" onClick={(e) => { e.preventDefault(); window.runtime.BrowserOpenURL('https://discord.com/channels/385916768696139794/1180628656851275938') }}>#support channel</a> to get help.</>
                 }
               </p>
             </div>
@@ -493,13 +544,6 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
         {screen === 'bundles' && (
           <>
             <DialogHeader className="flex-shrink-0">
-              <button
-                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-3 self-start"
-                onClick={() => setScreen('main')}
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-                Back
-              </button>
               <DialogTitle>Support Bundles</DialogTitle>
               <DialogDescription>
                 Generate and share diagnostic data for troubleshooting.
@@ -518,8 +562,8 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
             </div>
 
             <DialogFooter className="flex-shrink-0">
-              <Button variant="outline" onClick={() => setScreen('main')} className="mr-auto">
-                Close
+              <Button variant="outline" onClick={() => setScreen('main')}>
+                Cancel
               </Button>
               <Button onClick={() => setShowNewBundle(true)}>
                 <Plus className="h-4 w-4 mr-1.5" />
@@ -576,9 +620,9 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
       <SupportBundleDialog
         open={showReportBundleDialog}
         onOpenChange={(v) => { if (!v) setShowReportBundleDialog(false) }}
-        isConnected={isConnected}
+        isConnected={isConnected || !!reportDeviceId}
         savedDevices={savedDevices}
-        connectedDeviceId={connectedDeviceId}
+        connectedDeviceId={reportDeviceId || connectedDeviceId}
       />
 
       <SupportBundleDialog

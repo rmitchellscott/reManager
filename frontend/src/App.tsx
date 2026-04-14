@@ -283,7 +283,7 @@ declare global {
           CopyToClipboard(text: string): void
           GetSupportBundleSessionID(): Promise<string>
           ResetSupportBundleSession(): Promise<void>
-          SubmitProblemReport(description: string, email: string, bundleURL: string): Promise<void>
+          SubmitProblemReport(description: string, email: string, bundleURL: string, deviceID: string): Promise<void>
         }
       }
     }
