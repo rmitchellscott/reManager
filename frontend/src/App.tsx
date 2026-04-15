@@ -2347,7 +2347,7 @@ export default function App() {
         )}
 
         {/* Xochitl Not Running Banner */}
-        {step !== 'connect' && !xochitlRunning && !commandRunning && !showProgressModal && connectionStatus === 'connected' && (
+        {step !== 'connect' && warningsChecked && !xochitlRunning && !commandRunning && !showProgressModal && connectionStatus === 'connected' && (
           <div className="mb-4">
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
