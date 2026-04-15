@@ -43,10 +43,10 @@
   type: archive
   url: https://proxy.golang.org/github.com/spf13/cobra/@v/v1.10.2.zip
 - dest: vendor/github.com/wailsapp/wails/v2
-  sha256: 1f599fcbff21b1d46c8a2c20f7da6cdf0913d616ac9f0fbdae07ce2e0cb9e877
+  sha256: 180adf48c80ff08a23a30964fd69f6fe205d7915e5903237b46236f605c0dfd6
   strip-components: 4
   type: archive
-  url: https://proxy.golang.org/github.com/wailsapp/wails/v2/@v/v2.11.0.zip
+  url: https://proxy.golang.org/github.com/wailsapp/wails/v2/@v/v2.12.0.zip
 - dest: vendor/github.com/zalando/go-keyring
   sha256: 8dea1c2777e7275317e5011f54cddb252c017a7e152558c4fcac84fa5101cf4e
   strip-components: 3
@@ -92,6 +92,11 @@
   strip-components: 2
   type: archive
   url: https://proxy.golang.org/dario.cat/mergo/@v/v1.0.0.zip
+- dest: vendor/git.sr.ht/~jackmordaunt/go-toast/v2
+  sha256: 9bb5ce85169e70d3fd58934f471c41ec8d63968e241050fb59a96035f065245f
+  strip-components: 4
+  type: archive
+  url: https://proxy.golang.org/git.sr.ht/~jackmordaunt/go-toast/v2/@v/v2.0.3.zip
 - dest: vendor/github.com/Masterminds/semver
   sha256: 15f6b54a695c15ffb205d5719e5ed50fab9ba9a739e1b4bdf3a0a319f51a7202
   strip-components: 3
@@ -102,11 +107,6 @@
   strip-components: 3
   type: archive
   url: https://proxy.golang.org/github.com/!proton!mail/go-crypto/@v/v1.1.5.zip
-- dest: vendor/github.com/StackExchange/wmi
-  sha256: bdf4b500a9afb4f2da4c99663c86b9f6e860f60eb1d4c5c9d3c1aaef1a7897e4
-  strip-components: 3
-  type: archive
-  url: https://proxy.golang.org/github.com/!stack!exchange/wmi/@v/v1.2.1.zip
 - dest: vendor/github.com/acarl005/stripansi
   sha256: 5169858a54f6f06f3089c45db233290fbaf1ebc2c9776649705b6cd9dc58a40c
   strip-components: 3
@@ -248,15 +248,15 @@
   type: archive
   url: https://proxy.golang.org/github.com/jackmordaunt/icns/@v/v1.0.0.zip
 - dest: vendor/github.com/jaypipes/ghw
-  sha256: 3d61b973bbb6c26f81cbcdf0cc579cfc5c3de241916205eef6e335c62ac98b30
+  sha256: 98640cc9ad85a3ae1e034eb798af6c6d624f8732fd071d24c30601dd0b5b342b
   strip-components: 3
   type: archive
-  url: https://proxy.golang.org/github.com/jaypipes/ghw/@v/v0.13.0.zip
+  url: https://proxy.golang.org/github.com/jaypipes/ghw/@v/v0.21.3.zip
 - dest: vendor/github.com/jaypipes/pcidb
-  sha256: 163e3869af0eeca2734c8b15ef048fd582552d8d14523a7f15a52a5f5b4aecde
+  sha256: ce753499960157c70c733ddc583a06998a5e0fccbc918c3d955118345d2340fb
   strip-components: 3
   type: archive
-  url: https://proxy.golang.org/github.com/jaypipes/pcidb/@v/v1.0.1.zip
+  url: https://proxy.golang.org/github.com/jaypipes/pcidb/@v/v1.1.1.zip
 - dest: vendor/github.com/jbenet/go-context
   sha256: 4cd0955abeea43dc4b5a08b8769e696109e0376f2a113a9b8eff13cc90cac1c7
   strip-components: 3
@@ -352,11 +352,6 @@
   strip-components: 3
   type: archive
   url: https://proxy.golang.org/github.com/microcosm-cc/bluemonday/@v/v1.0.27.zip
-- dest: vendor/github.com/mitchellh/go-homedir
-  sha256: fffec361fc7e776bb71433560c285ee2982d2c140b8f5bfba0db6033c0ade184
-  strip-components: 3
-  type: archive
-  url: https://proxy.golang.org/github.com/mitchellh/go-homedir/@v/v1.1.0.zip
 - dest: vendor/github.com/muesli/reflow
   sha256: 78e2cebf5a46a9b7c7c52d55d4ac4650cabd9135f180092e3f476293bb86696e
   strip-components: 3
@@ -502,6 +497,11 @@
   strip-components: 3
   type: archive
   url: https://proxy.golang.org/github.com/yuin/goldmark-emoji/@v/v1.0.3.zip
+- dest: vendor/github.com/yusufpapurcu/wmi
+  sha256: c2a0a12203162ef8fd6f65e191aac359823d370e113122cbd8e80711ddc9c1f9
+  strip-components: 3
+  type: archive
+  url: https://proxy.golang.org/github.com/yusufpapurcu/wmi/@v/v1.2.4.zip
 - dest: vendor/golang.org/x/image
   sha256: eee2ea2f688c5bbe2a8ce36ba57f37573f5b63828560cd34f8621f0f8d07e6bd
   strip-components: 3
@@ -548,7 +548,7 @@
   type: archive
   url: https://proxy.golang.org/gopkg.in/yaml.v3/@v/v3.0.1.zip
 - dest: vendor/howett.net/plist
-  sha256: 95f205af947f5a511c2f69046baff56fd83572bf6fd051ba4c430ceb9cc5d214
+  sha256: 401b47ed2b21c4f60ad343b325ae3f7307727a230f63cdddf080b635ce1e0ce4
   strip-components: 2
   type: archive
-  url: https://proxy.golang.org/howett.net/plist/@v/v1.0.0.zip
+  url: https://proxy.golang.org/howett.net/plist/@v/v1.0.2-0.20250314012144-ee69052608d9.zip
