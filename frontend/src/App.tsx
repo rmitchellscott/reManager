@@ -36,7 +36,7 @@ import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertTitle, AlertDescription, AlertAction } from '@/components/ui/alert'
-import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy, Download, CheckCircle2 } from 'lucide-react'
 
 interface PackageInfo {
   name: string
@@ -105,6 +105,13 @@ interface InstallResult {
   dnsError?: boolean
 }
 
+interface DialogActionRequest {
+  id: string
+  label: string
+  type: string
+  value: string
+}
+
 interface DialogRequest {
   title: string
   message: string
@@ -112,6 +119,7 @@ interface DialogRequest {
   confirmText: string
   inProgressMessage: string
   infoOnly: boolean
+  actions: DialogActionRequest[]
 }
 
 interface InstallSimulationResult {
@@ -209,7 +217,7 @@ declare global {
           SimulateUninstall(packageNames: string[]): Promise<UninstallSimulationResult>
           RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
           RunSystemTask(taskId: string, deviceType: string): Promise<void>
-          RespondToDialog(confirmed: boolean): Promise<void>
+          RespondToDialog(response: string): Promise<void>
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
           CheckForAppUpdate(): Promise<{ updateAvailable: boolean; latestVersion: string; currentVersion: string; releaseURL: string; error?: string }>
@@ -425,6 +433,7 @@ export default function App() {
     packages: string[]
     requested: string[]
   } | null>(null)
+  const [pendingXoviInfo, setPendingXoviInfo] = useState<string[] | null>(null)
   const [pendingUninstallConfirm, setPendingUninstallConfirm] = useState<{
     selected: string[]
     packages: string[]
@@ -3377,12 +3386,13 @@ export default function App() {
 
       {/* Progress Modal */}
       <Dialog
-        open={showProgressModal || pendingInstallConfirm !== null || pendingUninstallConfirm !== null}
+        open={showProgressModal || pendingInstallConfirm !== null || pendingXoviInfo !== null || pendingUninstallConfirm !== null}
         onOpenChange={(open) => {
           if (!installing && !uninstalling && !commandRunning) {
             if (!open) {
               setShowProgressModal(false)
               setPendingInstallConfirm(null)
+              setPendingXoviInfo(null)
               setPendingUninstallConfirm(null)
               setProgressModalType(null)
               setProgressIndex(0)
@@ -3446,7 +3456,11 @@ export default function App() {
                   <Button onClick={() => {
                     const pkgs = pendingInstallConfirm.packages
                     setPendingInstallConfirm(null)
-                    handleInstallQueue(pkgs)
+                    if (pkgs.includes('xovi') && !installedPackages.has('xovi')) {
+                      setPendingXoviInfo(pkgs)
+                    } else {
+                      handleInstallQueue(pkgs)
+                    }
                   }}>
                     Install ({pendingInstallConfirm.packages.length})
                   </Button>
@@ -3454,6 +3468,70 @@ export default function App() {
               </>
             )
           })()}
+
+          {/* Pre-install xovi info */}
+          {pendingXoviInfo !== null && !installing && !uninstalling && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Info className="h-5 w-5 text-blue-500" />
+                  Mods Will Not Auto-Start
+                </DialogTitle>
+                <DialogDescription>
+                  <div className="space-y-4 pt-4">
+                    <p>For technical reasons, UI mods do not auto-start after reboots. Each time your device restarts, you will need to manually start them using one of the following methods:</p>
+                    <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
+                      <li>(Recommended) Install the tripletap package, then triple-press the power button on every boot</li>
+                      <li>Use the Start maintenance command in reManager</li>
+                      <li>Connect via SSH and run: <code className="text-xs bg-muted px-1.5 py-0.5 rounded">/home/root/xovi/start</code></li>
+                    </ol>
+                  </div>
+                </DialogDescription>
+              </DialogHeader>
+
+              {!pendingXoviInfo.includes('tripletap') && !installedPackages.has('tripletap') && (
+                <div className="flex items-center justify-between gap-3 rounded-lg border p-3 bg-muted/50">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium">tripletap</div>
+                    <div className="text-xs text-muted-foreground">Triple-press power button to start mods on boot</div>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setPendingXoviInfo([...pendingXoviInfo, 'tripletap'])
+                    }}
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Add to install
+                  </Button>
+                </div>
+              )}
+
+              {pendingXoviInfo.includes('tripletap') && (
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-green-600/30 p-3 bg-green-50 dark:bg-green-950/30">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium">tripletap</div>
+                    <div className="text-xs text-muted-foreground">Triple-press power button to start mods on boot</div>
+                  </div>
+                  <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1.5">
+                    <Check className="h-3.5 w-3.5" /> Added
+                  </span>
+                </div>
+              )}
+
+              <DialogFooter>
+                <Button
+                  onClick={() => {
+                    const pkgs = pendingXoviInfo
+                    setPendingXoviInfo(null)
+                    handleInstallQueue(pkgs)
+                  }}
+                >
+                  Continue
+                </Button>
+              </DialogFooter>
+            </>
+          )}
 
           {/* Confirmation step for uninstall */}
           {pendingUninstallConfirm !== null && !installing && !uninstalling && (() => {
@@ -3573,70 +3651,106 @@ export default function App() {
           dialogRespondedRef.current = true
           manuallyStoppedRef.current = true
           setDialogRequest(null)
-          window.go.main.App.RespondToDialog(false)
+          window.go.main.App.RespondToDialog('cancel')
         }
       }}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              {dialogRequest?.infoOnly
-                ? <Info className="h-5 w-5 text-blue-500" />
-                : <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              }
-              {dialogRequest?.title || 'Confirmation Required'}
-            </DialogTitle>
-            <DialogDescription>
-              <div className="space-y-4 pt-4">
-                <p>{dialogRequest?.message}</p>
-                {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
-                  <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
-                    {dialogRequest.steps.map((step, idx) => (
-                      <li key={idx}>{step}</li>
-                    ))}
-                  </ol>
-                )}
+          {dialogRequest?.actions && dialogRequest.actions.length > 0 && !dialogRequest.infoOnly && !dialogRequest.confirmText ? (
+            <>
+              {/* Actions-only dialog (e.g., post-command "Start UI with/without Mods") */}
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
+                  {dialogRequest.title}
+                </DialogTitle>
+                <DialogDescription>{dialogRequest.message}</DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col gap-2 pt-2">
+                {dialogRequest.actions.map((action) => (
+                  <Button
+                    key={action.id}
+                    variant={action.id === dialogRequest.actions[0]?.id ? 'default' : 'outline'}
+                    className="w-full justify-center gap-2"
+                    onClick={() => {
+                      dialogRespondedRef.current = true
+                      setShowRebuildDialog(false)
+                      setDialogRequest(null)
+                                  window.go.main.App.RespondToDialog(action.id)
+                    }}
+                  >
+                    {action.label}
+                  </Button>
+                ))}
               </div>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            {dialogRequest?.infoOnly ? (
-              <Button
-                onClick={() => {
-                  dialogRespondedRef.current = true
-                  setShowRebuildDialog(false)
-                  setDialogRequest(null)
-                  window.go.main.App.RespondToDialog(true)
-                }}
-              >
-                {dialogRequest?.confirmText || 'Got it'}
-              </Button>
-            ) : (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    dialogRespondedRef.current = true
-                    manuallyStoppedRef.current = true
-                    setShowRebuildDialog(false)
-                    setDialogRequest(null)
-                    window.go.main.App.RespondToDialog(false)
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => {
-                    dialogRespondedRef.current = true
-                    setShowRebuildDialog(false)
-                    setDialogRequest(null)
-                    window.go.main.App.RespondToDialog(true)
-                  }}
-                >
-                  {dialogRequest?.confirmText || 'Proceed'}
-                </Button>
-              </>
-            )}
-          </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  {dialogRequest?.infoOnly
+                    ? <Info className="h-5 w-5 text-blue-500" />
+                    : <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                  }
+                  {dialogRequest?.title || 'Confirmation Required'}
+                </DialogTitle>
+                <DialogDescription>
+                  <div className="space-y-4 pt-4">
+                    <p>{dialogRequest?.message}</p>
+                    {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
+                      <>
+                        <p className="font-medium text-foreground">This will:</p>
+                        <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
+                          {dialogRequest.steps.map((step, idx) => (
+                            <li key={idx}>{step}</li>
+                          ))}
+                        </ol>
+                      </>
+                    )}
+                  </div>
+                </DialogDescription>
+              </DialogHeader>
+
+              <DialogFooter>
+                {dialogRequest?.infoOnly ? (
+                  <Button
+                    onClick={() => {
+                      dialogRespondedRef.current = true
+                      setShowRebuildDialog(false)
+                      setDialogRequest(null)
+                                  window.go.main.App.RespondToDialog('confirm')
+                    }}
+                  >
+                    {dialogRequest?.confirmText || 'Got it'}
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        dialogRespondedRef.current = true
+                        manuallyStoppedRef.current = true
+                        setShowRebuildDialog(false)
+                        setDialogRequest(null)
+                                      window.go.main.App.RespondToDialog('cancel')
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        dialogRespondedRef.current = true
+                        setShowRebuildDialog(false)
+                        setDialogRequest(null)
+                                      window.go.main.App.RespondToDialog('confirm')
+                      }}
+                    >
+                      {dialogRequest?.confirmText || 'Proceed'}
+                    </Button>
+                  </>
+                )}
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 

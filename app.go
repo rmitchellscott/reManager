@@ -140,7 +140,7 @@ type App struct {
 	commandCancel  context.CancelFunc
 	commandSession *ssh.Session
 	commandStdin   io.WriteCloser
-	dialogResponse chan bool
+	dialogResponse chan string
 	deviceStore    *storage.DeviceStore
 	settingsStore  *storage.SettingsStore
 	bundleStore    *storage.BundleStore
@@ -2425,13 +2425,42 @@ type FolderTransferProgress struct {
 	Status      string  `json:"status"`
 }
 
+type DialogActionRequest struct {
+	Id    string `json:"id"`
+	Label string `json:"label"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
 type DialogRequest struct {
-	Title             string   `json:"title"`
-	Message           string   `json:"message"`
-	Steps             []string `json:"steps"`
-	ConfirmText       string   `json:"confirmText"`
-	InProgressMessage string   `json:"inProgressMessage"`
-	InfoOnly          bool     `json:"infoOnly"`
+	Title             string                `json:"title"`
+	Message           string                `json:"message"`
+	Steps             []string              `json:"steps"`
+	ConfirmText       string                `json:"confirmText"`
+	InProgressMessage string                `json:"inProgressMessage"`
+	InfoOnly          bool                  `json:"infoOnly"`
+	Actions           []DialogActionRequest `json:"actions"`
+}
+
+func dialogRequestFromConfig(cfg *component.DialogConfig) DialogRequest {
+	var actions []DialogActionRequest
+	for _, a := range cfg.Actions {
+		actions = append(actions, DialogActionRequest{
+			Id:    a.Id,
+			Label: a.Label,
+			Type:  a.Type,
+			Value: a.Value,
+		})
+	}
+	return DialogRequest{
+		Title:             cfg.Title,
+		Message:           cfg.Message,
+		Steps:             cfg.Steps,
+		ConfirmText:       cfg.ConfirmText,
+		InProgressMessage: cfg.InProgressMessage,
+		InfoOnly:          cfg.InfoOnly,
+		Actions:           actions,
+	}
 }
 
 // InstallSimulationResult contains the result of simulating an install
@@ -2606,9 +2635,9 @@ func (a *App) resolveWorldDeps(targets []string) (worldToRemove []string, allAff
 	return worldToRemove, allAffected, nil
 }
 
-func (a *App) RespondToDialog(confirmed bool) {
+func (a *App) RespondToDialog(response string) {
 	if a.dialogResponse != nil {
-		a.dialogResponse <- confirmed
+		a.dialogResponse <- response
 	}
 }
 
@@ -2648,7 +2677,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 			}
 		}
 
-		a.dialogResponse = make(chan bool, 1)
+		a.dialogResponse = make(chan string, 1)
 		defer func() {
 			close(a.dialogResponse)
 			a.dialogResponse = nil
@@ -2728,17 +2757,10 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 			},
 			func(hookResult *component.HookExecutionResult) error {
 				if hookResult.DialogConfig != nil {
-					runtime.EventsEmit(a.ctx, "hook:dialog", DialogRequest{
-						Title:             hookResult.DialogConfig.Title,
-						Message:           hookResult.DialogConfig.Message,
-						Steps:             hookResult.DialogConfig.Steps,
-						ConfirmText:       hookResult.DialogConfig.ConfirmText,
-						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
-						InfoOnly:          hookResult.DialogConfig.InfoOnly,
-					})
+					runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig))
 
-					confirmed := <-a.dialogResponse
-					if !confirmed {
+					response := <-a.dialogResponse
+					if response == "" || response == "cancel" {
 						return fmt.Errorf("user cancelled")
 					}
 
@@ -2750,6 +2772,21 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
 						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
 							return err
+						}
+					}
+
+					if hookResult.DialogConfig.PostCommandDialog != nil {
+						runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig.PostCommandDialog))
+
+						postResponse := <-a.dialogResponse
+						for _, action := range hookResult.DialogConfig.PostCommandDialog.Actions {
+							if action.Id == postResponse && action.Type == "run_command" {
+								runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", action.Value))
+								if err := exec.Execute([]component.CommandResult{{Script: action.Value}}); err != nil {
+									return err
+								}
+								break
+							}
 						}
 					}
 				}
@@ -2792,7 +2829,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 			}
 		}
 
-		a.dialogResponse = make(chan bool, 1)
+		a.dialogResponse = make(chan string, 1)
 		defer func() {
 			close(a.dialogResponse)
 			a.dialogResponse = nil
@@ -2873,17 +2910,10 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 			},
 			func(hookResult *component.HookExecutionResult) error {
 				if hookResult.DialogConfig != nil {
-					runtime.EventsEmit(a.ctx, "hook:dialog", DialogRequest{
-						Title:             hookResult.DialogConfig.Title,
-						Message:           hookResult.DialogConfig.Message,
-						Steps:             hookResult.DialogConfig.Steps,
-						ConfirmText:       hookResult.DialogConfig.ConfirmText,
-						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
-						InfoOnly:          hookResult.DialogConfig.InfoOnly,
-					})
+					runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig))
 
-					confirmed := <-a.dialogResponse
-					if !confirmed {
+					response := <-a.dialogResponse
+					if response == "" || response == "cancel" {
 						return fmt.Errorf("user cancelled")
 					}
 
@@ -2891,6 +2921,21 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
 						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
 							return err
+						}
+					}
+
+					if hookResult.DialogConfig.PostCommandDialog != nil {
+						runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig.PostCommandDialog))
+
+						postResponse := <-a.dialogResponse
+						for _, action := range hookResult.DialogConfig.PostCommandDialog.Actions {
+							if action.Id == postResponse && action.Type == "run_command" {
+								runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", action.Value))
+								if err := exec.Execute([]component.CommandResult{{Script: action.Value}}); err != nil {
+									return err
+								}
+								break
+							}
 						}
 					}
 				}
@@ -2945,23 +2990,16 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 				}
 
 				if hookResult != nil && hookResult.DialogConfig != nil {
-					a.dialogResponse = make(chan bool, 1)
+					a.dialogResponse = make(chan string, 1)
 					defer func() {
 						close(a.dialogResponse)
 						a.dialogResponse = nil
 					}()
 
-					runtime.EventsEmit(a.ctx, "hook:dialog", DialogRequest{
-						Title:             hookResult.DialogConfig.Title,
-						Message:           hookResult.DialogConfig.Message,
-						Steps:             hookResult.DialogConfig.Steps,
-						ConfirmText:       hookResult.DialogConfig.ConfirmText,
-						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
-						InfoOnly:          hookResult.DialogConfig.InfoOnly,
-					})
+					runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig))
 
-					confirmed := <-a.dialogResponse
-					if !confirmed {
+					response := <-a.dialogResponse
+					if response == "" || response == "cancel" {
 						runtime.EventsEmit(a.ctx, "command:done", false)
 						return
 					}

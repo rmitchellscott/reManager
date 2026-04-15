@@ -27,6 +27,13 @@ type CommandResult struct {
 	RequiresPTY bool
 }
 
+type DialogAction struct {
+	Id    string
+	Label string
+	Type  string // "install_package", "run_command", "dismiss"
+	Value string
+}
+
 type DialogConfig struct {
 	Title             string
 	Message           string
@@ -34,6 +41,8 @@ type DialogConfig struct {
 	ConfirmText       string
 	InProgressMessage string
 	InfoOnly          bool
+	Actions           []DialogAction
+	PostCommandDialog *DialogConfig
 }
 
 type HookExecutionResult struct {

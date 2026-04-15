@@ -1,9 +1,6 @@
 {
   "packages": {
     "xovi": {
-      "hooks": {
-        "postInstall": "xovi_post_install_info"
-      },
       "maintenanceCommands": [
         {
           "id": "start",
