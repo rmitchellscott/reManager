@@ -1,0 +1,132 @@
+@page {
+  margin: 10px;
+}
+div, span, blockquote, figure, figcaption, aside, cite {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  text-indent: 0;
+}
+html {
+  line-height: 1.2;
+  font-family: Georgia, serif;
+  color: #1a1a1a;
+}
+body {
+  font-size: 1em;
+  line-height: 1.2;
+  margin: 0 2% 0 2%;
+  padding: 0;
+  border: 0;
+}
+p {
+  text-indent: 0;
+  text-align: justify;
+  margin-top: 0;
+  margin-left: 0;
+  margin-right: 0;
+  margin-bottom: 0.2em;
+  padding: 0;
+}
+img {
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+em, i {
+  font-style: italic;
+}
+strong, b {
+  font-weight: bold;
+}
+sup {
+  font-size: 0.7em;
+  vertical-align: super;
+  line-height: 0;
+}
+sub {
+  font-size: 0.7em;
+  vertical-align: sub;
+  line-height: 0;
+}
+h1 {
+  margin: 1em 0 1em 0;
+  font-size: 1.75em;
+  page-break-before: avoid;
+}
+h2 {
+  margin: 1em 0 1em 0;
+  font-size: 1.5em;
+}
+h3 {
+  margin: 1em 0 1em 0;
+  font-size: 1.2em;
+}
+h4 {
+  margin: 1em 0 1em 0;
+  font-size: 1.0em;
+}
+h1, h2, h3, h4, h5, h6 {
+  text-indent: 0;
+  text-align: center;
+  font-weight: normal;
+  page-break-after: avoid;
+}
+ol, ul {
+  margin: 0;
+  padding: 0;
+  padding-left: 1.75em;
+}
+li {
+  margin: 0;
+  padding: 0;
+}
+code {
+  font-family: Menlo, Monaco, 'Lucida Console', Consolas, monospace;
+  font-size: 85%;
+  white-space: pre-wrap;
+}
+pre {
+  margin: 1em 0;
+  overflow: auto;
+}
+hr {
+  border-style: solid;
+  border-width: 1px;
+  border-bottom-width: 0;
+  margin: 1.8em 0;
+}
+table {
+  margin: 1em 0;
+  border-collapse: collapse;
+  width: 100%;
+}
+th, td {
+  padding: 0.25em 0.5em;
+}
+a {
+  color: #4c7aa9;
+}
+figure {
+  text-align: center;
+  margin-top: 1em;
+  margin-bottom: 1em;
+  page-break-inside: avoid;
+}
+figcaption {
+  text-align: center;
+  font-size: 0.9em;
+}
+#TOC li {
+  list-style: none;
+}
+#TOC ul {
+  padding-left: 1.3em;
+}
+#TOC > ul {
+  padding-left: 0;
+}
+#TOC a:not(:hover) {
+  text-decoration: none;
+}

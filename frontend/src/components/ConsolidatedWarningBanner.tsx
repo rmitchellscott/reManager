@@ -9,6 +9,8 @@ interface ConsolidatedWarningBannerProps {
     osUpgrade?: { prevVersion: string; newVersion: string }
     autoUpdatesEnabled?: boolean
     reenableNeeded?: boolean
+    xoviNotRunning?: boolean
+    hashtabMissing?: boolean
   }
   onGoToMaintenance: () => void
   onDismiss: () => void
@@ -19,7 +21,7 @@ export function ConsolidatedWarningBanner({
   onGoToMaintenance,
   onDismiss,
 }: ConsolidatedWarningBannerProps) {
-  const hasWarnings = warnings.osUpgrade || warnings.hashtabMismatch || warnings.timezoneMismatch || warnings.autoUpdatesEnabled || warnings.reenableNeeded
+  const hasWarnings = warnings.osUpgrade || warnings.hashtabMismatch || warnings.timezoneMismatch || warnings.autoUpdatesEnabled || warnings.reenableNeeded || warnings.xoviNotRunning || warnings.hashtabMissing
 
   if (!hasWarnings) return null
 
@@ -32,6 +34,9 @@ export function ConsolidatedWarningBanner({
           {warnings.osUpgrade && (
             <li>OS change detected ({warnings.osUpgrade.prevVersion} → {warnings.osUpgrade.newVersion}). Run reenable to restore mods.</li>
           )}
+          {warnings.hashtabMissing && (
+            <li>Hashtable has not been built. Build it from the Maintenance tab to enable UI mods.</li>
+          )}
           {warnings.hashtabMismatch && (
             <li>Hashtable built for OS {warnings.hashtabMismatch.hashtabVersion}, but device is running {warnings.hashtabMismatch.firmwareVersion}</li>
           )}
@@ -43,6 +48,9 @@ export function ConsolidatedWarningBanner({
           )}
           {warnings.reenableNeeded && (
             <li>Reenable is needed to restore packages that modify the system partition</li>
+          )}
+          {warnings.xoviNotRunning && (
+            <li>Mods are installed but not running. Start UI with Mods from the Maintenance tab.</li>
           )}
         </ul>
       </AlertDescription>

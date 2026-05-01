@@ -89,6 +89,7 @@ interface FolderTransferProgress {
   bytesTotal: number
   percentage: number
   status: string
+  containsFolder: boolean
 }
 
 interface FileBrowserProps {
@@ -386,9 +387,11 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
     loadDirectory(parent)
   }
 
-  const handleUpload = () => {
+  const handleUpload = async () => {
+    const paths = await window.go.main.App.SelectFilesForUpload()
+    if (!paths || paths.length === 0) return
     confirmSystemFileAction('upload', currentPath, () => {
-      window.go.main.App.UploadFile(currentPath + '/')
+      window.go.main.App.UploadFilesFromPaths(paths, currentPath + '/')
     })
   }
 
@@ -728,7 +731,10 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
             <div className="bg-muted p-3 rounded space-y-2">
               <div className="flex justify-between items-center text-sm">
                 <span>
-                  {folderTransferProgress.status === 'uploading' ? 'Uploading' : 'Downloading'} folder
+                  {folderTransferProgress.status === 'uploading' ? 'Uploading' : 'Downloading'}
+                  {folderTransferProgress.containsFolder
+                    ? ' folder'
+                    : ` ${folderTransferProgress.filesTotal} file${folderTransferProgress.filesTotal === 1 ? '' : 's'}`}
                 </span>
                 <div className="flex items-center gap-2">
                   <span>{folderTransferProgress.percentage.toFixed(0)}%</span>

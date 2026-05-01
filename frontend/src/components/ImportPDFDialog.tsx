@@ -25,6 +25,7 @@ interface StagedFile {
 interface ImportPDFDialogProps {
   open: boolean
   isConnected: boolean
+  hasLibrarian: boolean
   onOpenChange: (open: boolean) => void
 }
 
@@ -34,7 +35,7 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function ImportPDFDialog({ open, isConnected, onOpenChange }: ImportPDFDialogProps) {
+export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange }: ImportPDFDialogProps) {
   const [files, setFiles] = useState<StagedFile[]>([])
   const [restartXochitl, setRestartXochitl] = useState(true)
   const [importing, setImporting] = useState(false)
@@ -204,11 +205,15 @@ export function ImportPDFDialog({ open, isConnected, onOpenChange }: ImportPDFDi
       }
     }
 
-    if (restartXochitl && succeeded > 0) {
+    if ((hasLibrarian || restartXochitl) && succeeded > 0) {
       try {
-        await window.go.main.App.RestartXochitl()
+        if (hasLibrarian) {
+          await window.go.main.App.RescanLibrary()
+        } else {
+          await window.go.main.App.RestartXochitl()
+        }
       } catch (err) {
-        setError(`Import complete but failed to restart UI: ${err}`)
+        setError(`Import complete but failed to ${hasLibrarian ? 'rescan library' : 'restart UI'}: ${err}`)
       }
     }
 
@@ -286,23 +291,22 @@ export function ImportPDFDialog({ open, isConnected, onOpenChange }: ImportPDFDi
         {/* Global settings */}
         {hasFiles && (
           <div className="border-t pt-3 mt-3">
-            <div className="flex items-start gap-3">
+            <div className="flex items-center gap-2">
               <Checkbox
                 id="pdfRestart"
-                checked={restartXochitl}
+                checked={hasLibrarian || restartXochitl}
                 onCheckedChange={(v: boolean | 'indeterminate') => setRestartXochitl(!!v)}
-                disabled={importing}
-                className="mt-[18px]"
+                disabled={importing || hasLibrarian}
               />
-              <div>
-                <Label htmlFor="pdfRestart" className="cursor-pointer font-normal text-sm">
-                  Restart UI after import
-                </Label>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Documents won't appear on the reMarkable until the UI is restarted.
-                </p>
-              </div>
+              <Label htmlFor="pdfRestart" className={`font-normal text-sm ${hasLibrarian ? '' : 'cursor-pointer'}`}>
+                {hasLibrarian ? 'Rescan library after import' : 'Restart UI after import'}
+              </Label>
             </div>
+            <p className="text-xs text-muted-foreground mt-1 ml-6">
+              {hasLibrarian
+                ? 'The librarian package will rescan the library without restarting the UI.'
+                : <>Documents won't appear until the UI is restarted.<br />Install the librarian package to import without restarting.</>}
+            </p>
           </div>
         )}
 

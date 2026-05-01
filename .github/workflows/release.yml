@@ -345,6 +345,11 @@ jobs:
         with:
           path: artifacts
 
+      - name: Rename flatpak bundles
+        run: |
+          mv artifacts/reManager-x86_64.flatpak/reManager.flatpak artifacts/reManager-x86_64.flatpak/reManager-x86_64.flatpak
+          mv artifacts/reManager-aarch64.flatpak/reManager.flatpak artifacts/reManager-aarch64.flatpak/reManager-aarch64.flatpak
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -355,8 +360,42 @@ jobs:
             artifacts/reManager-linux-arm64/reManager-linux-arm64.tar.gz
             artifacts/reManager-windows-amd64/reManager-windows-amd64.zip
             artifacts/reManager-windows-arm64/reManager-windows-arm64.zip
-            artifacts/reManager-x86_64/reManager-x86_64.flatpak
-            artifacts/reManager-aarch64/reManager-aarch64.flatpak
+            artifacts/reManager-x86_64.flatpak/reManager-x86_64.flatpak
+            artifacts/reManager-aarch64.flatpak/reManager-aarch64.flatpak
+
+  publish-guide:
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && !endsWith(github.ref_name, '-test')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish guide for release version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          EPUB="docs/guide/reManager User Guide.epub"
+
+          if [ ! -f "$EPUB" ]; then
+            echo "No guide epub found, skipping"
+            exit 0
+          fi
+
+          mkdir -p docs/guide/releases
+          cp "$EPUB" "docs/guide/releases/${VERSION}.epub"
+          SHA256=$(sha256sum "docs/guide/releases/${VERSION}.epub" | awk '{print $1}')
+
+          jq --arg v "$VERSION" --arg h "$SHA256" '.[$v] = {"sha256": $h}' \
+            docs/guide/guide-manifest.json > tmp-manifest.json \
+            && mv tmp-manifest.json docs/guide/guide-manifest.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "docs/guide/releases/${VERSION}.epub" docs/guide/guide-manifest.json
+          git commit -m "docs: publish user guide for v${VERSION}" || exit 0
+          git push origin main
 
   update-flathub:
     needs: [release]

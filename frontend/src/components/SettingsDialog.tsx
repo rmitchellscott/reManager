@@ -25,8 +25,10 @@ interface SettingsDialogProps {
   terminalTheme: string
   editorTheme: string
   checkForUpdates: boolean
+  suppressGuideOffer: boolean
   sshAgentSocketPath: string
   onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string) => void
+  onToggleGuideOffer: (enabled: boolean) => void
   onUninstallVellum: (removeAllPackages: boolean) => void
   uninstalling: boolean
   uninstallOutput: string
@@ -47,8 +49,10 @@ export function SettingsDialog({
   terminalTheme,
   editorTheme,
   checkForUpdates,
+  suppressGuideOffer,
   sshAgentSocketPath,
   onSaveSettings,
+  onToggleGuideOffer,
   onUninstallVellum,
   uninstalling,
   uninstallOutput,
@@ -65,6 +69,7 @@ export function SettingsDialog({
   const [localTerminalTheme, setLocalTerminalTheme] = useState(terminalTheme)
   const [localEditorTheme, setLocalEditorTheme] = useState(editorTheme)
   const [localCheckForUpdates, setLocalCheckForUpdates] = useState(checkForUpdates)
+  const [localSuppressGuideOffer, setLocalSuppressGuideOffer] = useState(suppressGuideOffer)
   const [localSSHAgentSocketPath, setLocalSSHAgentSocketPath] = useState(sshAgentSocketPath)
   const [agentSocketMode, setAgentSocketMode] = useState<'auto' | 'custom'>(sshAgentSocketPath ? 'custom' : 'auto')
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
@@ -80,6 +85,7 @@ export function SettingsDialog({
     localTerminalTheme !== terminalTheme ||
     localEditorTheme !== editorTheme ||
     localCheckForUpdates !== checkForUpdates ||
+    localSuppressGuideOffer !== suppressGuideOffer ||
     localSSHAgentSocketPath !== sshAgentSocketPath ||
     JSON.stringify(localTabVisibility) !== JSON.stringify({ ...defaultTabVisibility, ...tabVisibility })
 
@@ -93,10 +99,11 @@ export function SettingsDialog({
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
       setLocalCheckForUpdates(checkForUpdates)
+      setLocalSuppressGuideOffer(suppressGuideOffer)
       setLocalSSHAgentSocketPath(sshAgentSocketPath)
       setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
     }
-  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath])
+  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, suppressGuideOffer, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath])
 
   const handleCancel = () => {
     setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
@@ -107,6 +114,7 @@ export function SettingsDialog({
     setLocalTerminalTheme(terminalTheme)
     setLocalEditorTheme(editorTheme)
     setLocalCheckForUpdates(checkForUpdates)
+    setLocalSuppressGuideOffer(suppressGuideOffer)
     setLocalSSHAgentSocketPath(sshAgentSocketPath)
     setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
     setShowUninstallConfirm(false)
@@ -116,6 +124,9 @@ export function SettingsDialog({
 
   const handleSave = () => {
     onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme, localCheckForUpdates, localSSHAgentSocketPath)
+    if (localSuppressGuideOffer !== suppressGuideOffer) {
+      onToggleGuideOffer(!localSuppressGuideOffer)
+    }
     onOpenChange(false)
   }
 
@@ -144,6 +155,7 @@ export function SettingsDialog({
       setLocalTerminalTheme(terminalTheme)
       setLocalEditorTheme(editorTheme)
       setLocalCheckForUpdates(checkForUpdates)
+      setLocalSuppressGuideOffer(suppressGuideOffer)
       setLocalSSHAgentSocketPath(sshAgentSocketPath)
       setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
     }
@@ -239,8 +251,8 @@ export function SettingsDialog({
                 <div>
                   <Label htmlFor="proxy-mode" className="font-normal">Proxy Mode</Label>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Download packages through reManager before installing on the tablet.
-                    Useful if the tablet has limited internet connectivity.
+                    Download packages through reManager before installing on the reMarkable.
+                    Useful if the reMarkable has limited internet connectivity.
                   </p>
                 </div>
                 <Switch
@@ -273,6 +285,19 @@ export function SettingsDialog({
                   id="check-updates"
                   checked={localCheckForUpdates}
                   onCheckedChange={setLocalCheckForUpdates}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="offer-guide" className="font-normal">Offer User Guide</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Offer to install or update the user guide on the reMarkable when connecting.
+                  </p>
+                </div>
+                <Switch
+                  id="offer-guide"
+                  checked={!localSuppressGuideOffer}
+                  onCheckedChange={(checked) => setLocalSuppressGuideOffer(!checked)}
                 />
               </div>
               <div className="flex items-center justify-between gap-4">

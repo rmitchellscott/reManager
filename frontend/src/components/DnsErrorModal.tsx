@@ -18,7 +18,7 @@ export function DnsErrorModal({ open, onClose, onEnableProxyMode }: DnsErrorModa
             <DialogTitle>DNS Error Detected</DialogTitle>
           </div>
           <DialogDescription className="pt-2">
-            Your tablet couldn't resolve DNS to download packages. Enabling Proxy Mode allows reManager to download packages on your computer and transfer them to the tablet, bypassing DNS issues. You can disable this later in Settings.
+            Your reMarkable couldn't resolve DNS to download packages. Enabling Proxy Mode allows reManager to download packages on your computer and transfer them to the reMarkable, bypassing DNS issues. You can disable this later in Settings.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="flex gap-2 sm:gap-0">

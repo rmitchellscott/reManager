@@ -29,7 +29,7 @@ export function Dialog({ open, onOpenChange, children, closable = true, classNam
           onEscapeKeyDown={(e) => { if (!closable) e.preventDefault() }}
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
-          <div className="pointer-events-auto">{children}</div>
+          {children}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
@@ -44,8 +44,8 @@ export function DialogContent({
   return (
     <div
       className={cn(
-        "bg-card border rounded-lg shadow-lg p-6",
-        "max-w-lg",
+        "bg-card border rounded-lg shadow-lg p-6 pointer-events-auto",
+        "w-full max-w-lg",
         className
       )}
       {...props}

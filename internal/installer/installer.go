@@ -140,6 +140,12 @@ func (i *Installer) Install(
 					errors = append(errors, fmt.Sprintf("Post-install hook failed for %s: %v", pkgName, err))
 					continue
 				}
+				if hookResult != nil && hookResult.DialogConfig != nil {
+					hookResult.DialogConfig.InstallFlow = true
+					hookResult.DialogConfig.Title = "Build Hashtable"
+					hookResult.DialogConfig.ConfirmText = "Build"
+					hookResult.DialogConfig.CancelText = "Later"
+				}
 				if hookResult != nil && onHook != nil {
 					if err := onHook(hookResult); err != nil {
 						errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))

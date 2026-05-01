@@ -32,11 +32,13 @@ import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
 import { ImportPDFDialog } from '@/components/ImportPDFDialog'
 import { SoftwareManagerDialog } from '@/components/SoftwareManagerDialog'
+import { UserGuideOffer } from '@/components/UserGuideOffer'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertTitle, AlertDescription, AlertAction } from '@/components/ui/alert'
-import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy } from 'lucide-react'
+import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy, CheckCircle2 } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
 
 interface PackageInfo {
   name: string
@@ -105,13 +107,24 @@ interface InstallResult {
   dnsError?: boolean
 }
 
+interface DialogActionRequest {
+  id: string
+  label: string
+  type: string
+  value: string
+}
+
 interface DialogRequest {
   title: string
   message: string
+  note: string
   steps: string[]
   confirmText: string
+  cancelText: string
   inProgressMessage: string
   infoOnly: boolean
+  installFlow?: boolean
+  actions: DialogActionRequest[]
 }
 
 interface InstallSimulationResult {
@@ -169,7 +182,7 @@ declare global {
           IsShellActive(): Promise<boolean>
           GetDeviceInfo(): Promise<Record<string, string>>
           GetUpdateServiceStatus(): Promise<UpdateServiceStatus>
-          GetXochitlStatus(): Promise<boolean>
+          GetXochitlStatus(): Promise<{ running: boolean; xoviActive: boolean }>
           GetDefaultSSHKeys(): Promise<SSHKey[]>
           SelectKeyFile(): Promise<string>
           GetSavedDevices(): Promise<SavedDevice[]>
@@ -209,12 +222,16 @@ declare global {
           SimulateUninstall(packageNames: string[]): Promise<UninstallSimulationResult>
           RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
           RunSystemTask(taskId: string, deviceType: string): Promise<void>
-          RespondToDialog(confirmed: boolean): Promise<void>
+          RespondToDialog(response: string): Promise<void>
           CancelInstallation(): Promise<void>
           GetAppVersion(): Promise<string>
           CheckForAppUpdate(): Promise<{ updateAvailable: boolean; latestVersion: string; currentVersion: string; releaseURL: string; error?: string }>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean; sshAgentSocketPath: string }>
+          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; suppressGuideOffer: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean; sshAgentSocketPath: string }>
           SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string): Promise<void>
+          InstallUserGuide(): Promise<void>
+          CheckUserGuide(): Promise<{ installed: boolean; needsUpdate: boolean; skipped: boolean; docId: string }>
+          DismissGuideOffer(): Promise<void>
+          EnableGuideOffer(): Promise<void>
           GetSystemColorScheme(): Promise<string>
           UninstallVellum(removeAllPackages: boolean): Promise<void>
           CleanupBrokenVellum(): Promise<void>
@@ -224,7 +241,7 @@ declare global {
           SetDeviceTimezone(timezone: string, deviceType: string): Promise<void>
           ListDirectory(path: string): Promise<{ name: string; path: string; size: number; isDir: boolean; modTime: number; mode: string }[]>
           DownloadFile(remotePath: string): void
-          UploadFile(remotePath: string): void
+          SelectFilesForUpload(): Promise<string[]>
           UploadFilesFromPaths(localPaths: string[], remotePath: string): void
           DownloadFolder(remotePath: string): void
           UploadFolder(remotePath: string): void
@@ -273,6 +290,7 @@ declare global {
           SetSleepScreen(imagePath: string): Promise<void>
           ResetSleepScreen(): Promise<void>
           RestartXochitl(): Promise<void>
+          RescanLibrary(): Promise<void>
           DeleteAllLogs(): Promise<void>
           GetSupportBundlePreview(): Promise<{ included: string[]; excluded: string[] }>
           GenerateSupportBundle(deviceID: string): void
@@ -283,6 +301,7 @@ declare global {
           CopyToClipboard(text: string): void
           GetSupportBundleSessionID(): Promise<string>
           ResetSupportBundleSession(): Promise<void>
+          SubmitProblemReport(description: string, email: string, bundleURL: string, deviceID: string): Promise<void>
         }
       }
     }
@@ -323,6 +342,7 @@ export default function App() {
   const [currentComponent, setCurrentComponent] = useState('')
   const [progressStatus, setProgressStatus] = useState('')
   const [showRebuildDialog, setShowRebuildDialog] = useState(false)
+  const [showStartUIDialog, setShowStartUIDialog] = useState(false)
   const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
   const dialogRespondedRef = useRef(false)
   const [runningHookTitle, setRunningHookTitle] = useState<string | null>(null)
@@ -354,6 +374,8 @@ export default function App() {
   })
   const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
   const [xochitlRunning, setXochitlRunning] = useState(true)
+  const [xoviActive, setXoviActive] = useState(false)
+  const [xoviNotRunning, setXoviNotRunning] = useState(false)
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
   const runningSystemTaskRef = useRef<string | null>(null)
@@ -376,6 +398,7 @@ export default function App() {
   })
   const [proxyMode, setProxyMode] = useState(true)
   const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
+  const [suppressGuideOffer, setSuppressGuideOffer] = useState(false)
   const [preventSleep, setPreventSleep] = useState(true)
   const [theme, setTheme] = useState('system')
   const [terminalTheme, setTerminalTheme] = useState('match')
@@ -425,6 +448,9 @@ export default function App() {
     packages: string[]
     requested: string[]
   } | null>(null)
+  const [pendingXoviInfo, setPendingXoviInfo] = useState<string[] | null>(null)
+  const [tripletapDecision, setTripletapDecision] = useState<'yes' | 'no' | null>(null)
+  const [xoviAckChecked, setXoviAckChecked] = useState(false)
   const [pendingUninstallConfirm, setPendingUninstallConfirm] = useState<{
     selected: string[]
     packages: string[]
@@ -461,6 +487,7 @@ export default function App() {
   } | null>(null)
 
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
+  const [hashtabMissing, setHashtabMissing] = useState(false)
 
   const [timezoneMismatch, setTimezoneMismatch] = useState<TimezoneStatus | null>(null)
   const [selectedTimezone, setSelectedTimezone] = useState('')
@@ -476,6 +503,10 @@ export default function App() {
   const [showFilesystemRestoreError, setShowFilesystemRestoreError] = useState(false)
   const [isRetryingFilesystemRestore, setIsRetryingFilesystemRestore] = useState(false)
   const [writeableRootBusy, setWriteableRootBusy] = useState(false)
+
+  const [guideOffer, setGuideOffer] = useState<'install' | 'update' | null>(null)
+  const [guideInstalling, setGuideInstalling] = useState(false)
+  const [showGuideRestartDialog, setShowGuideRestartDialog] = useState(false)
 
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -596,7 +627,7 @@ export default function App() {
         if (keys && keys.length > 0) {
           setSelectedKey(keys[0].path)
         } else {
-          setSelectedKey('__other__')
+          setSelectedKey('')
         }
         setSSHAgentAvailable(!!agentAvail)
 
@@ -607,6 +638,7 @@ export default function App() {
         setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true, utilities: true })
         setProxyMode(settings?.proxyMode ?? true)
         setSuppressSystemFileWarnings(settings?.suppressSystemFileWarnings ?? false)
+        setSuppressGuideOffer(settings?.suppressGuideOffer ?? false)
         setPreventSleep(settings?.preventSleep ?? true)
         const loadedTheme = settings?.theme || 'system'
         setTheme(loadedTheme)
@@ -635,7 +667,7 @@ export default function App() {
         }
       } catch (err) {
         debugLog('Could not load initial data:', err)
-        setSelectedKey('__other__')
+        setSelectedKey('')
       }
     }
     loadInitialData()
@@ -683,10 +715,12 @@ export default function App() {
   useEffect(() => {
     if (connectionStatus !== 'connected' || commandRunning) return
     const interval = window.setInterval(() => {
-      window.go.main.App.GetXochitlStatus().then(setXochitlRunning).catch(() => {})
+      window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
     }, 60000)
     return () => clearInterval(interval)
   }, [connectionStatus, commandRunning])
+
+
 
   useEffect(() => {
     if (activeTab === 'mods' && !tabVisibility.mods) {
@@ -704,6 +738,8 @@ export default function App() {
         setSelectedKey(path)
         const fileName = path.split('/').pop() || path
         setCustomKeyName(fileName)
+      } else if (!selectedKey) {
+        setCustomKeyName('')
       }
     } else {
       setSelectedKey(value)
@@ -716,6 +752,8 @@ export default function App() {
     setUninstallQueue(new Set())
     setOutput('')
     setHashtabMismatch(null)
+    setHashtabMissing(false)
+    setXoviNotRunning(false)
     setOsMismatchDetected(false)
     osMismatchDetectedRef.current = false
     setOsUpgradeDetected(false)
@@ -868,6 +906,8 @@ export default function App() {
     setDeviceName('')
     if (availableKeys.length > 0) {
       setSelectedKey(availableKeys[0].path)
+    } else {
+      setSelectedKey('')
     }
   }
 
@@ -905,7 +945,8 @@ export default function App() {
           const status = await window.go.main.App.GetUpdateServiceStatus()
           setUpdateServiceStatus(status)
           const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-          setXochitlRunning(xochitlStatus)
+          setXochitlRunning(xochitlStatus.running)
+          setXoviActive(xochitlStatus.xoviActive)
         }
         return
       }
@@ -943,12 +984,15 @@ export default function App() {
         }
         setUpdateServiceStatus(updateStatus)
         const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-        setXochitlRunning(xochitlStatus)
+        setXochitlRunning(xochitlStatus.running)
+        setXoviActive(xochitlStatus.xoviActive)
         if (hashtabStatus.needsRebuild) {
           setHashtabMismatch(hashtabStatus)
         } else {
           setHashtabMismatch(null)
         }
+        setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
+        setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
         if (tzStatus.needsUpdate) {
           setTimezoneMismatch(tzStatus)
         } else {
@@ -966,7 +1010,8 @@ export default function App() {
         setCommandContext(null)
       } else {
         const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-        setXochitlRunning(xochitlStatus)
+        setXochitlRunning(xochitlStatus.running)
+        setXoviActive(xochitlStatus.xoviActive)
         setCommandRunning(false)
         setRunningSystemTask(null)
         setSettingTimezone(false)
@@ -1033,9 +1078,12 @@ export default function App() {
       } else {
         setHashtabMismatch(null)
       }
+      setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
 
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-      setXochitlRunning(xochitlStatus)
+      setXochitlRunning(xochitlStatus.running)
+      setXoviActive(xochitlStatus.xoviActive)
+      setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
 
       setInstalling(false)
       setUninstalling(false)
@@ -1084,6 +1132,7 @@ export default function App() {
       setBootstrapping(false)
       setBootstrapSuccess(true)
       setVellumInstalled(true)
+      rescanAllPackages()
     })
 
     const unsubscribeBootstrapError = window.runtime.EventsOn('vellum:bootstrap-error', (...args: unknown[]) => {
@@ -1115,6 +1164,7 @@ export default function App() {
       debugLog('Received vellum:uninstall-complete')
       setVellumUninstalling(false)
       setVellumInstalled(false)
+      setInstalledPackages(new Map())
       setShowSettingsDialog(false)
       setVellumUninstallSuccess(true)
     })
@@ -1154,10 +1204,12 @@ export default function App() {
         osMismatch?: { prevVersion: string; newVersion: string }
         reenableStatus?: string
         hashtabMismatch?: HashtabVersionStatus
+        hashtabMissing?: boolean
         autoUpdateEnabled?: { enabled: boolean; running: boolean }
         timezoneStatus?: TimezoneStatus
         timezoneMismatch?: TimezoneStatus
         xochitlNotRunning?: boolean
+        xoviNotRunning?: boolean
       }
       debugLog('Received connect:warnings:', w)
       setWarningsChecked(true)
@@ -1181,6 +1233,7 @@ export default function App() {
       } else {
         setHashtabMismatch(null)
       }
+      setHashtabMissing(!!w.hashtabMissing)
       if (w.autoUpdateEnabled) {
         setShowAutoUpdateBanner(true)
       }
@@ -1194,6 +1247,12 @@ export default function App() {
         setSelectedTimezone(w.timezoneMismatch.savedTimezone || w.timezoneMismatch.deviceTimezone)
       }
       setXochitlRunning(!w.xochitlNotRunning)
+      setXoviNotRunning(!!w.xoviNotRunning)
+    })
+
+    const unsubscribeGuideOffer = window.runtime.EventsOn('guide:offer', (...args: unknown[]) => {
+      const data = args[0] as { type: 'install' | 'update' }
+      setGuideOffer(data.type)
     })
 
     const unsubscribeTimezoneComplete = window.runtime.EventsOn('timezone:complete', (...args: unknown[]) => {
@@ -1288,7 +1347,8 @@ export default function App() {
         setRescanning(false)
       }
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-      setXochitlRunning(xochitlStatus)
+      setXochitlRunning(xochitlStatus.running)
+      setXoviActive(xochitlStatus.xoviActive)
       setCommandRunning(false)
       setCommandContext(null)
       if (result.dnsError && !dnsErrorShown) {
@@ -1316,12 +1376,15 @@ export default function App() {
       }
       setUpdateServiceStatus(updateStatus)
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-      setXochitlRunning(xochitlStatus)
+      setXochitlRunning(xochitlStatus.running)
+      setXoviActive(xochitlStatus.xoviActive)
       if (hashtabStatus.needsRebuild) {
         setHashtabMismatch(hashtabStatus)
       } else {
         setHashtabMismatch(null)
       }
+      setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
+      setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
       if (tzStatus.needsUpdate) {
         setTimezoneMismatch(tzStatus)
       } else {
@@ -1427,6 +1490,7 @@ export default function App() {
       unsubscribeCleanupComplete()
       unsubscribeCleanupError()
       unsubscribeConnectWarnings()
+      unsubscribeGuideOffer()
       unsubscribeTimezoneComplete()
       unsubscribeTimezoneError()
       unsubscribeUpgradeBlocked()
@@ -1443,6 +1507,13 @@ export default function App() {
       unsubscribeUpgradesAvailable()
     }
   }, [])
+
+  useEffect(() => {
+    if (pendingXoviInfo === null) {
+      setTripletapDecision(null)
+      setXoviAckChecked(false)
+    }
+  }, [pendingXoviInfo])
 
   useEffect(() => {
     if (osMismatchDetected && !compatibilityStatus) {
@@ -1545,6 +1616,8 @@ export default function App() {
     setDevice('')
     setConnectedDeviceId('')
     setConnectionStatus('connected')
+    setGuideOffer(null)
+    setGuideInstalling(false)
 
     const devices = await window.go.main.App.GetSavedDevices()
     setSavedDevices(devices || [])
@@ -1821,7 +1894,7 @@ export default function App() {
       await rescanAllPackages()
     }
     if (connectionStatus === 'connected' && !commandRunning) {
-      window.go.main.App.GetXochitlStatus().then(setXochitlRunning).catch(() => {})
+      window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
     }
   }
 
@@ -1941,11 +2014,13 @@ export default function App() {
     if (cmd.allowStop) {
       setCurrentRunningCommand({ componentId, commandId })
     }
-    setShowProgressModal(true)
-    setProgressModalType('maintenance')
-    setProgressPercentage(0)
-    setCommandRunning(true)
-    setMaintenanceOutput('')
+    if (!cmd.hook) {
+      setShowProgressModal(true)
+      setProgressModalType('maintenance')
+      setProgressPercentage(0)
+      setCommandRunning(true)
+      setMaintenanceOutput('')
+    }
     setCommandContext('maintenance')
 
     await window.go.main.App.RunMaintenanceCommand(componentId, commandId, device)
@@ -2012,9 +2087,9 @@ export default function App() {
             <p className="text-muted-foreground">Manage packages on your reMarkable</p>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            {device && (
+            {device && deviceInfo.firmware && (
               <span className="text-muted-foreground">
-                {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware})
               </span>
             )}
             <Tooltip>
@@ -2281,7 +2356,7 @@ export default function App() {
                       ) : editingDevice ? (
                         <Button
                           onClick={handleSaveEditedDevice}
-                          disabled={!deviceName.trim() || (authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey || selectedKey === '__other__')}
+                          disabled={!deviceName.trim() || (authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey)}
                         >
                           Save
                         </Button>
@@ -2290,13 +2365,13 @@ export default function App() {
                           <Button
                             variant="outline"
                             onClick={() => handleConnect(false)}
-                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
+                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey}
                           >
                             Connect
                           </Button>
                           <Button
                             onClick={() => handleConnect(true)}
-                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey || selectedKey === '__other__'}
+                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey}
                           >
                             Save and Connect
                           </Button>
@@ -2338,7 +2413,7 @@ export default function App() {
         )}
 
         {/* Xochitl Not Running Banner */}
-        {step !== 'connect' && !xochitlRunning && !commandRunning && !showProgressModal && connectionStatus === 'connected' && (
+        {step !== 'connect' && warningsChecked && !xochitlRunning && !commandRunning && !showProgressModal && connectionStatus === 'connected' && (
           <div className="mb-4">
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
@@ -2347,9 +2422,15 @@ export default function App() {
                 The xochitl UI service is not running on the reMarkable.
               </AlertDescription>
               <AlertAction className="top-1/2 -translate-y-1/2">
-                <Button size="sm" variant="destructive" onClick={() => handleSystemTask('restart-xochitl')}>
-                  Start
-                </Button>
+                {installedPackages.has('xovi') ? (
+                  <Button size="sm" onClick={() => setShowStartUIDialog(true)}>
+                    Fix
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={() => handleSystemTask('restart-xochitl')}>
+                    Start
+                  </Button>
+                )}
               </AlertAction>
             </Alert>
           </div>
@@ -2365,14 +2446,50 @@ export default function App() {
                 timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
                 autoUpdatesEnabled: showAutoUpdateBanner,
                 reenableNeeded: reenableStatus === 'needed',
+                xoviNotRunning,
+                hashtabMissing,
               }}
               onGoToMaintenance={() => setActiveTab('maintenance')}
               onDismiss={() => {
                 setOsUpgradeDetected(false)
                 setHashtabMismatch(null)
+                setHashtabMissing(false)
+                setXoviNotRunning(false)
                 setTimezoneMismatch(null)
                 setShowAutoUpdateBanner(false)
                 setReenableStatus('')
+              }}
+            />
+          </div>
+        )}
+
+        {step !== 'connect' && guideOffer && (
+          <div className="mb-4">
+            <UserGuideOffer
+              type={guideOffer}
+              installing={guideInstalling}
+              onInstall={async () => {
+                setGuideInstalling(true)
+                try {
+                  await window.go.main.App.InstallUserGuide()
+                  setGuideOffer(null)
+                  if (installedPackages.has('librarian')) {
+                    await window.go.main.App.RescanLibrary()
+                    toast.success('User guide installed on your reMarkable')
+                  } else {
+                    toast.success('User guide installed on your reMarkable')
+                    setShowGuideRestartDialog(true)
+                  }
+                } catch (err) {
+                  toast.error('Failed to install guide: ' + (err instanceof Error ? err.message : String(err)))
+                } finally {
+                  setGuideInstalling(false)
+                }
+              }}
+              onDismiss={() => setGuideOffer(null)}
+              onDismissPermanently={async () => {
+                setGuideOffer(null)
+                await window.go.main.App.DismissGuideOffer()
               }}
             />
           </div>
@@ -2905,7 +3022,10 @@ export default function App() {
                                   const isRunning = currentRunningCommand?.componentId === pkg.name &&
                                                    currentRunningCommand?.commandId === cmd.id
                                   const isHashtabRebuild = pkg.name === 'qt-resource-rebuilder' && cmd.id === 'rebuild_hashtable'
-                                  const shouldHighlight = isHashtabRebuild && hashtabMismatch
+                                  const isXoviStart = pkg.name === 'xovi' && cmd.id === 'start'
+                                  const xoviNeedsStart = isXoviStart && xochitlRunning && !xoviActive
+                                  const shouldHighlight = (isHashtabRebuild && (hashtabMismatch || hashtabMissing)) || (xoviNeedsStart && !hashtabMismatch && !hashtabMissing)
+                                  const isDisabledByMismatch = isXoviStart && (!!hashtabMismatch || hashtabMissing)
 
                                   return (
                                     <div key={cmd.id} className="flex gap-2">
@@ -2913,7 +3033,7 @@ export default function App() {
                                         <TooltipTrigger asChild>
                                           <Button
                                             onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
-                                            disabled={(commandRunning && !isRunning) || connectionStatus !== 'connected' || writeableRootBusy}
+                                            disabled={isDisabledByMismatch || (commandRunning && !isRunning) || connectionStatus !== 'connected' || writeableRootBusy}
                                             variant={shouldHighlight ? 'default' : 'outline'}
                                             size="sm"
                                             className="flex-1"
@@ -3328,6 +3448,7 @@ export default function App() {
       <ImportPDFDialog
         open={showImportPDF}
         isConnected={connectionStatus === 'connected'}
+        hasLibrarian={installedPackages.has('librarian')}
         onOpenChange={setShowImportPDF}
       />
 
@@ -3377,12 +3498,13 @@ export default function App() {
 
       {/* Progress Modal */}
       <Dialog
-        open={showProgressModal || pendingInstallConfirm !== null || pendingUninstallConfirm !== null}
+        open={showProgressModal || pendingInstallConfirm !== null || pendingXoviInfo !== null || pendingUninstallConfirm !== null}
         onOpenChange={(open) => {
           if (!installing && !uninstalling && !commandRunning) {
             if (!open) {
               setShowProgressModal(false)
               setPendingInstallConfirm(null)
+              setPendingXoviInfo(null)
               setPendingUninstallConfirm(null)
               setProgressModalType(null)
               setProgressIndex(0)
@@ -3393,14 +3515,14 @@ export default function App() {
               setLastInstallSuccess(null)
               setLastOperationType(null)
               if (connectionStatus === 'connected') {
-                window.go.main.App.GetXochitlStatus().then(setXochitlRunning).catch(() => {})
+                window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
               }
             }
           }
         }}
         closable={false}
       >
-        <DialogContent className="w-[90vw] max-w-none">
+        <DialogContent className={(showProgressModal || installing || uninstalling || commandRunning) && pendingInstallConfirm === null && pendingUninstallConfirm === null && pendingXoviInfo === null ? "w-[90vw] max-w-none" : undefined}>
           {/* Confirmation step for install */}
           {pendingInstallConfirm !== null && !installing && !uninstalling && (() => {
             const requestedSet = new Set(pendingInstallConfirm.requested)
@@ -3446,11 +3568,131 @@ export default function App() {
                   <Button onClick={() => {
                     const pkgs = pendingInstallConfirm.packages
                     setPendingInstallConfirm(null)
-                    handleInstallQueue(pkgs)
+                    if (pkgs.includes('xovi') && !installedPackages.has('xovi')) {
+                      setPendingXoviInfo(pkgs)
+                    } else {
+                      handleInstallQueue(pkgs)
+                    }
                   }}>
                     Install ({pendingInstallConfirm.packages.length})
                   </Button>
                 </DialogFooter>
+              </>
+            )
+          })()}
+
+          {/* Pre-install xovi info */}
+          {pendingXoviInfo !== null && !installing && !uninstalling && (() => {
+            const tripletapInstalled = installedPackages.has('tripletap')
+            const tripletapQueued = pendingXoviInfo.includes('tripletap')
+            const showAckScreen = tripletapQueued || tripletapInstalled
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                    Mods Require Manual Start After Every Reboot
+                  </DialogTitle>
+                  <DialogDescription className="pt-2">
+                    UI mods don't auto-start after reboot. Forcing auto-start can prevent your device from booting.
+                  </DialogDescription>
+                </DialogHeader>
+
+                {!showAckScreen ? (
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">Would you like to install tripletap?</p>
+                    <RadioGroup
+                      value={tripletapDecision ?? ''}
+                      onValueChange={(v) => setTripletapDecision(v as 'yes' | 'no')}
+                      className="gap-2"
+                    >
+                      <label
+                        htmlFor="tt-yes"
+                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${tripletapDecision === 'yes' ? 'border-primary bg-accent' : ''}`}
+                      >
+                        <RadioGroupItem value="yes" id="tt-yes" className="sr-only" />
+                        <div className="flex items-center justify-between gap-2 min-h-[24px]">
+                          <span className="text-sm font-semibold">Yes, install tripletap</span>
+                          <Badge variant="outline">Recommended</Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground mt-1">Triple-press the power button after every boot to start mods.</p>
+                      </label>
+
+                      <label
+                        htmlFor="tt-no"
+                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${tripletapDecision === 'no' ? 'border-primary bg-accent' : ''}`}
+                      >
+                        <RadioGroupItem value="no" id="tt-no" className="sr-only" />
+                        <div className="flex items-center min-h-[24px]">
+                          <span className="text-sm font-semibold">No, I'll start mods from my computer</span>
+                        </div>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Open reManager and run <strong className="font-semibold text-foreground">Start UI with Mods</strong> from Maintenance after every boot, or start via SSH.
+                        </p>
+                      </label>
+                    </RadioGroup>
+
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setPendingXoviInfo(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        disabled={tripletapDecision === null}
+                        onClick={() => {
+                          const pkgs = tripletapDecision === 'yes'
+                            ? [...pendingXoviInfo, 'tripletap']
+                            : pendingXoviInfo
+                          setPendingXoviInfo(null)
+                          handleInstallQueue(pkgs)
+                        }}
+                      >
+                        Continue
+                      </Button>
+                    </DialogFooter>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">How to start mods after reboot</p>
+                    <div className="rounded-md border bg-accent p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold">Tripletap</span>
+                        <Badge variant="outline" className="gap-1">
+                          <Check className="h-3 w-3" />
+                          {tripletapInstalled ? 'Installed' : 'Queued for install'}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">Triple-press the power button after every boot to start mods.</p>
+                    </div>
+                    <p className="border-t pt-2.5 text-sm text-muted-foreground">
+                      Can also be started via reManager: Maintenance → Start UI with Mods.
+                    </p>
+
+                    <label className="flex items-start gap-3 rounded-md border bg-muted p-3 cursor-pointer">
+                      <Checkbox
+                        checked={xoviAckChecked}
+                        onCheckedChange={(v) => setXoviAckChecked(v === true)}
+                        className="mt-0.5"
+                      />
+                      <span className="text-sm">I'll start my mods manually after every reboot.</span>
+                    </label>
+
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setPendingXoviInfo(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        disabled={!xoviAckChecked}
+                        onClick={() => {
+                          const pkgs = pendingXoviInfo
+                          setPendingXoviInfo(null)
+                          handleInstallQueue(pkgs)
+                        }}
+                      >
+                        Continue
+                      </Button>
+                    </DialogFooter>
+                  </div>
+                )}
               </>
             )
           })()}
@@ -3573,70 +3815,209 @@ export default function App() {
           dialogRespondedRef.current = true
           manuallyStoppedRef.current = true
           setDialogRequest(null)
-          window.go.main.App.RespondToDialog(false)
+          window.go.main.App.RespondToDialog('cancel')
         }
       }}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              {dialogRequest?.infoOnly
-                ? <Info className="h-5 w-5 text-blue-500" />
-                : <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              }
-              {dialogRequest?.title || 'Confirmation Required'}
-            </DialogTitle>
-            <DialogDescription>
-              <div className="space-y-4 pt-4">
-                <p>{dialogRequest?.message}</p>
-                {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
-                  <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
-                    {dialogRequest.steps.map((step, idx) => (
-                      <li key={idx}>{step}</li>
-                    ))}
-                  </ol>
-                )}
+          {dialogRequest?.actions && dialogRequest.actions.length > 0 && !dialogRequest.infoOnly && !dialogRequest.confirmText ? (
+            <>
+              {/* Actions-only dialog (e.g., post-command "Start UI with/without Mods") */}
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
+                  {dialogRequest.title}
+                </DialogTitle>
+                <DialogDescription>{dialogRequest.message}</DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col gap-2 pt-2">
+                {dialogRequest.actions.map((action) => (
+                  <Button
+                    key={action.id}
+                    variant={action.id === dialogRequest.actions[0]?.id ? 'default' : 'outline'}
+                    className="w-full justify-center gap-2"
+                    onClick={() => {
+                      dialogRespondedRef.current = true
+                      setShowRebuildDialog(false)
+                      setDialogRequest(null)
+                                  window.go.main.App.RespondToDialog(action.id)
+                    }}
+                  >
+                    {action.label}
+                  </Button>
+                ))}
               </div>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  {dialogRequest?.infoOnly
+                    ? <Info className="h-5 w-5 text-blue-500" />
+                    : <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                  }
+                  {dialogRequest?.title || 'Confirmation Required'}
+                </DialogTitle>
+                <DialogDescription>
+                  <div className="space-y-3 pt-4">
+                    {dialogRequest?.message?.split('\n\n').map((paragraph, idx) => (
+                      <p key={idx}>{paragraph}</p>
+                    ))}
+                    {dialogRequest?.inProgressMessage && (
+                      <p className="font-semibold text-foreground">{dialogRequest.inProgressMessage}</p>
+                    )}
+                    {dialogRequest?.note && (
+                      <div className="flex items-start gap-2 rounded-lg border p-3 bg-muted/50">
+                        <Info className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                        <span className="text-xs text-muted-foreground">
+                          {dialogRequest.note.split('\n').map((line, idx) => (
+                            <span key={idx}>{idx > 0 && <br />}{line}</span>
+                          ))}
+                        </span>
+                      </div>
+                    )}
+                    {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
+                      <>
+                        <p className="font-medium text-foreground">This will:</p>
+                        <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
+                          {dialogRequest.steps.map((step, idx) => (
+                            <li key={idx}>{step}</li>
+                          ))}
+                        </ol>
+                      </>
+                    )}
+                  </div>
+                </DialogDescription>
+              </DialogHeader>
+
+              <DialogFooter>
+                {dialogRequest?.infoOnly ? (
+                  <Button
+                    onClick={() => {
+                      dialogRespondedRef.current = true
+                      setShowRebuildDialog(false)
+                      setDialogRequest(null)
+                      window.go.main.App.RespondToDialog('confirm')
+                    }}
+                  >
+                    {dialogRequest?.confirmText || 'Got it'}
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        dialogRespondedRef.current = true
+                        manuallyStoppedRef.current = true
+                        setShowRebuildDialog(false)
+                        setDialogRequest(null)
+                        window.go.main.App.RespondToDialog('cancel')
+                      }}
+                    >
+                      {dialogRequest?.cancelText || 'Cancel'}
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        dialogRespondedRef.current = true
+                        setShowRebuildDialog(false)
+                        setDialogRequest(null)
+                        if (commandContext === 'maintenance') {
+                          setShowProgressModal(true)
+                          setProgressModalType('maintenance')
+                          setProgressPercentage(0)
+                          setCommandRunning(true)
+                          setMaintenanceOutput('')
+                        }
+                        window.go.main.App.RespondToDialog('confirm')
+                      }}
+                    >
+                      {dialogRequest?.confirmText || 'Proceed'}
+                    </Button>
+                  </>
+                )}
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Guide installed — restart UI prompt */}
+      <Dialog open={showGuideRestartDialog} onOpenChange={setShowGuideRestartDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restart reMarkable UI?</DialogTitle>
+            <DialogDescription>
+              The user guide has been installed, but it won't appear on the reMarkable until the UI is restarted.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            {dialogRequest?.infoOnly ? (
-              <Button
-                onClick={() => {
-                  dialogRespondedRef.current = true
-                  setShowRebuildDialog(false)
-                  setDialogRequest(null)
-                  window.go.main.App.RespondToDialog(true)
-                }}
-              >
-                {dialogRequest?.confirmText || 'Got it'}
-              </Button>
-            ) : (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    dialogRespondedRef.current = true
-                    manuallyStoppedRef.current = true
-                    setShowRebuildDialog(false)
-                    setDialogRequest(null)
-                    window.go.main.App.RespondToDialog(false)
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => {
-                    dialogRespondedRef.current = true
-                    setShowRebuildDialog(false)
-                    setDialogRequest(null)
-                    window.go.main.App.RespondToDialog(true)
-                  }}
-                >
-                  {dialogRequest?.confirmText || 'Proceed'}
-                </Button>
-              </>
-            )}
+            <Button variant="outline" onClick={() => setShowGuideRestartDialog(false)}>
+              Not now
+            </Button>
+            <Button onClick={async () => {
+              setShowGuideRestartDialog(false)
+              try {
+                if (xoviActive) {
+                  await window.go.main.App.RunMaintenanceCommand('xovi', 'start', device)
+                } else {
+                  await window.go.main.App.RestartXochitl()
+                }
+              } catch (err) {
+                toast.error('Failed to restart UI: ' + (err instanceof Error ? err.message : String(err)))
+              }
+            }}>
+              Restart
+            </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Start UI Chooser Dialog (shown when xochitl isn't running and xovi is installed) */}
+      <Dialog open={showStartUIDialog} onOpenChange={setShowStartUIDialog}>
+        <DialogContent className="relative">
+          <Button
+            variant="ghost"
+            size="xs"
+            className="absolute right-2 top-2"
+            onClick={() => setShowStartUIDialog(false)}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-yellow-500" />
+              reMarkable UI stopped
+            </DialogTitle>
+            <DialogDescription>
+              The reMarkable interface is currently stopped. How would you like to start it?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 pt-2">
+            <Button
+              className="w-full justify-center gap-2"
+              disabled={!!hashtabMismatch || hashtabMissing}
+              onClick={() => {
+                setShowStartUIDialog(false)
+                handleComponentMaintenance('xovi', 'start')
+              }}
+            >
+              Start UI with Mods
+            </Button>
+            {(hashtabMismatch || hashtabMissing) && (
+              <p className="text-xs text-muted-foreground text-center -mt-1">
+                {hashtabMissing ? 'Disabled — hashtable not built' : 'Disabled due to hashtable mismatch'}
+              </p>
+            )}
+            <Button
+              variant="outline"
+              className="w-full justify-center gap-2"
+              onClick={() => {
+                setShowStartUIDialog(false)
+                handleSystemTask('restart-xochitl')
+              }}
+            >
+              Start UI without Mods
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -3755,8 +4136,29 @@ export default function App() {
         terminalTheme={terminalTheme}
         editorTheme={editorTheme}
         checkForUpdates={checkForUpdates}
+        suppressGuideOffer={suppressGuideOffer}
         sshAgentSocketPath={sshAgentSocketPath}
         onSaveSettings={handleSaveSettings}
+        onToggleGuideOffer={async (enabled) => {
+          if (enabled) {
+            await window.go.main.App.EnableGuideOffer()
+            setSuppressGuideOffer(false)
+            if (device) {
+              const status = await window.go.main.App.CheckUserGuide()
+              if (!status.skipped) {
+                if (!status.installed) {
+                  setGuideOffer('install')
+                } else if (status.needsUpdate) {
+                  setGuideOffer('update')
+                }
+              }
+            }
+          } else {
+            await window.go.main.App.DismissGuideOffer()
+            setSuppressGuideOffer(true)
+            setGuideOffer(null)
+          }
+        }}
         onUninstallVellum={handleUninstallVellum}
         uninstalling={vellumUninstalling}
         uninstallOutput={vellumUninstallOutput}
@@ -3823,9 +4225,9 @@ export default function App() {
                   <p className="text-muted-foreground">Manage packages on your reMarkable</p>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
-                  {device && (
+                  {device && deviceInfo.firmware && (
                     <span className="text-muted-foreground">
-                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware})
                     </span>
                   )}
                   <Tooltip>
@@ -3876,9 +4278,9 @@ export default function App() {
                   <p className="text-muted-foreground">Manage packages on your reMarkable</p>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
-                  {device && (
+                  {device && deviceInfo.firmware && (
                     <span className="text-muted-foreground">
-                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware || 'unknown firmware'})
+                      {getDisplayName(deviceInfo.machine || device)} ({deviceInfo.firmware})
                     </span>
                   )}
                   <Tooltip>

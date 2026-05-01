@@ -1,13 +1,10 @@
 {
   "packages": {
     "xovi": {
-      "hooks": {
-        "postInstall": "xovi_post_install_info"
-      },
       "maintenanceCommands": [
         {
           "id": "start",
-          "label": "Start",
+          "label": "Start UI with Mods",
           "description": "Start or restart xovi",
           "command": "/home/root/xovi/start",
           "requiresTerminal": true,
@@ -15,7 +12,7 @@
         },
         {
           "id": "stock",
-          "label": "Stock",
+          "label": "Start UI without Mods",
           "description": "Restart interface without mods applied",
           "command": "/home/root/xovi/stock",
           "requiresTerminal": true,

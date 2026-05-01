@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,11 +58,21 @@ import (
 	rmupdate "github.com/rmitchellscott/remarkable-go/update"
 )
 
-func openFileDialog(ctx context.Context, title string) (string, error) {
+func resolveDialogDir(defaultDir string) string {
+	if defaultDir != "" {
+		if info, err := os.Stat(defaultDir); err == nil && info.IsDir() {
+			return defaultDir
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return home
+}
+
+func openFileDialog(ctx context.Context, title, defaultDir string) (string, error) {
+	dir := resolveDialogDir(defaultDir)
 	if platform.IsRunningInFlatpak() {
-		home, _ := os.UserHomeDir()
 		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
-			CurrentFolder: home,
+			CurrentFolder: dir,
 		})
 		fmt.Println("[DEBUG] openFileDialog: files:", files, "err:", err)
 		if err != nil {
@@ -72,18 +83,39 @@ func openFileDialog(ctx context.Context, title string) (string, error) {
 		}
 		return strings.TrimPrefix(files[0], "file://"), nil
 	}
-	home, _ := os.UserHomeDir()
 	return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
 		Title:            title,
-		DefaultDirectory: home,
+		DefaultDirectory: dir,
 	})
 }
 
-func saveFileDialog(ctx context.Context, title, defaultFilename string) (string, error) {
+func openMultipleFilesDialog(ctx context.Context, title, defaultDir string) ([]string, error) {
+	dir := resolveDialogDir(defaultDir)
 	if platform.IsRunningInFlatpak() {
-		home, _ := os.UserHomeDir()
+		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
+			CurrentFolder: dir,
+			Multiple:      true,
+		})
+		fmt.Println("[DEBUG] openMultipleFilesDialog: files:", files, "err:", err)
+		if err != nil {
+			return nil, err
+		}
+		for i, f := range files {
+			files[i] = strings.TrimPrefix(f, "file://")
+		}
+		return files, nil
+	}
+	return runtime.OpenMultipleFilesDialog(ctx, runtime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: dir,
+	})
+}
+
+func saveFileDialog(ctx context.Context, title, defaultFilename, defaultDir string) (string, error) {
+	dir := resolveDialogDir(defaultDir)
+	if platform.IsRunningInFlatpak() {
 		files, err := filechooser.SaveFile("", title, &filechooser.SaveFileOptions{
-			CurrentFolder: home,
+			CurrentFolder: dir,
 			CurrentName:   defaultFilename,
 		})
 		fmt.Println("[DEBUG] saveFileDialog: files:", files, "err:", err)
@@ -95,19 +127,18 @@ func saveFileDialog(ctx context.Context, title, defaultFilename string) (string,
 		}
 		return strings.TrimPrefix(files[0], "file://"), nil
 	}
-	home, _ := os.UserHomeDir()
 	return runtime.SaveFileDialog(ctx, runtime.SaveDialogOptions{
 		Title:            title,
 		DefaultFilename:  defaultFilename,
-		DefaultDirectory: home,
+		DefaultDirectory: dir,
 	})
 }
 
-func openDirectoryDialog(ctx context.Context, title string) (string, error) {
+func openDirectoryDialog(ctx context.Context, title, defaultDir string) (string, error) {
+	dir := resolveDialogDir(defaultDir)
 	if platform.IsRunningInFlatpak() {
-		home, _ := os.UserHomeDir()
 		files, err := filechooser.OpenFile("", title, &filechooser.OpenFileOptions{
-			CurrentFolder: home,
+			CurrentFolder: dir,
 			Directory:     true,
 		})
 		fmt.Println("[DEBUG] openDirectoryDialog: files:", files, "err:", err)
@@ -119,10 +150,9 @@ func openDirectoryDialog(ctx context.Context, title string) (string, error) {
 		}
 		return strings.TrimPrefix(files[0], "file://"), nil
 	}
-	home, _ := os.UserHomeDir()
 	return runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{
 		Title:            title,
-		DefaultDirectory: home,
+		DefaultDirectory: dir,
 	})
 }
 
@@ -140,10 +170,11 @@ type App struct {
 	commandCancel  context.CancelFunc
 	commandSession *ssh.Session
 	commandStdin   io.WriteCloser
-	dialogResponse chan bool
+	dialogResponse chan string
 	deviceStore    *storage.DeviceStore
 	settingsStore  *storage.SettingsStore
-	bundleStore    *storage.BundleStore
+	bundleStore      *storage.BundleStore
+	deviceInfoCache  *storage.DeviceInfoCacheStore
 	vellumClient   *vellum.Client
 	metadata       *vellum.MetadataStore
 
@@ -211,6 +242,12 @@ func (a *App) startup(ctx context.Context) {
 		fmt.Printf("Warning: could not initialize bundle store: %v\n", err)
 	}
 	a.bundleStore = bundleStore
+
+	deviceInfoCache, err := storage.NewDeviceInfoCacheStore()
+	if err != nil {
+		fmt.Printf("Warning: could not initialize device info cache: %v\n", err)
+	}
+	a.deviceInfoCache = deviceInfoCache
 
 	a.metadata = vellum.NewMetadataStore()
 	if err := a.metadata.Load(); err != nil {
@@ -294,7 +331,7 @@ func (a *App) GetDefaultSSHKeys() []SSHKey {
 }
 
 func (a *App) SelectKeyFile() string {
-	path, err := openFileDialog(a.ctx, "Select SSH Private Key")
+	path, err := openFileDialog(a.ctx, "Select SSH Private Key", "")
 	if err != nil {
 		return ""
 	}
@@ -358,7 +395,13 @@ func (a *App) DeleteSavedDevice(id string) error {
 	if a.deviceStore == nil {
 		return fmt.Errorf("device store not initialized")
 	}
-	return a.deviceStore.Delete(id)
+	if err := a.deviceStore.Delete(id); err != nil {
+		return err
+	}
+	if a.deviceInfoCache != nil {
+		_ = a.deviceInfoCache.Delete(id)
+	}
+	return nil
 }
 
 func (a *App) UpdateDeviceName(id string, name string) error {
@@ -808,21 +851,29 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	}
 
 	go func() {
+		a.mu.Lock()
+		vc := a.vellumClient
+		a.mu.Unlock()
+		if vc == nil {
+			return
+		}
+
 		if err := a.metadata.Refresh(); err != nil {
 			debug.Printf("[DEBUG] Metadata refresh failed: %v\n", err)
 		}
 
 		debug.Println("[DEBUG] Checking if vellum is installed...")
-		installed, err := a.vellumClient.IsInstalled()
+		installed, err := vc.IsInstalled()
 		debug.Printf("[DEBUG] Vellum installed: %v, err: %v\n", installed, err)
 
 		warnings := map[string]interface{}{}
 		vellumReady := false
+		var osVersionStored string
 
 		if err == nil && !installed {
 			runtime.EventsEmit(a.ctx, "vellum:bootstrap-prompt", nil)
 		} else if err == nil && installed {
-			valid, missing, verr := a.vellumClient.ValidateInstall()
+			valid, missing, verr := vc.ValidateInstall()
 			debug.Printf("[DEBUG] Vellum validation: valid=%v, missing=%v, err=%v\n", valid, missing, verr)
 			runtime.EventsEmit(a.ctx, "vellum:ready", nil)
 			if verr == nil && !valid {
@@ -830,7 +881,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			} else {
 				vellumReady = true
 
-				reenableStatus, reenableErr := a.vellumClient.ReenableStatus()
+				reenableStatus, reenableErr := vc.ReenableStatus()
 				if reenableErr == nil && reenableStatus != "" {
 					debug.Printf("[DEBUG] Reenable status: %s\n", reenableStatus)
 					warnings["reenableStatus"] = reenableStatus
@@ -845,16 +896,32 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			warnings["hashtabMismatch"] = hashtabStatus
 		}
 
+		var installedVersions map[string]string
+		if vellumReady {
+			installedVersions, _ = vc.ListInstalledWithVersions()
+		}
+
+		if !hashtabStatus.Installed && installedVersions != nil {
+			if _, hasQRB := installedVersions["qt-resource-rebuilder"]; hasQRB {
+				warnings["hashtabMissing"] = true
+			}
+		}
+
 		updateStatus := a.GetUpdateServiceStatus()
 		debug.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
 		if updateStatus.Enabled || updateStatus.Running {
 			warnings["autoUpdateEnabled"] = updateStatus
 		}
 
-		xochitlRunning := a.GetXochitlStatus()
-		debug.Printf("[DEBUG] Xochitl check: running=%v\n", xochitlRunning)
-		if !xochitlRunning {
+		xochitlStatus := a.GetXochitlStatus()
+		debug.Printf("[DEBUG] Xochitl check: running=%v, xoviActive=%v\n", xochitlStatus.Running, xochitlStatus.XoviActive)
+		if !xochitlStatus.Running {
 			warnings["xochitlNotRunning"] = true
+		}
+		if xochitlStatus.Running && !xochitlStatus.XoviActive && !hashtabStatus.NeedsRebuild && hashtabStatus.Installed && installedVersions != nil {
+			if _, hasXovi := installedVersions["xovi"]; hasXovi {
+				warnings["xoviNotRunning"] = true
+			}
 		}
 
 		timezoneStatus := a.GetTimezoneStatus()
@@ -889,17 +956,20 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 				a.mu.Unlock()
 				if sshClient != nil {
 					arch := device.GetArchitecture(component.DeviceType(deviceType))
-					proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+					proxy := vellum.NewProxy(vc, sshClient, string(arch))
 					_ = proxy.UploadAPKINDEX(func(msg string) {
 						debug.Printf("[DEBUG] Upgrade check APKINDEX: %s\n", msg)
 					})
 				}
 			}
 
-			upgradeResult, simErr := a.vellumClient.SimulateUpgrade()
+			upgradeResult, simErr := vc.SimulateUpgrade()
 
-			osState, err := a.vellumClient.GetOSVersionState()
+			osState, err := vc.GetOSVersionState()
 			debug.Printf("[DEBUG] GetOSVersionState: stored=%q, current=%q, mismatch=%v, err=%v\n", osState.StoredVersion, osState.CurrentVersion, osState.Mismatch, err)
+			if err == nil {
+				osVersionStored = osState.StoredVersion
+			}
 			if err == nil && osState.Mismatch {
 				debug.Printf("[DEBUG] OS mismatch detected: stored=%s, current=%s\n",
 					osState.StoredVersion, osState.CurrentVersion)
@@ -918,7 +988,54 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			}
 		}
 
+		if a.deviceInfoCache != nil {
+			a.mu.Lock()
+			cacheDeviceID := a.connectedDeviceID
+			a.mu.Unlock()
+			if cacheDeviceID != "" {
+				cached := storage.CachedDeviceInfo{
+					Timezone:             timezoneStatus.DeviceTimezone,
+					HashtabInstalled:     hashtabStatus.Installed,
+					HashtabVersion:       hashtabStatus.HashtabVersion,
+					HashtabNeedsRebuild:  hashtabStatus.NeedsRebuild,
+					UpdateServiceEnabled: updateStatus.Enabled,
+					UpdateServiceRunning: updateStatus.Running,
+					OSVersion:            osVersionStored,
+					CachedAt:             time.Now().Unix(),
+				}
+				if devInfo := a.GetDeviceInfo(); len(devInfo) > 0 {
+					cached.MachineType = devInfo["machine"]
+					cached.FirmwareVersion = devInfo["firmware"]
+				}
+				if vc != nil {
+					if versions, err := vc.ListInstalledWithVersions(); err == nil {
+						cached.InstalledPackages = versions
+					}
+				}
+				if partInfo, err := a.GetPartitionInfo(); err == nil {
+					cached.PartitionInfo = partInfo
+				}
+				if err := a.deviceInfoCache.Set(cacheDeviceID, cached); err != nil {
+					debug.Printf("[DEBUG] Failed to cache device info: %v\n", err)
+				}
+			}
+		}
+
 		runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
+
+		if a.settingsStore != nil {
+			guideSettings, _ := a.settingsStore.Load()
+			if guideSettings != nil && !guideSettings.SuppressGuideOffer {
+				status := a.CheckUserGuide()
+				if !status.Skipped {
+					if !status.Installed {
+						runtime.EventsEmit(a.ctx, "guide:offer", map[string]string{"type": "install"})
+					} else if status.NeedsUpdate {
+						runtime.EventsEmit(a.ctx, "guide:offer", map[string]string{"type": "update"})
+					}
+				}
+			}
+		}
 	}()
 
 	a.mu.Lock()
@@ -1631,19 +1748,26 @@ func (a *App) GetUpdateServiceStatus() UpdateServiceStatus {
 	return status
 }
 
-func (a *App) GetXochitlStatus() bool {
+type XochitlStatus struct {
+	Running    bool `json:"running"`
+	XoviActive bool `json:"xoviActive"`
+}
+
+func (a *App) GetXochitlStatus() XochitlStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if a.client == nil {
-		return false
+		return XochitlStatus{}
 	}
 
 	output, err := a.runCommand("systemctl is-active xochitl")
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(output) == "active"
+	running := err == nil && strings.TrimSpace(output) == "active"
+
+	_, err = a.runCommand("test -f /etc/systemd/system/xochitl.service.d/00-xovi.conf")
+	xoviActive := err == nil
+
+	return XochitlStatus{Running: running, XoviActive: xoviActive}
 }
 
 type HashtabVersionStatus struct {
@@ -2061,22 +2185,22 @@ func (a *App) SimulatePackageUpgrade() (map[string]interface{}, error) {
 }
 
 func (a *App) RunPackageUpgrade() {
-	if a.vellumClient == nil {
-		return
-	}
-
 	go func() {
-		settings, _ := a.settingsStore.Load()
-		proxyEnabled := settings == nil || settings.ProxyMode
-
 		a.mu.Lock()
+		vc := a.vellumClient
 		sshClient := a.client
 		dt := a.connectedDeviceType
 		a.mu.Unlock()
+		if vc == nil {
+			return
+		}
+
+		settings, _ := a.settingsStore.Load()
+		proxyEnabled := settings == nil || settings.ProxyMode
 
 		if proxyEnabled && sshClient != nil {
 			arch := device.GetArchitecture(component.DeviceType(dt))
-			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
 			err := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
 				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
@@ -2094,7 +2218,7 @@ func (a *App) RunPackageUpgrade() {
 		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
 		var dnsError bool
-		err := a.vellumClient.UpgradeStreaming(func(line string) {
+		err := vc.UpgradeStreaming(func(line string) {
 			runtime.EventsEmit(a.ctx, "command:output", line+"\n")
 			if strings.Contains(strings.ToLower(line), "dns:") {
 				dnsError = true
@@ -2239,12 +2363,15 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 }
 
 func (a *App) RunUpgrade() {
-	if a.vellumClient == nil {
-		return
-	}
-
 	go func() {
-		osState, err := a.vellumClient.GetOSVersionState()
+		a.mu.Lock()
+		vc := a.vellumClient
+		a.mu.Unlock()
+		if vc == nil {
+			return
+		}
+
+		osState, err := vc.GetOSVersionState()
 		if err != nil {
 			runtime.EventsEmit(a.ctx, "upgrade:error", "Failed to get OS version state")
 			return
@@ -2253,7 +2380,7 @@ func (a *App) RunUpgrade() {
 		if osState.Mismatch {
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Checking package compatibility with OS %s...\n", osState.CurrentVersion))
 
-			compat, err := a.vellumClient.CheckOSCompatibility(osState.CurrentVersion)
+			compat, err := vc.CheckOSCompatibility(osState.CurrentVersion)
 			if err != nil && compat.FetchFailed {
 				runtime.EventsEmit(a.ctx, "upgrade:error", "Could not fetch package index to verify compatibility")
 				return
@@ -2282,7 +2409,7 @@ func (a *App) RunUpgrade() {
 
 		if proxyEnabled && sshClient != nil {
 			arch := device.GetArchitecture(component.DeviceType(dt))
-			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
 			proxyErr := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
 				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
@@ -2300,7 +2427,7 @@ func (a *App) RunUpgrade() {
 		runtime.EventsEmit(a.ctx, "command:output", "Running vellum upgrade...\n")
 
 		var dnsError bool
-		err = a.vellumClient.UpgradeStreaming(func(line string) {
+		err = vc.UpgradeStreaming(func(line string) {
 			runtime.EventsEmit(a.ctx, "command:output", line+"\n")
 			if strings.Contains(strings.ToLower(line), "dns:") {
 				dnsError = true
@@ -2416,22 +2543,58 @@ type TransferProgress struct {
 }
 
 type FolderTransferProgress struct {
-	CurrentFile string  `json:"currentFile"`
-	FilesDone   int     `json:"filesDone"`
-	FilesTotal  int     `json:"filesTotal"`
-	BytesDone   int64   `json:"bytesDone"`
-	BytesTotal  int64   `json:"bytesTotal"`
-	Percentage  float64 `json:"percentage"`
-	Status      string  `json:"status"`
+	CurrentFile    string  `json:"currentFile"`
+	FilesDone      int     `json:"filesDone"`
+	FilesTotal     int     `json:"filesTotal"`
+	BytesDone      int64   `json:"bytesDone"`
+	BytesTotal     int64   `json:"bytesTotal"`
+	Percentage     float64 `json:"percentage"`
+	Status         string  `json:"status"`
+	ContainsFolder bool    `json:"containsFolder"`
+}
+
+type DialogActionRequest struct {
+	Id    string `json:"id"`
+	Label string `json:"label"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
 }
 
 type DialogRequest struct {
-	Title             string   `json:"title"`
-	Message           string   `json:"message"`
-	Steps             []string `json:"steps"`
-	ConfirmText       string   `json:"confirmText"`
-	InProgressMessage string   `json:"inProgressMessage"`
-	InfoOnly          bool     `json:"infoOnly"`
+	Title             string                `json:"title"`
+	Message           string                `json:"message"`
+	Note              string                `json:"note"`
+	Steps             []string              `json:"steps"`
+	ConfirmText       string                `json:"confirmText"`
+	CancelText        string                `json:"cancelText"`
+	InProgressMessage string                `json:"inProgressMessage"`
+	InfoOnly          bool                  `json:"infoOnly"`
+	InstallFlow       bool                  `json:"installFlow"`
+	Actions           []DialogActionRequest `json:"actions"`
+}
+
+func dialogRequestFromConfig(cfg *component.DialogConfig) DialogRequest {
+	var actions []DialogActionRequest
+	for _, a := range cfg.Actions {
+		actions = append(actions, DialogActionRequest{
+			Id:    a.Id,
+			Label: a.Label,
+			Type:  a.Type,
+			Value: a.Value,
+		})
+	}
+	return DialogRequest{
+		Title:             cfg.Title,
+		Message:           cfg.Message,
+		Note:              cfg.Note,
+		Steps:             cfg.Steps,
+		ConfirmText:       cfg.ConfirmText,
+		CancelText:        cfg.CancelText,
+		InProgressMessage: cfg.InProgressMessage,
+		InfoOnly:          cfg.InfoOnly,
+		InstallFlow:       cfg.InstallFlow,
+		Actions:           actions,
+	}
 }
 
 // InstallSimulationResult contains the result of simulating an install
@@ -2606,9 +2769,9 @@ func (a *App) resolveWorldDeps(targets []string) (worldToRemove []string, allAff
 	return worldToRemove, allAffected, nil
 }
 
-func (a *App) RespondToDialog(confirmed bool) {
+func (a *App) RespondToDialog(response string) {
 	if a.dialogResponse != nil {
-		a.dialogResponse <- confirmed
+		a.dialogResponse <- response
 	}
 }
 
@@ -2627,9 +2790,17 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 	}
 	go func() {
 		a.mu.Lock()
+		vc := a.vellumClient
 		a.installCancelCh = make(chan struct{})
 		cancelCh := a.installCancelCh
 		a.mu.Unlock()
+		if vc == nil {
+			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+				Success: false,
+				Errors:  []string{"Not connected"},
+			})
+			return
+		}
 
 		defer func() {
 			a.mu.Lock()
@@ -2648,7 +2819,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 			}
 		}
 
-		a.dialogResponse = make(chan bool, 1)
+		a.dialogResponse = make(chan string, 1)
 		defer func() {
 			close(a.dialogResponse)
 			a.dialogResponse = nil
@@ -2672,7 +2843,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 
 		var allPackages []string
 		if sshClient != nil && proxyEnabled {
-			proxy := vellum.NewProxy(a.vellumClient, sshClient, string(arch))
+			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
 				Status:  "downloading",
 				Message: "Downloading packages via reManager...",
@@ -2708,7 +2879,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 		}
 
 		exec := &wailsExecutor{app: a}
-		inst := installer.NewInstaller(a.vellumClient, a.metadata, exec)
+		inst := installer.NewInstaller(vc, a.metadata, exec)
 
 		result := inst.Install(
 			packageNames,
@@ -2728,17 +2899,10 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 			},
 			func(hookResult *component.HookExecutionResult) error {
 				if hookResult.DialogConfig != nil {
-					runtime.EventsEmit(a.ctx, "hook:dialog", DialogRequest{
-						Title:             hookResult.DialogConfig.Title,
-						Message:           hookResult.DialogConfig.Message,
-						Steps:             hookResult.DialogConfig.Steps,
-						ConfirmText:       hookResult.DialogConfig.ConfirmText,
-						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
-						InfoOnly:          hookResult.DialogConfig.InfoOnly,
-					})
+					runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig))
 
-					confirmed := <-a.dialogResponse
-					if !confirmed {
+					response := <-a.dialogResponse
+					if response == "" || response == "cancel" {
 						return fmt.Errorf("user cancelled")
 					}
 
@@ -2750,6 +2914,21 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
 						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
 							return err
+						}
+					}
+
+					if hookResult.DialogConfig.PostCommandDialog != nil {
+						runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig.PostCommandDialog))
+
+						postResponse := <-a.dialogResponse
+						for _, action := range hookResult.DialogConfig.PostCommandDialog.Actions {
+							if action.Id == postResponse && action.Type == "run_command" {
+								runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", action.Value))
+								if err := exec.Execute([]component.CommandResult{{Script: action.Value}}); err != nil {
+									return err
+								}
+								break
+							}
 						}
 					}
 				}
@@ -2771,9 +2950,17 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 	}
 	go func() {
 		a.mu.Lock()
+		vc := a.vellumClient
 		a.installCancelCh = make(chan struct{})
 		cancelCh := a.installCancelCh
 		a.mu.Unlock()
+		if vc == nil {
+			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
+				Success: false,
+				Errors:  []string{"Not connected"},
+			})
+			return
+		}
 
 		defer func() {
 			a.mu.Lock()
@@ -2792,7 +2979,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 			}
 		}
 
-		a.dialogResponse = make(chan bool, 1)
+		a.dialogResponse = make(chan string, 1)
 		defer func() {
 			close(a.dialogResponse)
 			a.dialogResponse = nil
@@ -2810,39 +2997,35 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		useRecursive := false
 		useBatch := false
 
-		if a.vellumClient != nil {
-			simResult, err := a.vellumClient.SimulateDel(packageNames...)
+		simResult, err := vc.SimulateDel(packageNames...)
+		if err != nil {
+			debug.Printf("[DEBUG] SimulateDel failed: %v, trying recursive\n", err)
+			useRecursive = true
+			allPackages, err = vc.SimulateDelRecursive(packageNames...)
 			if err != nil {
-				debug.Printf("[DEBUG] SimulateDel failed: %v, trying recursive\n", err)
+				debug.Printf("[DEBUG] SimulateDelRecursive also failed: %v\n", err)
+				allPackages = packageNames
+			}
+		} else if len(simResult.Blocked) > 0 || len(simResult.Packages) == 0 {
+			worldToRemove, allAffected, wErr := a.resolveWorldDeps(packageNames)
+			if wErr != nil || len(worldToRemove) == 0 {
+				debug.Printf("[DEBUG] resolveWorldDeps failed or empty: %v\n", wErr)
 				useRecursive = true
-				allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
+				allPackages, err = vc.SimulateDelRecursive(packageNames...)
 				if err != nil {
-					debug.Printf("[DEBUG] SimulateDelRecursive also failed: %v\n", err)
+					debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
 					allPackages = packageNames
-				}
-			} else if len(simResult.Blocked) > 0 || len(simResult.Packages) == 0 {
-				worldToRemove, allAffected, wErr := a.resolveWorldDeps(packageNames)
-				if wErr != nil || len(worldToRemove) == 0 {
-					debug.Printf("[DEBUG] resolveWorldDeps failed or empty: %v\n", wErr)
-					useRecursive = true
-					allPackages, err = a.vellumClient.SimulateDelRecursive(packageNames...)
-					if err != nil {
-						debug.Printf("[DEBUG] SimulateDelRecursive failed: %v\n", err)
-						allPackages = packageNames
-					}
-				} else {
-					packageNames = worldToRemove
-					allPackages = allAffected
-					useBatch = true
 				}
 			} else {
-				allPackages = simResult.Packages
-				if len(allPackages) == 0 {
-					allPackages = packageNames
-				}
+				packageNames = worldToRemove
+				allPackages = allAffected
+				useBatch = true
 			}
 		} else {
-			allPackages = packageNames
+			allPackages = simResult.Packages
+			if len(allPackages) == 0 {
+				allPackages = packageNames
+			}
 		}
 
 		if isCancelled() {
@@ -2854,7 +3037,7 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		}
 
 		exec := &wailsExecutor{app: a}
-		inst := installer.NewInstaller(a.vellumClient, a.metadata, exec)
+		inst := installer.NewInstaller(vc, a.metadata, exec)
 
 		result := inst.Uninstall(
 			packageNames,
@@ -2873,17 +3056,10 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 			},
 			func(hookResult *component.HookExecutionResult) error {
 				if hookResult.DialogConfig != nil {
-					runtime.EventsEmit(a.ctx, "hook:dialog", DialogRequest{
-						Title:             hookResult.DialogConfig.Title,
-						Message:           hookResult.DialogConfig.Message,
-						Steps:             hookResult.DialogConfig.Steps,
-						ConfirmText:       hookResult.DialogConfig.ConfirmText,
-						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
-						InfoOnly:          hookResult.DialogConfig.InfoOnly,
-					})
+					runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig))
 
-					confirmed := <-a.dialogResponse
-					if !confirmed {
+					response := <-a.dialogResponse
+					if response == "" || response == "cancel" {
 						return fmt.Errorf("user cancelled")
 					}
 
@@ -2891,6 +3067,21 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
 						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
 							return err
+						}
+					}
+
+					if hookResult.DialogConfig.PostCommandDialog != nil {
+						runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig.PostCommandDialog))
+
+						postResponse := <-a.dialogResponse
+						for _, action := range hookResult.DialogConfig.PostCommandDialog.Actions {
+							if action.Id == postResponse && action.Type == "run_command" {
+								runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", action.Value))
+								if err := exec.Execute([]component.CommandResult{{Script: action.Value}}); err != nil {
+									return err
+								}
+								break
+							}
 						}
 					}
 				}
@@ -2945,26 +3136,52 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 				}
 
 				if hookResult != nil && hookResult.DialogConfig != nil {
-					a.dialogResponse = make(chan bool, 1)
+					a.dialogResponse = make(chan string, 1)
 					defer func() {
 						close(a.dialogResponse)
 						a.dialogResponse = nil
 					}()
 
-					runtime.EventsEmit(a.ctx, "hook:dialog", DialogRequest{
-						Title:             hookResult.DialogConfig.Title,
-						Message:           hookResult.DialogConfig.Message,
-						Steps:             hookResult.DialogConfig.Steps,
-						ConfirmText:       hookResult.DialogConfig.ConfirmText,
-						InProgressMessage: hookResult.DialogConfig.InProgressMessage,
-						InfoOnly:          hookResult.DialogConfig.InfoOnly,
-					})
+					runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig))
 
-					confirmed := <-a.dialogResponse
-					if !confirmed {
+					response := <-a.dialogResponse
+					if response == "" || response == "cancel" {
 						runtime.EventsEmit(a.ctx, "command:done", false)
 						return
 					}
+
+					runtime.EventsEmit(a.ctx, "hook:started", map[string]string{
+						"title": hookResult.DialogConfig.Title,
+					})
+
+					exec := &wailsExecutor{app: a}
+
+					if hookResult.Command != nil {
+						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))
+						if err := exec.Execute([]component.CommandResult{*hookResult.Command}); err != nil {
+							runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
+							runtime.EventsEmit(a.ctx, "command:done", false)
+							return
+						}
+					}
+
+					if hookResult.DialogConfig.PostCommandDialog != nil {
+						runtime.EventsEmit(a.ctx, "hook:dialog", dialogRequestFromConfig(hookResult.DialogConfig.PostCommandDialog))
+
+						postResponse := <-a.dialogResponse
+						for _, action := range hookResult.DialogConfig.PostCommandDialog.Actions {
+							if action.Id == postResponse && action.Type == "run_command" {
+								runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", action.Value))
+								if err := exec.Execute([]component.CommandResult{{Script: action.Value}}); err != nil {
+									runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
+								}
+								break
+							}
+						}
+					}
+
+					runtime.EventsEmit(a.ctx, "command:done", true)
+					return
 				}
 			}
 		}
@@ -3316,6 +3533,7 @@ type BehaviorSettings struct {
 	SuppressSystemFileWarnings bool `json:"suppressSystemFileWarnings"`
 	PreventSleep               bool `json:"preventSleep"`
 	CheckForUpdates            bool `json:"checkForUpdates"`
+	SuppressGuideOffer         bool `json:"suppressGuideOffer"`
 }
 
 type SettingsInfo struct {
@@ -3334,6 +3552,7 @@ func (a *App) GetSettings() SettingsInfo {
 			BehaviorSettings: BehaviorSettings{
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
+
 				PreventSleep:               true,
 				CheckForUpdates:            true,
 			},
@@ -3350,6 +3569,7 @@ func (a *App) GetSettings() SettingsInfo {
 			BehaviorSettings: BehaviorSettings{
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
+
 				PreventSleep:               true,
 				CheckForUpdates:            true,
 			},
@@ -3366,6 +3586,7 @@ func (a *App) GetSettings() SettingsInfo {
 			SuppressSystemFileWarnings: settings.SuppressSystemFileWarnings,
 			PreventSleep:               settings.PreventSleep,
 			CheckForUpdates:            settings.CheckForUpdates,
+			SuppressGuideOffer:         settings.SuppressGuideOffer,
 		},
 		TabVisibility:      settings.TabVisibility,
 		Theme:              settings.Theme,
@@ -3380,6 +3601,12 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 	if a.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
+	existing, _ := a.settingsStore.Load()
+	var suppressGuideOffer bool
+	if existing != nil {
+		suppressGuideOffer = existing.SuppressGuideOffer
+	}
+
 	settings := &storage.Settings{
 		TabVisibility:              storage.TabVisibility(tabVisibility),
 		ProxyMode:                  proxyMode,
@@ -3389,6 +3616,7 @@ func (a *App) SaveSettings(tabVisibility map[string]bool, proxyMode bool, suppre
 		TerminalTheme:              terminalTheme,
 		EditorTheme:                editorTheme,
 		CheckForUpdates:            checkForUpdates,
+		SuppressGuideOffer:         suppressGuideOffer,
 		SSHAgentSocketPath:         sshAgentSocketPath,
 	}
 
@@ -3968,9 +4196,21 @@ func (a *App) DownloadFile(remotePath string) {
 		}
 
 		filename := path.Base(remotePath)
-		localPath, err := saveFileDialog(a.ctx, "Save File", filename)
+		var lastDir string
+		if a.settingsStore != nil {
+			if settings, err := a.settingsStore.Load(); err == nil {
+				lastDir = settings.LastDownloadDir
+			}
+		}
+		localPath, err := saveFileDialog(a.ctx, "Save File", filename, lastDir)
 		if err != nil || localPath == "" {
 			return
+		}
+		if a.settingsStore != nil {
+			if settings, err := a.settingsStore.Load(); err == nil {
+				settings.LastDownloadDir = filepath.Dir(localPath)
+				_ = a.settingsStore.Save(settings)
+			}
 		}
 
 		sftpClient, err := sftp.NewClient(client)
@@ -4082,9 +4322,21 @@ func (a *App) DownloadFolder(remotePath string) {
 		}
 
 		folderName := path.Base(remotePath)
-		localDir, err := openDirectoryDialog(a.ctx, "Save Folder To")
+		var lastDir string
+		if a.settingsStore != nil {
+			if settings, err := a.settingsStore.Load(); err == nil {
+				lastDir = settings.LastDownloadDir
+			}
+		}
+		localDir, err := openDirectoryDialog(a.ctx, "Save Folder To", lastDir)
 		if err != nil || localDir == "" {
 			return
+		}
+		if a.settingsStore != nil {
+			if settings, err := a.settingsStore.Load(); err == nil {
+				settings.LastDownloadDir = localDir
+				_ = a.settingsStore.Save(settings)
+			}
 		}
 		localBasePath := filepath.Join(localDir, folderName)
 
@@ -4184,7 +4436,7 @@ func (a *App) downloadFolderRecursive(sftpClient *sftp.Client, remotePath, local
 			*failedFiles = append(*failedFiles, remotePath)
 		}
 		*filesDone++
-		a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading")
+		a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading", true)
 		return nil
 	}
 
@@ -4238,7 +4490,7 @@ func (a *App) downloadFolderRecursive(sftpClient *sftp.Client, remotePath, local
 				return nil
 			}
 			*bytesDone += int64(n)
-			a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading")
+			a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading", true)
 		}
 		if err == io.EOF {
 			break
@@ -4250,147 +4502,48 @@ func (a *App) downloadFolderRecursive(sftpClient *sftp.Client, remotePath, local
 	}
 
 	*filesDone++
-	a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading")
+	a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading", true)
 	return nil
 }
 
-func (a *App) emitFolderProgress(currentFile string, filesDone, filesTotal int, bytesDone, bytesTotal int64, status string) {
+func (a *App) emitFolderProgress(currentFile string, filesDone, filesTotal int, bytesDone, bytesTotal int64, status string, containsFolder bool) {
 	var percentage float64
 	if bytesTotal > 0 {
 		percentage = float64(bytesDone) / float64(bytesTotal) * 100
 	}
 	runtime.EventsEmit(a.ctx, "filebrowser:folder-progress", FolderTransferProgress{
-		CurrentFile: currentFile,
-		FilesDone:   filesDone,
-		FilesTotal:  filesTotal,
-		BytesDone:   bytesDone,
-		BytesTotal:  bytesTotal,
-		Percentage:  percentage,
-		Status:      status,
+		CurrentFile:    currentFile,
+		FilesDone:      filesDone,
+		FilesTotal:     filesTotal,
+		BytesDone:      bytesDone,
+		BytesTotal:     bytesTotal,
+		Percentage:     percentage,
+		Status:         status,
+		ContainsFolder: containsFolder,
 	})
 }
 
-func (a *App) UploadFile(remotePath string) {
-	go func() {
-		a.mu.Lock()
-		client := a.client
-		a.mu.Unlock()
-
-		if client == nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": "Not connected",
-			})
-			return
+func (a *App) SelectFilesForUpload() []string {
+	var lastDir string
+	if a.settingsStore != nil {
+		if settings, err := a.settingsStore.Load(); err == nil {
+			lastDir = settings.LastUploadDir
 		}
+	}
 
-		localPath, err := openFileDialog(a.ctx, "Select File to Upload")
-		if err != nil || localPath == "" {
-			return
+	files, err := openMultipleFilesDialog(a.ctx, "Select files to upload", lastDir)
+	if err != nil || len(files) == 0 {
+		return []string{}
+	}
+
+	if a.settingsStore != nil {
+		if settings, err := a.settingsStore.Load(); err == nil {
+			settings.LastUploadDir = filepath.Dir(files[0])
+			_ = a.settingsStore.Save(settings)
 		}
+	}
 
-		localFile, err := os.Open(localPath)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to open local file: %v", err),
-			})
-			return
-		}
-		defer localFile.Close()
-
-		stat, err := localFile.Stat()
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to stat local file: %v", err),
-			})
-			return
-		}
-		totalBytes := stat.Size()
-		filename := stat.Name()
-
-		destPath := remotePath
-		if strings.HasSuffix(remotePath, "/") || remotePath == "" {
-			destPath = path.Join(remotePath, filename)
-		}
-
-		// Make filesystem writable for system paths on RMPP devices
-		if isSystemPath(destPath) {
-			if err := a.makeFilesystemWritable(client); err != nil {
-				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-					"message": fmt.Sprintf("Failed to prepare filesystem: %v", err),
-				})
-				return
-			}
-			defer a.restoreFilesystemDeferred(client)
-		}
-
-		sftpClient, err := sftp.NewClient(client)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
-			})
-			return
-		}
-		defer sftpClient.Close()
-
-		remoteFile, err := sftpClient.Create(destPath)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to create remote file: %v", err),
-			})
-			return
-		}
-		defer remoteFile.Close()
-
-		buffer := make([]byte, 32*1024)
-		var transferred int64
-
-		for {
-			n, err := localFile.Read(buffer)
-			if n > 0 {
-				_, writeErr := remoteFile.Write(buffer[:n])
-				if writeErr != nil {
-					runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-						"message": fmt.Sprintf("Failed to write to remote file: %v", writeErr),
-					})
-					return
-				}
-				transferred += int64(n)
-
-				var percentage float64
-				if totalBytes > 0 {
-					percentage = float64(transferred) / float64(totalBytes) * 100
-				}
-				runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
-					Filename:   filename,
-					BytesSent:  transferred,
-					TotalBytes: totalBytes,
-					Percentage: percentage,
-					Status:     "uploading",
-				})
-			}
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-					"message": fmt.Sprintf("Failed to read local file: %v", err),
-				})
-				return
-			}
-		}
-
-		runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
-			Filename:   filename,
-			BytesSent:  totalBytes,
-			TotalBytes: totalBytes,
-			Percentage: 100,
-			Status:     "uploading",
-		})
-
-		runtime.EventsEmit(a.ctx, "filebrowser:upload-complete", map[string]string{
-			"path": destPath,
-		})
-	}()
+	return files
 }
 
 func (a *App) UploadFolder(remotePath string) {
@@ -4406,7 +4559,7 @@ func (a *App) UploadFolder(remotePath string) {
 			return
 		}
 
-		localDir, err := openDirectoryDialog(a.ctx, "Select Folder to Upload")
+		localDir, err := openDirectoryDialog(a.ctx, "Select Folder to Upload", "")
 		if err != nil || localDir == "" {
 			return
 		}
@@ -4525,7 +4678,7 @@ func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePa
 			*failedFiles = append(*failedFiles, localPath)
 		}
 		*filesDone++
-		a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading")
+		a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading", true)
 		return nil
 	}
 
@@ -4579,7 +4732,7 @@ func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePa
 				return nil
 			}
 			*bytesDone += int64(n)
-			a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading")
+			a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading", true)
 		}
 		if err == io.EOF {
 			break
@@ -4591,7 +4744,7 @@ func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePa
 	}
 
 	*filesDone++
-	a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading")
+	a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading", true)
 	return nil
 }
 
@@ -4630,8 +4783,8 @@ func (a *App) UploadFilesFromPaths(localPaths []string, remotePath string) {
 			}
 		}
 
-		if hasFolder {
-			a.uploadMixedPaths(client, localPaths, remotePath)
+		if hasFolder || len(localPaths) > 1 {
+			a.uploadMixedPaths(client, localPaths, remotePath, hasFolder)
 			return
 		}
 
@@ -4658,7 +4811,7 @@ func (a *App) UploadFilesFromPaths(localPaths []string, remotePath string) {
 	}()
 }
 
-func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePath string) {
+func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePath string, containsFolder bool) {
 	a.folderTransferMu.Lock()
 	a.folderTransferCancelCh = make(chan struct{})
 	cancelCh := a.folderTransferCancelCh
@@ -4751,11 +4904,11 @@ func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePa
 						break
 					}
 					bytesDone += int64(n)
-					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading")
+					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading", containsFolder)
 				}
 				if err == io.EOF {
 					filesDone++
-					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading")
+					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading", containsFolder)
 					break
 				}
 				if err != nil {
@@ -5211,7 +5364,7 @@ func (a *App) SelectBackupFile() string {
 
 	timestamp := time.Now().Format("2006-01-02-150405")
 	defaultName := fmt.Sprintf("remarkable-backup-%s-%s.tar.zst", deviceName, timestamp)
-	destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName)
+	destPath, err := saveFileDialog(a.ctx, "Save Backup", defaultName, "")
 	if err != nil || destPath == "" {
 		return ""
 	}
@@ -5288,7 +5441,7 @@ func (a *App) CreateDeviceBackup(destPath string) {
 }
 
 func (a *App) SelectRestoreFile() string {
-	archivePath, err := openFileDialog(a.ctx, "Select Backup to Restore")
+	archivePath, err := openFileDialog(a.ctx, "Select Backup to Restore", "")
 	if err != nil || archivePath == "" {
 		return ""
 	}
@@ -5635,6 +5788,35 @@ func (a *App) RestartXochitl() error {
 	return nil
 }
 
+
+func (a *App) RescanLibrary() error {
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+	defer session.Close()
+
+	out, err := session.CombinedOutput("echo '>erescanLibrary:' > /run/xovi-mb; cat /run/xovi-mb-out")
+	if err != nil {
+		return fmt.Errorf("failed to rescan library: %w", err)
+	}
+
+	resp := strings.TrimSpace(string(out))
+	if strings.HasPrefix(resp, "ERROR:") {
+		return fmt.Errorf("rescan library: %s", resp)
+	}
+
+	return nil
+}
+
 // SelectPDFFile opens a native file dialog filtered to PDF files and returns
 // the chosen path, or an empty string if the user cancelled.
 func (a *App) SelectPDFFile() string {
@@ -5888,6 +6070,240 @@ func (a *App) ImportPDFFromPath(localPath, visibleName string, restartXochitl bo
 	return nil
 }
 
+const guideManifestURL = "https://raw.githubusercontent.com/rmitchellscott/remanager/main/docs/guide/guide-manifest.json"
+const guideDownloadURLBase = "https://raw.githubusercontent.com/rmitchellscott/remanager/main/docs/guide/releases/"
+const guideVisibleName = "reManager User Guide"
+
+type UserGuideStatus struct {
+	Installed   bool   `json:"installed"`
+	NeedsUpdate bool   `json:"needsUpdate"`
+	Skipped     bool   `json:"skipped"`
+	DocID       string `json:"docId"`
+}
+
+func (a *App) fetchGuideManifest() (map[string]struct{ SHA256 string `json:"sha256"` }, error) {
+	client := httputil.NewClient(10 * time.Second)
+	resp, err := client.Get(guideManifestURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch guide manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("guide manifest returned HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read guide manifest: %w", err)
+	}
+
+	var manifest map[string]struct {
+		SHA256 string `json:"sha256"`
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse guide manifest: %w", err)
+	}
+	return manifest, nil
+}
+
+func (a *App) findGuideOnDevice(sftpClient *sftp.Client) (docID string, err error) {
+	entries, err := sftpClient.ReadDir(pdfimport.XochitlPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read xochitl directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".metadata") {
+			continue
+		}
+
+		metaPath := path.Join(pdfimport.XochitlPath, name)
+		f, err := sftpClient.Open(metaPath)
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			continue
+		}
+
+		var meta struct {
+			VisibleName string `json:"visibleName"`
+		}
+		if err := json.Unmarshal(data, &meta); err != nil {
+			continue
+		}
+		if meta.VisibleName == guideVisibleName {
+			return strings.TrimSuffix(name, ".metadata"), nil
+		}
+	}
+	return "", nil
+}
+
+func (a *App) CheckUserGuide() UserGuideStatus {
+	if version == "dev" {
+		return UserGuideStatus{Skipped: true}
+	}
+
+	v := strings.TrimPrefix(version, "v")
+
+	manifest, err := a.fetchGuideManifest()
+	if err != nil {
+		debug.Printf("[DEBUG] CheckUserGuide: manifest fetch failed: %v\n", err)
+		return UserGuideStatus{Skipped: true}
+	}
+
+	entry, ok := manifest[v]
+	if !ok {
+		debug.Printf("[DEBUG] CheckUserGuide: version %s not in manifest\n", v)
+		return UserGuideStatus{Skipped: true}
+	}
+
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+	if client == nil {
+		return UserGuideStatus{Skipped: true}
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		debug.Printf("[DEBUG] CheckUserGuide: sftp failed: %v\n", err)
+		return UserGuideStatus{Skipped: true}
+	}
+	defer sftpClient.Close()
+
+	docID, err := a.findGuideOnDevice(sftpClient)
+	if err != nil {
+		debug.Printf("[DEBUG] CheckUserGuide: scan failed: %v\n", err)
+		return UserGuideStatus{}
+	}
+
+	if docID == "" {
+		return UserGuideStatus{Installed: false, NeedsUpdate: false}
+	}
+
+	epubPath := path.Join(pdfimport.XochitlPath, docID+".epub")
+	output, err := a.runCommand("sha256sum " + epubPath)
+	if err != nil {
+		debug.Printf("[DEBUG] CheckUserGuide: sha256sum failed: %v\n", err)
+		return UserGuideStatus{Installed: true, DocID: docID}
+	}
+
+	deviceHash := strings.Fields(strings.TrimSpace(output))
+	if len(deviceHash) > 0 && deviceHash[0] == entry.SHA256 {
+		return UserGuideStatus{Installed: true, DocID: docID}
+	}
+
+	return UserGuideStatus{Installed: true, NeedsUpdate: true, DocID: docID}
+}
+
+func (a *App) InstallUserGuide() error {
+	if version == "dev" {
+		return fmt.Errorf("guide installation not available in dev builds")
+	}
+
+	v := strings.TrimPrefix(version, "v")
+
+	a.mu.Lock()
+	client := a.client
+	a.mu.Unlock()
+	if client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	downloadURL := guideDownloadURLBase + v + ".epub"
+	resp, err := http.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("failed to download guide: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("guide download returned HTTP %d", resp.StatusCode)
+	}
+
+	epubData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read guide data: %w", err)
+	}
+
+	manifest, err := a.fetchGuideManifest()
+	if err != nil {
+		return fmt.Errorf("failed to verify guide: %w", err)
+	}
+	entry, ok := manifest[v]
+	if !ok {
+		return fmt.Errorf("no guide available for version %s", v)
+	}
+
+	h := sha256.Sum256(epubData)
+	if fmt.Sprintf("%x", h) != entry.SHA256 {
+		return fmt.Errorf("guide checksum mismatch")
+	}
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	existingID, _ := a.findGuideOnDevice(sftpClient)
+	if existingID != "" {
+		base := path.Join(pdfimport.XochitlPath, existingID)
+		for _, ext := range []string{".epub", ".content", ".metadata", ".pagedata"} {
+			sftpClient.Remove(base + ext)
+		}
+		thumbDir := base + ".thumbnails"
+		if entries, err := sftpClient.ReadDir(thumbDir); err == nil {
+			for _, e := range entries {
+				sftpClient.Remove(path.Join(thumbDir, e.Name()))
+			}
+			sftpClient.RemoveDirectory(thumbDir)
+		}
+		cacheDir := base + ".cache"
+		if entries, err := sftpClient.ReadDir(cacheDir); err == nil {
+			for _, e := range entries {
+				sftpClient.Remove(path.Join(cacheDir, e.Name()))
+			}
+			sftpClient.RemoveDirectory(cacheDir)
+		}
+	}
+
+	if _, err := epubimport.Upload(sftpClient, epubData, guideVisibleName, ""); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (a *App) DismissGuideOffer() error {
+	if a.settingsStore == nil {
+		return fmt.Errorf("settings store not initialized")
+	}
+	settings, err := a.settingsStore.Load()
+	if err != nil {
+		return err
+	}
+	settings.SuppressGuideOffer = true
+	return a.settingsStore.Save(settings)
+}
+
+func (a *App) EnableGuideOffer() error {
+	if a.settingsStore == nil {
+		return fmt.Errorf("settings store not initialized")
+	}
+	settings, err := a.settingsStore.Load()
+	if err != nil {
+		return err
+	}
+	settings.SuppressGuideOffer = false
+	return a.settingsStore.Save(settings)
+}
+
 // Input event bytes for BTN_TOUCH (arm64: 24 bytes per event)
 // Layout: time_sec(8) + time_usec(8) + type(2) + code(2) + value(4)
 var (
@@ -6017,7 +6433,7 @@ func (a *App) StartPreventSleep() error {
 
 	debug.Printf("[DEBUG] StartPreventSleep: starting goroutine for device %s\n", penDevice)
 	go func() {
-		ticker := time.NewTicker(60 * time.Second)
+		ticker := time.NewTicker(20 * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -6153,6 +6569,26 @@ func (a *App) buildGenerator(deviceID string, isConnectedDevice bool, deviceName
 		if tz, err := a.GetDeviceTimezone(); err == nil {
 			gen.Timezone = tz
 		}
+	} else if deviceID != "" && a.deviceInfoCache != nil {
+		if cached, _ := a.deviceInfoCache.Get(deviceID); cached != nil {
+			gen.Device = &support.DeviceInfo{
+				MachineType:     cached.MachineType,
+				FirmwareVersion: cached.FirmwareVersion,
+			}
+			gen.InstalledPackages = cached.InstalledPackages
+			gen.OSVer = cached.OSVersion
+			gen.UpdateService = &support.UpdateServiceStatus{
+				Enabled: cached.UpdateServiceEnabled,
+				Running: cached.UpdateServiceRunning,
+			}
+			gen.Hashtab = &support.HashtabInfo{
+				Installed:      cached.HashtabInstalled,
+				HashtabVersion: cached.HashtabVersion,
+				NeedsRebuild:   cached.HashtabNeedsRebuild,
+			}
+			gen.PartitionInfo = cached.PartitionInfo
+			gen.Timezone = cached.Timezone
+		}
 	}
 
 	return gen
@@ -6180,7 +6616,7 @@ func (a *App) GenerateSupportBundle(deviceID string) {
 		})
 
 		filename := fmt.Sprintf("remanager-support-%s.tar.gz", time.Now().Format("20060102-150405"))
-		destPath, err := saveFileDialog(a.ctx, "Save Support Bundle", filename)
+		destPath, err := saveFileDialog(a.ctx, "Save Support Bundle", filename, "")
 		if err != nil || destPath == "" {
 			if err != nil {
 				runtime.EventsEmit(a.ctx, "support-bundle:error", map[string]string{
@@ -6433,6 +6869,43 @@ func (a *App) GetBundleHistory() []storage.BundleRecord {
 
 func (a *App) CopyToClipboard(text string) {
 	runtime.ClipboardSetText(a.ctx, text)
+}
+
+func (a *App) SubmitProblemReport(description, email, bundleURL, deviceID string) error {
+	env := runtime.Environment(a.ctx)
+	hostOS := env.Platform
+	if hostOS == "darwin" {
+		hostOS = "macOS"
+	}
+	if platform.IsRunningInFlatpak() {
+		hostOS += " (Flatpak)"
+	}
+
+	a.mu.Lock()
+	deviceInfo := make(map[string]string)
+	isConnectedDevice := deviceID != "" && deviceID == a.connectedDeviceID && a.client != nil
+	a.mu.Unlock()
+
+	if isConnectedDevice {
+		deviceInfo = a.GetDeviceInfo()
+	} else if deviceID != "" && a.deviceInfoCache != nil {
+		if cached, _ := a.deviceInfoCache.Get(deviceID); cached != nil {
+			deviceInfo["machine"] = cached.MachineType
+			deviceInfo["firmware"] = cached.FirmwareVersion
+		}
+	}
+
+	report := support.ReportRequest{
+		Description: description,
+		Email:       email,
+		AppVersion:  version,
+		HostOS:      hostOS,
+		DeviceModel: deviceInfo["machine"],
+		Firmware:    deviceInfo["firmware"],
+		BundleURL:   bundleURL,
+	}
+
+	return support.SubmitReport(support.GetSupportURL(), report)
 }
 
 func (a *App) GetSupportBundleSessionID() string {

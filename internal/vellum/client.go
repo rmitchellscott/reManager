@@ -280,7 +280,7 @@ type UpgradeSimulationResult struct {
 }
 
 func (c *Client) SimulateUpgrade() (*UpgradeSimulationResult, error) {
-	cmd := fmt.Sprintf("%s upgrade --simulate", VellumBin)
+	cmd := fmt.Sprintf("%s upgrade --simulate --force-missing-repositories", VellumBin)
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		return &UpgradeSimulationResult{}, nil
@@ -339,7 +339,7 @@ func parseUpgradeSimulationOutputWithVersions(output string) []SimulatedPackage 
 }
 
 func (c *Client) SimulateUpgradeWithVersions() ([]SimulatedPackage, error) {
-	cmd := fmt.Sprintf("%s upgrade --simulate", VellumBin)
+	cmd := fmt.Sprintf("%s upgrade --simulate --force-missing-repositories", VellumBin)
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		return nil, nil

@@ -3,7 +3,7 @@
   "packages": {
     "xovi": {
       "0.3.1": {
-        "pkgdesc": "Core xovi framework for reMarkable tablets",
+        "pkgdesc": "Core mod framework for reMarkable tablets",
         "upstream_author": "asivery",
         "categories": ["framework"],
         "license": "GPL-3.0",
