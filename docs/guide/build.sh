@@ -36,6 +36,22 @@ pandoc \
   "${COVER_ARGS[@]}" \
   -o "$OUTPUT" \
   "$PROCESSED"
+
+PDF_OUTPUT="$SCRIPT_DIR/reManager User Guide.pdf"
+PDF_PROCESSED=$(mktemp /tmp/guide-pdf-XXXXX.md)
+{
+  if [[ -f "$SCRIPT_DIR/images/cover.png" ]]; then
+    printf '![](images/cover.png){width=100%%}\n\n\\newpage\n\n'
+  fi
+  sed '/^\\$/d' "$PROCESSED"
+} > "$PDF_PROCESSED"
+pandoc \
+  --resource-path="$SCRIPT_DIR" \
+  -V geometry:margin=1in \
+  -o "$PDF_OUTPUT" \
+  "$PDF_PROCESSED"
+rm -f "$PDF_PROCESSED"
+
 rm -f "$PROCESSED"
 
 TMPDIR=$(mktemp -d)
@@ -53,3 +69,4 @@ perl -pi -e 's|page-break-before: always;|page-break-before: avoid;|g' "$TMPDIR"
 (cd "$TMPDIR" && zip -q -0 "$OUTPUT" mimetype && zip -q -r "$OUTPUT" . -x mimetype)
 
 echo "Built: $OUTPUT"
+echo "Built: $PDF_OUTPUT"

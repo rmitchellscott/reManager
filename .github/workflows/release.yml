@@ -387,6 +387,10 @@ jobs:
           cp "$EPUB" "docs/guide/releases/${VERSION}.epub"
           SHA256=$(sha256sum "docs/guide/releases/${VERSION}.epub" | awk '{print $1}')
 
+          if [ ! -f docs/guide/guide-manifest.json ]; then
+            echo '{}' > docs/guide/guide-manifest.json
+          fi
+
           jq --arg v "$VERSION" --arg h "$SHA256" '.[$v] = {"sha256": $h}' \
             docs/guide/guide-manifest.json > tmp-manifest.json \
             && mv tmp-manifest.json docs/guide/guide-manifest.json

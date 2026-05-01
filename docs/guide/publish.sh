@@ -24,6 +24,10 @@ fi
 
 mkdir -p "$RELEASES"
 
+if [ ! -s "$MANIFEST" ]; then
+  echo '{}' > "$MANIFEST"
+fi
+
 SHA=$(sha256sum "$EPUB" | awk '{print $1}')
 
 for VERSION in "$@"; do

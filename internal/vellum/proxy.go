@@ -317,8 +317,19 @@ func (p *Proxy) ProxyUpgradeDownload(onProgress func(ProxyProgress)) error {
 
 	debug.Printf("[DEBUG] ProxyUpgradeDownload: %d upgradable packages: %v\n", len(toUpgrade), toUpgrade)
 
+	localOnlyPackages := map[string]bool{
+		"remarkable-os": true,
+		"rm1":           true,
+		"rm2":           true,
+		"rmpp":          true,
+		"rmppm":         true,
+	}
+
 	var pinnedPkgs []proxyPackage
 	for _, pkg := range toUpgrade {
+		if localOnlyPackages[pkg.Name] {
+			continue
+		}
 		pinnedPkgs = append(pinnedPkgs, proxyPackage{
 			name:    pkg.Name,
 			version: pkg.Version,

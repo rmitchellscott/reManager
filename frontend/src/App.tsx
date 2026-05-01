@@ -16,7 +16,8 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { Skeleton } from '@/components/ui/skeleton'
 import { ProgressModal } from '@/components/ProgressModal'
 import { PackageDetailPanel } from '@/components/PackageDetailPanel'
-import { ConsolidatedWarningBanner } from '@/components/ConsolidatedWarningBanner'
+import { ConsolidatedWarningBanner, hasActiveWarnings } from '@/components/ConsolidatedWarningBanner'
+import { BannerSwitcher } from '@/components/BannerSwitcher'
 import { UpgradeChecklist } from '@/components/UpgradeChecklist'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { VellumInstallSuccessDialog } from '@/components/VellumInstallSuccessDialog'
@@ -36,8 +37,8 @@ import { UserGuideOffer } from '@/components/UserGuideOffer'
 import { TimezoneCombobox } from '@/components/TimezoneCombobox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Alert, AlertTitle, AlertDescription, AlertAction } from '@/components/ui/alert'
-import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy, CheckCircle2 } from 'lucide-react'
+import { Banner } from '@/components/ui/banner'
+import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy, CheckCircle2, BookOpen } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 
 interface PackageInfo {
@@ -375,7 +376,6 @@ export default function App() {
   const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
   const [xochitlRunning, setXochitlRunning] = useState(true)
   const [xoviActive, setXoviActive] = useState(false)
-  const [xoviNotRunning, setXoviNotRunning] = useState(false)
   const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
   const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
   const runningSystemTaskRef = useRef<string | null>(null)
@@ -488,6 +488,10 @@ export default function App() {
 
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
   const [hashtabMissing, setHashtabMissing] = useState(false)
+  const xoviNotRunning = useMemo(() =>
+    installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch && !hashtabMissing,
+    [installedPackages, xochitlRunning, xoviActive, hashtabMismatch, hashtabMissing]
+  )
 
   const [timezoneMismatch, setTimezoneMismatch] = useState<TimezoneStatus | null>(null)
   const [selectedTimezone, setSelectedTimezone] = useState('')
@@ -753,7 +757,6 @@ export default function App() {
     setOutput('')
     setHashtabMismatch(null)
     setHashtabMissing(false)
-    setXoviNotRunning(false)
     setOsMismatchDetected(false)
     osMismatchDetectedRef.current = false
     setOsUpgradeDetected(false)
@@ -992,7 +995,7 @@ export default function App() {
           setHashtabMismatch(null)
         }
         setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
-        setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
+
         if (tzStatus.needsUpdate) {
           setTimezoneMismatch(tzStatus)
         } else {
@@ -1083,7 +1086,6 @@ export default function App() {
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
       setXochitlRunning(xochitlStatus.running)
       setXoviActive(xochitlStatus.xoviActive)
-      setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
 
       setInstalling(false)
       setUninstalling(false)
@@ -1236,6 +1238,8 @@ export default function App() {
       setHashtabMissing(!!w.hashtabMissing)
       if (w.autoUpdateEnabled) {
         setShowAutoUpdateBanner(true)
+      } else {
+        setShowAutoUpdateBanner(false)
       }
       if (w.timezoneStatus?.deviceTimezone) {
         setDeviceTimezone(w.timezoneStatus.deviceTimezone)
@@ -1245,9 +1249,11 @@ export default function App() {
         setTimezoneMismatch(w.timezoneMismatch)
         setDeviceTimezone(w.timezoneMismatch.deviceTimezone)
         setSelectedTimezone(w.timezoneMismatch.savedTimezone || w.timezoneMismatch.deviceTimezone)
+      } else {
+        setTimezoneMismatch(null)
       }
       setXochitlRunning(!w.xochitlNotRunning)
-      setXoviNotRunning(!!w.xoviNotRunning)
+
     })
 
     const unsubscribeGuideOffer = window.runtime.EventsOn('guide:offer', (...args: unknown[]) => {
@@ -1384,7 +1390,6 @@ export default function App() {
         setHashtabMismatch(null)
       }
       setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
-      setXoviNotRunning(installedPackages.has('xovi') && xochitlStatus.running && !xochitlStatus.xoviActive && !hashtabStatus.needsRebuild && hashtabStatus.installed)
       if (tzStatus.needsUpdate) {
         setTimezoneMismatch(tzStatus)
       } else {
@@ -2412,88 +2417,106 @@ export default function App() {
           </div>
         )}
 
-        {/* Xochitl Not Running Banner */}
-        {step !== 'connect' && warningsChecked && !xochitlRunning && !commandRunning && !showProgressModal && connectionStatus === 'connected' && (
-          <div className="mb-4">
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>reMarkable screen may be unresponsive</AlertTitle>
-              <AlertDescription>
-                The xochitl UI service is not running on the reMarkable.
-              </AlertDescription>
-              <AlertAction className="top-1/2 -translate-y-1/2">
-                {installedPackages.has('xovi') ? (
-                  <Button size="sm" onClick={() => setShowStartUIDialog(true)}>
-                    Fix
-                  </Button>
-                ) : (
-                  <Button size="sm" onClick={() => handleSystemTask('restart-xochitl')}>
-                    Start
-                  </Button>
-                )}
-              </AlertAction>
-            </Alert>
-          </div>
-        )}
+        {step !== 'connect' && (() => {
+          const warningsData = {
+            osUpgrade: osUpgradeDetected ? { prevVersion: prevOsVersion, newVersion: newOsVersion } : undefined,
+            hashtabMismatch: hashtabMismatch ? { hashtabVersion: hashtabMismatch.hashtabVersion, firmwareVersion: hashtabMismatch.firmwareVersion } : undefined,
+            timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
+            autoUpdatesEnabled: showAutoUpdateBanner,
+            reenableNeeded: reenableStatus === 'needed',
+            xoviNotRunning,
+            hashtabMissing,
+          }
+          return (
+            <BannerSwitcher banners={[
+              {
+                id: 'xochitl',
+                priority: 1,
+                severity: 'destructive',
+                icon: AlertCircle,
+                active: warningsChecked && !xochitlRunning && !commandRunning && !showProgressModal && connectionStatus === 'connected',
+                content: (
+                  <Banner
+                    severity="destructive"
+                    icon={AlertCircle}
+                    title="reMarkable screen may be unresponsive"
+                    actions={
+                      installedPackages.has('xovi') ? (
+                        <Button size="sm" onClick={() => setShowStartUIDialog(true)}>
+                          Fix
+                        </Button>
+                      ) : (
+                        <Button size="sm" onClick={() => handleSystemTask('restart-xochitl')}>
+                          Start
+                        </Button>
+                      )
+                    }
+                  >
+                    The xochitl UI service is not running on the reMarkable.
+                  </Banner>
+                ),
+              },
+              {
+                id: 'warnings',
+                priority: 2,
+                severity: 'warning',
+                icon: AlertTriangle,
+                active: warningsChecked && hasActiveWarnings(warningsData),
+                content: (
+                  <ConsolidatedWarningBanner
+                    warnings={warningsData}
+                    onGoToMaintenance={() => setActiveTab('maintenance')}
+                    onDismiss={() => {
+                      setOsUpgradeDetected(false)
+                      setHashtabMismatch(null)
+                      setHashtabMissing(false)
 
-        {/* Warning Banner */}
-        {step !== 'connect' && warningsChecked && (
-          <div className="mb-4">
-            <ConsolidatedWarningBanner
-              warnings={{
-                osUpgrade: osUpgradeDetected ? { prevVersion: prevOsVersion, newVersion: newOsVersion } : undefined,
-                hashtabMismatch: hashtabMismatch ? { hashtabVersion: hashtabMismatch.hashtabVersion, firmwareVersion: hashtabMismatch.firmwareVersion } : undefined,
-                timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
-                autoUpdatesEnabled: showAutoUpdateBanner,
-                reenableNeeded: reenableStatus === 'needed',
-                xoviNotRunning,
-                hashtabMissing,
-              }}
-              onGoToMaintenance={() => setActiveTab('maintenance')}
-              onDismiss={() => {
-                setOsUpgradeDetected(false)
-                setHashtabMismatch(null)
-                setHashtabMissing(false)
-                setXoviNotRunning(false)
-                setTimezoneMismatch(null)
-                setShowAutoUpdateBanner(false)
-                setReenableStatus('')
-              }}
-            />
-          </div>
-        )}
-
-        {step !== 'connect' && guideOffer && (
-          <div className="mb-4">
-            <UserGuideOffer
-              type={guideOffer}
-              installing={guideInstalling}
-              onInstall={async () => {
-                setGuideInstalling(true)
-                try {
-                  await window.go.main.App.InstallUserGuide()
-                  setGuideOffer(null)
-                  if (installedPackages.has('librarian')) {
-                    await window.go.main.App.RescanLibrary()
-                    toast.success('User guide installed on your reMarkable')
-                  } else {
-                    toast.success('User guide installed on your reMarkable')
-                    setShowGuideRestartDialog(true)
-                  }
-                } catch (err) {
-                  toast.error('Failed to install guide: ' + (err instanceof Error ? err.message : String(err)))
-                } finally {
-                  setGuideInstalling(false)
-                }
-              }}
-              onDismiss={() => setGuideOffer(null)}
-              onDismissPermanently={async () => {
-                setGuideOffer(null)
-                await window.go.main.App.DismissGuideOffer()
-              }}
-            />
-          </div>
-        )}
+                      setTimezoneMismatch(null)
+                      setShowAutoUpdateBanner(false)
+                      setReenableStatus('')
+                    }}
+                  />
+                ),
+              },
+              {
+                id: 'guide',
+                priority: 3,
+                severity: 'info',
+                icon: BookOpen,
+                active: !!guideOffer,
+                content: (
+                  <UserGuideOffer
+                    type={guideOffer ?? 'install'}
+                    installing={guideInstalling}
+                    onInstall={async () => {
+                      setGuideInstalling(true)
+                      try {
+                        await window.go.main.App.InstallUserGuide()
+                        setGuideOffer(null)
+                        if (installedPackages.has('librarian')) {
+                          await window.go.main.App.RescanLibrary()
+                          toast.success('User guide installed on your reMarkable')
+                        } else {
+                          toast.success('User guide installed on your reMarkable')
+                          setShowGuideRestartDialog(true)
+                        }
+                      } catch (err) {
+                        toast.error('Failed to install guide: ' + (err instanceof Error ? err.message : String(err)))
+                      } finally {
+                        setGuideInstalling(false)
+                      }
+                    }}
+                    onDismiss={() => setGuideOffer(null)}
+                    onDismissPermanently={async () => {
+                      setGuideOffer(null)
+                      await window.go.main.App.DismissGuideOffer()
+                    }}
+                  />
+                ),
+              },
+            ]} />
+          )
+        })()}
 
         {step !== 'connect' && (
           <>
