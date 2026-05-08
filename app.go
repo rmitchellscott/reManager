@@ -1065,6 +1065,8 @@ func (a *App) detectDevice() (string, error) {
 		return "rmpp", nil
 	case strings.Contains(machine, "Chiappa"):
 		return "rmppmove", nil
+	case strings.Contains(machine, "Tatsu"):
+		return "rmppure", nil
 	default:
 		return machine, nil
 	}
@@ -1110,7 +1112,7 @@ func (a *App) IsConnected() bool {
 
 func (a *App) acquireWriteableRoot(deviceType string) error {
 	dev := component.DeviceType(deviceType)
-	if dev != component.DeviceRMPP && dev != component.DeviceRMPPMove {
+	if dev != component.DeviceRMPP && dev != component.DeviceRMPPMove && dev != component.DeviceRMPPure {
 		return nil
 	}
 	a.mu.Lock()
@@ -1125,7 +1127,7 @@ func (a *App) acquireWriteableRoot(deviceType string) error {
 
 func (a *App) releaseWriteableRoot(deviceType string) {
 	dev := component.DeviceType(deviceType)
-	if dev != component.DeviceRMPP && dev != component.DeviceRMPPMove {
+	if dev != component.DeviceRMPP && dev != component.DeviceRMPPMove && dev != component.DeviceRMPPure {
 		return
 	}
 	a.mu.Lock()
@@ -1911,7 +1913,7 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 		}
 
 		dev := component.DeviceType(deviceType)
-		if dev == component.DeviceRMPP || dev == component.DeviceRMPPMove {
+		if dev == component.DeviceRMPP || dev == component.DeviceRMPPMove || dev == component.DeviceRMPPure {
 			cmdResults = commands.WrapWithWriteableRoot(cmdResults, dev)
 		}
 
@@ -3717,7 +3719,7 @@ func (a *App) makeFilesystemWritable(client *ssh.Client) error {
 		return nil // If we can't detect, assume it's not RMPP
 	}
 
-	if deviceType != "rmpp" && deviceType != "rmppmove" {
+	if deviceType != "rmpp" && deviceType != "rmppmove" && deviceType != "rmppure" {
 		return nil // Only RMPP devices have read-only root
 	}
 
@@ -3743,7 +3745,7 @@ func (a *App) restoreFilesystem(client *ssh.Client) error {
 		return nil
 	}
 
-	if deviceType != "rmpp" && deviceType != "rmppmove" {
+	if deviceType != "rmpp" && deviceType != "rmppmove" && deviceType != "rmppure" {
 		return nil
 	}
 

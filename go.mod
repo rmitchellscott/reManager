@@ -7,7 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.17.11
 	github.com/pkg/sftp v1.13.10
-	github.com/rmitchellscott/remarkable-go v0.1.0
+	github.com/rmitchellscott/remarkable-go v0.2.0
 	github.com/rymdport/portal v0.4.3-0.20260225172009-01112360d2cb
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
 	github.com/spf13/cobra v1.10.2

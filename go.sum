@@ -212,8 +212,8 @@ github.com/rivo/uniseg v0.1.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJ
 github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
 github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
-github.com/rmitchellscott/remarkable-go v0.1.0 h1:1+BQpYt0d2yXKgjoQ5KZoHBu5mMP66oaVUOoCUTs9Ow=
-github.com/rmitchellscott/remarkable-go v0.1.0/go.mod h1:thnO3JUMAzlyRbl0jxwqDlSVWcwoco+F4wR9ohg5Pjg=
+github.com/rmitchellscott/remarkable-go v0.2.0 h1:Euly8rPKBfQO3ya7BjzyAXeoU+HuSl+LyempaIAusL4=
+github.com/rmitchellscott/remarkable-go v0.2.0/go.mod h1:thnO3JUMAzlyRbl0jxwqDlSVWcwoco+F4wR9ohg5Pjg=
 github.com/rogpeppe/go-internal v1.12.0 h1:exVL4IDcn6na9z1rAb56Vxr+CgyK3nn3O+epU5NdKM8=
 github.com/rogpeppe/go-internal v1.12.0/go.mod h1:E+RYuTGaKKdloAfM02xzb0FW3Paa99yedzYV+kq4uf4=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=

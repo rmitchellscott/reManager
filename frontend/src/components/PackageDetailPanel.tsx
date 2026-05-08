@@ -49,6 +49,7 @@ const deviceLabels: Record<string, string> = {
   rm2: 'reMarkable 2',
   rmpp: 'Paper Pro',
   rmppmove: 'Paper Pro Move',
+  rmppure: 'Paper Pure',
 }
 
 export function PackageDetailPanel({

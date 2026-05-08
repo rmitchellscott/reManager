@@ -364,7 +364,7 @@ github.com/pterm/pterm/internal
 # github.com/rivo/uniseg v0.4.7
 ## explicit; go 1.18
 github.com/rivo/uniseg
-# github.com/rmitchellscott/remarkable-go v0.1.0
+# github.com/rmitchellscott/remarkable-go v0.2.0
 ## explicit; go 1.25.4
 github.com/rmitchellscott/remarkable-go/device
 github.com/rmitchellscott/remarkable-go/executor

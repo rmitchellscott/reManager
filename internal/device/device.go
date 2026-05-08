@@ -17,6 +17,8 @@ func DetectDevice(machineOutput string) component.DeviceType {
 		return component.DeviceRMPP
 	case strings.Contains(machine, "Chiappa"):
 		return component.DeviceRMPPMove
+	case strings.Contains(machine, "Tatsu"):
+		return component.DeviceRMPPure
 	default:
 		return component.DeviceType(machine)
 	}
@@ -24,7 +26,7 @@ func DetectDevice(machineOutput string) component.DeviceType {
 
 func GetArchitecture(device component.DeviceType) component.DeviceArchitecture {
 	switch device {
-	case component.DeviceRMPP, component.DeviceRMPPMove:
+	case component.DeviceRMPP, component.DeviceRMPPMove, component.DeviceRMPPure:
 		return component.ArchAarch64
 	default:
 		return component.ArchArm32
@@ -42,6 +44,8 @@ func GetDisplayName(machine string) string {
 		return "reMarkable Paper Pro"
 	case strings.Contains(machine, "Chiappa"):
 		return "reMarkable Paper Pro (Move)"
+	case strings.Contains(machine, "Tatsu"):
+		return "reMarkable Paper Pure"
 	default:
 		return machine
 	}
