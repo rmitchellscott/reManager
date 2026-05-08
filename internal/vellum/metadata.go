@@ -491,7 +491,7 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 	if deviceType != "" && len(info.Devices) > 0 {
 		found := false
 		for _, d := range info.Devices {
-			if d == deviceType {
+			if d == deviceType || (deviceType == "rmppmove" && d == "rmppm") {
 				found = true
 				break
 			}

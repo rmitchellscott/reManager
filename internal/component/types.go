@@ -13,7 +13,7 @@ const (
 	DeviceRM1   DeviceType = "rm1"
 	DeviceRM2   DeviceType = "rm2"
 	DeviceRMPP  DeviceType = "rmpp"
-	DeviceRMPPM DeviceType = "rmppm"
+	DeviceRMPPMove DeviceType = "rmppmove"
 )
 
 type CommandContext struct {

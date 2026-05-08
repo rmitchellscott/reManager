@@ -1064,7 +1064,7 @@ func (a *App) detectDevice() (string, error) {
 	case strings.Contains(machine, "Ferrari"):
 		return "rmpp", nil
 	case strings.Contains(machine, "Chiappa"):
-		return "rmppm", nil
+		return "rmppmove", nil
 	default:
 		return machine, nil
 	}
@@ -1110,7 +1110,7 @@ func (a *App) IsConnected() bool {
 
 func (a *App) acquireWriteableRoot(deviceType string) error {
 	dev := component.DeviceType(deviceType)
-	if dev != component.DeviceRMPP && dev != component.DeviceRMPPM {
+	if dev != component.DeviceRMPP && dev != component.DeviceRMPPMove {
 		return nil
 	}
 	a.mu.Lock()
@@ -1125,7 +1125,7 @@ func (a *App) acquireWriteableRoot(deviceType string) error {
 
 func (a *App) releaseWriteableRoot(deviceType string) {
 	dev := component.DeviceType(deviceType)
-	if dev != component.DeviceRMPP && dev != component.DeviceRMPPM {
+	if dev != component.DeviceRMPP && dev != component.DeviceRMPPMove {
 		return
 	}
 	a.mu.Lock()
@@ -1911,7 +1911,7 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 		}
 
 		dev := component.DeviceType(deviceType)
-		if dev == component.DeviceRMPP || dev == component.DeviceRMPPM {
+		if dev == component.DeviceRMPP || dev == component.DeviceRMPPMove {
 			cmdResults = commands.WrapWithWriteableRoot(cmdResults, dev)
 		}
 
@@ -3717,7 +3717,7 @@ func (a *App) makeFilesystemWritable(client *ssh.Client) error {
 		return nil // If we can't detect, assume it's not RMPP
 	}
 
-	if deviceType != "rmpp" && deviceType != "rmppm" {
+	if deviceType != "rmpp" && deviceType != "rmppmove" {
 		return nil // Only RMPP devices have read-only root
 	}
 
@@ -3743,7 +3743,7 @@ func (a *App) restoreFilesystem(client *ssh.Client) error {
 		return nil
 	}
 
-	if deviceType != "rmpp" && deviceType != "rmppm" {
+	if deviceType != "rmpp" && deviceType != "rmppmove" {
 		return nil
 	}
 

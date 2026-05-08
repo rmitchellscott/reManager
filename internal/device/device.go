@@ -16,7 +16,7 @@ func DetectDevice(machineOutput string) component.DeviceType {
 	case strings.Contains(machine, "Ferrari"):
 		return component.DeviceRMPP
 	case strings.Contains(machine, "Chiappa"):
-		return component.DeviceRMPPM
+		return component.DeviceRMPPMove
 	default:
 		return component.DeviceType(machine)
 	}
@@ -24,7 +24,7 @@ func DetectDevice(machineOutput string) component.DeviceType {
 
 func GetArchitecture(device component.DeviceType) component.DeviceArchitecture {
 	switch device {
-	case component.DeviceRMPP, component.DeviceRMPPM:
+	case component.DeviceRMPP, component.DeviceRMPPMove:
 		return component.ArchAarch64
 	default:
 		return component.ArchArm32

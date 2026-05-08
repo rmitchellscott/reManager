@@ -141,7 +141,7 @@ func MakeWriteable() []component.CommandResult {
 }
 
 func WrapWithWriteableRoot(commands []component.CommandResult, device component.DeviceType) []component.CommandResult {
-	if device == component.DeviceRMPP || device == component.DeviceRMPPM {
+	if device == component.DeviceRMPP || device == component.DeviceRMPPMove {
 		before := []component.CommandResult{
 			{
 				Script:      `echo "[DEBUG] Current root mount state:" && grep ' / ' /proc/mounts && echo "[DEBUG] Checking if root is rw..." && if grep -q ' / .*\brw\b' /proc/mounts; then echo "[DEBUG] Root is already rw"; else echo "[DEBUG] Remounting root as rw..." && mount -o remount,rw / && echo "[DEBUG] Root remounted as rw"; fi && sleep 1`,
