@@ -6,6 +6,8 @@ import { Label } from '@/components/ui/label'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Loader2, Check, X, AlertCircle } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { StatusBadge } from '@/components/StatusBadge'
+import { CompatibilityResult } from '@/lib/types'
 
 interface CheckOSDialogProps {
   open: boolean
@@ -13,13 +15,6 @@ interface CheckOSDialogProps {
   isConnected: boolean
   onSelectPackage: (name: string, targetOS: string, isCompatible: boolean) => void
   initialVersion?: string
-}
-
-interface CompatibilityResult {
-  compatible: string[]
-  incompatible: string[]
-  noConstraint: string[]
-  fetchFailed: boolean
 }
 
 export function CheckOSDialog({
@@ -44,7 +39,7 @@ export function CheckOSDialog({
       setResult(null)
       ;(async () => {
         try {
-          const res = await (window as any).go.main.App.CheckOSCompatibility(initialVersion)
+          const res = await window.go.main.App.CheckOSCompatibility(initialVersion)
           if (res.fetchFailed) {
             setError('Could not fetch package index. Check your connection.')
           } else {
@@ -70,7 +65,7 @@ export function CheckOSDialog({
     setResult(null)
 
     try {
-      const res = await (window as any).go.main.App.CheckOSCompatibility(targetVersion.trim())
+      const res = await window.go.main.App.CheckOSCompatibility(targetVersion.trim())
       if (res.fetchFailed) {
         setError('Could not fetch package index. Check your connection.')
       } else {
@@ -158,6 +153,7 @@ export function CheckOSDialog({
                             >
                               {pkg}
                             </button>
+                            {result?.statusMap?.[pkg] && <StatusBadge status={result.statusMap[pkg]} />}
                           </div>
                         ))}
                       </div>
@@ -181,6 +177,7 @@ export function CheckOSDialog({
                             >
                               {pkg}
                             </button>
+                            {result?.statusMap?.[pkg] && <StatusBadge status={result.statusMap[pkg]} />}
                           </div>
                         ))}
                       </div>

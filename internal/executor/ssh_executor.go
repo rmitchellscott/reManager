@@ -3,10 +3,8 @@ package executor
 import (
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 
-	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"reManager/internal/component"
@@ -128,42 +126,3 @@ func (e *SSHExecutor) StopCurrentCommand() {
 	}
 }
 
-func (e *SSHExecutor) CheckInstalled(cmd component.CommandResult) (bool, error) {
-	output, err := e.ExecuteWithOutput(cmd.Script)
-	if err != nil {
-		return false, nil
-	}
-	return strings.TrimSpace(output) == "yes", nil
-}
-
-func (e *SSHExecutor) UploadFile(data []byte, remotePath string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if e.client == nil {
-		return fmt.Errorf("not connected")
-	}
-
-	sftpClient, err := sftp.NewClient(e.client)
-	if err != nil {
-		return fmt.Errorf("failed to create SFTP client: %w", err)
-	}
-	defer sftpClient.Close()
-
-	f, err := sftpClient.Create(remotePath)
-	if err != nil {
-		return fmt.Errorf("failed to create remote file %s: %w", remotePath, err)
-	}
-	defer f.Close()
-
-	_, err = f.Write(data)
-	if err != nil {
-		return fmt.Errorf("failed to write to remote file: %w", err)
-	}
-
-	return nil
-}
-
-func (e *SSHExecutor) GetClient() *ssh.Client {
-	return e.client
-}

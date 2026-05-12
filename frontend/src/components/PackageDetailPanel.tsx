@@ -1,29 +1,9 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
-import { ExternalLink, Plus, Trash2, Check, AlertTriangle, ArrowRight, X } from 'lucide-react'
-
-interface OSConstraint {
-  version: string
-  operator: '>=' | '<' | '>' | '<=' | '='
-}
-
-interface PackageInfo {
-  name: string
-  version: string
-  description: string
-  upstreamAuthor: string
-  categories: string[]
-  url: string
-  license: string
-  devices: string[]
-  depends: string[]
-  conflicts: string[]
-  osMin: string | null
-  osMax: string | null
-  osConstraints: OSConstraint[] | null
-  compatible: boolean
-}
+import { ExternalLink, Plus, Trash2, Check, AlertTriangle, ArrowLeft, ArrowRight, X, Heart, BookOpen } from 'lucide-react'
+import { StatusBadge } from '@/components/StatusBadge'
+import { PackageInfo } from '@/lib/types'
 
 interface PackageDetailPanelProps {
   pkg: PackageInfo
@@ -42,13 +22,16 @@ interface PackageDetailPanelProps {
   isOsCompatible?: boolean
   viewOnly?: boolean
   showIncompatible?: boolean
+  onViewReadme?: (url: string) => void
+  onBack?: () => void
 }
 
 const deviceLabels: Record<string, string> = {
   rm1: 'reMarkable 1',
   rm2: 'reMarkable 2',
   rmpp: 'Paper Pro',
-  rmppm: 'Paper Pro Move',
+  rmppmove: 'Paper Pro Move',
+  rmppure: 'Paper Pure',
 }
 
 export function PackageDetailPanel({
@@ -68,6 +51,8 @@ export function PackageDetailPanel({
   isOsCompatible = true,
   viewOnly = false,
   showIncompatible = false,
+  onViewReadme,
+  onBack,
 }: PackageDetailPanelProps) {
   const formatOsRangeFor = (p: PackageInfo) => {
     if (p.osConstraints && p.osConstraints.length > 0) {
@@ -108,12 +93,18 @@ export function PackageDetailPanel({
     <div className="flex flex-col h-full">
       <SheetHeader className="pb-4">
         <SheetTitle className="text-xl pr-8 flex items-center gap-2">
+          {onBack && (
+            <button onClick={onBack} className="text-muted-foreground hover:text-foreground transition-colors">
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          )}
           {pkg.name}
           {showIncompatible && isInstalled ? (
             <X className="h-5 w-5 text-destructive" />
           ) : isInstalled ? (
             <Check className="h-5 w-5 text-green-600" />
           ) : null}
+          <StatusBadge status={pkg.status} />
         </SheetTitle>
         <SheetDescription className="mt-1">{pkg.description}</SheetDescription>
       </SheetHeader>
@@ -268,6 +259,34 @@ export function PackageDetailPanel({
               </dd>
             </>
           )}
+
+          {(pkg.donateUrl || pkg.readmeUrl) && (
+            <dd className="col-span-2 mt-2 border-t pt-3 flex flex-wrap gap-2">
+              {pkg.readmeUrl && onViewReadme && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onViewReadme(pkg.readmeUrl!)}
+                  className="inline-flex items-center gap-1"
+                >
+                  <BookOpen className="h-3 w-3" />
+                  View Readme
+                </Button>
+              )}
+              {pkg.donateUrl && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.runtime.BrowserOpenURL(pkg.donateUrl!)}
+                  className="inline-flex items-center gap-1"
+                >
+                  <Heart className="h-3 w-3" />
+                  Donate
+                  <ExternalLink className="h-3 w-3" />
+                </Button>
+              )}
+            </dd>
+          )}
         </dl>
       </div>
 
@@ -291,7 +310,7 @@ export function PackageDetailPanel({
           ) : !isOsCompatible ? (
             <Button className="w-full" disabled>
               <AlertTriangle className="h-4 w-4 mr-2" />
-              Not compatible with {firmware}
+              {pkg.incompatibleReason === 'device' ? 'Does not support your reMarkable model' : `Not compatible with ${firmware}`}
             </Button>
           ) : conflict ? (
             <Button className="w-full" disabled>

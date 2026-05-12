@@ -26,6 +26,7 @@ reManager works with all reMarkable devices:
 - reMarkable 2
 - reMarkable Paper Pro
 - reMarkable Paper Pro Move
+- reMarkable Paper Pure
 
 \
 
@@ -47,7 +48,7 @@ The default IP address when connected via USB is **10.11.99.1**.
 
 \
 
-If you have a Paper Pro or Paper Pro Move, you'll need to enable developer mode first. The QR code below is a link to reMarkable's Developer Mode documentation. 
+If you have a Paper Pro, Paper Pro Move, or Paper Pure, you'll need to enable developer mode first. The QR code below is a link to reMarkable's Developer Mode documentation.
 
 \
 
@@ -109,6 +110,8 @@ The Mods tab organizes packages into two collapsible sections:
 
 You can search for packages by name using the search bar, or filter by category or developer using the dropdown menus. Switch between **Full** and **Compact** view modes depending on how much detail you want to see at a glance.
 
+Packages may display a **Deprecated** or **Unmaintained** badge. Deprecated packages will be removed in the future. Unmaintained packages are no longer receiving updates and may not be available on newer OS versions.
+
 Click the refresh button to reload the package list from the server.
 
 ![The Mods tab package list](images/mods-tab.png)
@@ -127,6 +130,8 @@ Click on any package to open its details panel. Here you'll find:
 - **Dependencies** — other packages this one requires, with their install status
 - **Conflicts** — packages that can't be installed alongside this one
 - **Project URL** — a link to the project page
+- **Readme** — view the package's readme documentation inline
+- **Donate** — a link to support the package developer (opens in your browser)
 
 ![Package details panel](images/package-details.png)
 
@@ -378,7 +383,7 @@ When connected and Vellum is installed, you can uninstall it from your reMarkabl
 
 **I can't connect to my reMarkable!**
 
-- Paper Pro and Paper Pro Move users: make sure developer mode is enabled
+- Paper Pro, Paper Pro Move, and Paper Pure users: make sure developer mode is enabled
 - Check that the IP address is correct — USB connections use `10.11.99.1`
 - Make sure your reMarkable is turned on and connected to your computer via USB, or on the same Wi-Fi network if you've enabled ssh-over-wlan 
 - Verify the password matches what's shown in your reMarkable's settings. Passwords are case-sensitive, double-check for characters that look the same (upper-case i & numeral one, etc)

@@ -29,6 +29,8 @@ type InstallResult struct {
 	DNSError bool
 }
 
+var ErrHookDeclined = fmt.Errorf("user declined hook")
+
 type HookCallback func(result *component.HookExecutionResult) error
 
 type Installer struct {
@@ -148,7 +150,9 @@ func (i *Installer) Install(
 				}
 				if hookResult != nil && onHook != nil {
 					if err := onHook(hookResult); err != nil {
-						errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))
+						if err != ErrHookDeclined {
+							errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))
+						}
 						continue
 					}
 				}
@@ -190,7 +194,9 @@ func (i *Installer) Uninstall(
 				}
 				if hookResult != nil && onHook != nil {
 					if err := onHook(hookResult); err != nil {
-						errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))
+						if err != ErrHookDeclined {
+							errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))
+						}
 						continue
 					}
 				}
@@ -314,7 +320,9 @@ func (i *Installer) Uninstall(
 				}
 				if hookResult != nil && onHook != nil {
 					if err := onHook(hookResult); err != nil {
-						errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))
+						if err != ErrHookDeclined {
+							errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))
+						}
 						continue
 					}
 				}

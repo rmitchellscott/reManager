@@ -2,7 +2,6 @@ package errors
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 type UserError struct {
@@ -34,6 +33,3 @@ func New(code, message string, internal error, retryable bool) *UserError {
 	}
 }
 
-func Newf(code, format string, internal error, retryable bool, args ...any) *UserError {
-	return New(code, fmt.Sprintf(format, args...), internal, retryable)
-}

@@ -45,7 +45,7 @@ type pdfContent struct {
 	ZoomMode              string                 `json:"zoomMode"`
 }
 
-type docMetadata struct {
+type DocMetadata struct {
 	CreatedTime    string `json:"createdTime"`
 	LastModified   string `json:"lastModified"`
 	LastOpened     string `json:"lastOpened"`
@@ -140,7 +140,7 @@ func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, p
 		ZoomMode:              "bestFit",
 	}
 
-	metadata := docMetadata{
+	metadata := DocMetadata{
 		CreatedTime:    nowMs,
 		LastModified:   nowMs,
 		LastOpened:     "0",

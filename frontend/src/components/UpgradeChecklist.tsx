@@ -1,4 +1,5 @@
 import { AlertTriangle, Loader2, Trash2, Check, X } from 'lucide-react'
+import { StatusBadge } from '@/components/StatusBadge'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
@@ -16,6 +17,7 @@ interface UpgradeChecklistProps {
   onRunUpgrade: () => void
   onGoToUtilities: () => void
   onSelectPackage: (name: string, targetOS: string, isCompatible: boolean) => void
+  statusMap?: Record<string, string>
 }
 
 export function UpgradeChecklist({
@@ -31,6 +33,7 @@ export function UpgradeChecklist({
   onRunUpgrade,
   onGoToUtilities,
   onSelectPackage,
+  statusMap,
 }: UpgradeChecklistProps) {
   const canUpgrade = incompatiblePackages.length === 0
 
@@ -71,6 +74,7 @@ export function UpgradeChecklist({
                       >
                         {pkg}
                       </button>
+                      {statusMap?.[pkg] && <StatusBadge status={statusMap[pkg]} />}
                     </div>
                   ))}
                 </div>
@@ -106,6 +110,7 @@ export function UpgradeChecklist({
                           >
                             {pkg}
                           </button>
+                          {statusMap?.[pkg] && <StatusBadge status={statusMap[pkg]} />}
                         </div>
                         {isQueued ? (
                           <Button

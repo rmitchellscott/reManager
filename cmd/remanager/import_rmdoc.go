@@ -37,13 +37,13 @@ func importRmdocCmd() *cobra.Command {
 				}
 			}
 
-			client, deviceType, err := connect()
+			client, deviceType, _, err := connect()
 			if err != nil {
 				return err
 			}
 			defer client.Close()
 
-			fmt.Printf("Connected to %s (%s)\n", host, deviceType)
+			fmt.Printf("Connected to %s (%s)\n", host, deviceType.DisplayName())
 			sftpClient, err := sftp.NewClient(client)
 			if err != nil {
 				return fmt.Errorf("failed to create SFTP client: %w", err)

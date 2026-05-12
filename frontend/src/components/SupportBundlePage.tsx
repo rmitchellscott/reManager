@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Label } from '@/components/ui/label'
 import { SupportBundleDialog } from '@/components/SupportBundleDialog'
+import { formatDate } from '@/lib/format'
 
 interface BundleRecord {
   id: string
@@ -30,13 +31,6 @@ interface SupportBundlePageProps {
 }
 
 type Screen = 'main' | 'report' | 'report-sent' | 'chat' | 'bundles'
-
-function formatDate(ts: number): string {
-  return new Date(ts * 1000).toLocaleDateString(undefined, {
-    month: 'short', day: 'numeric', year: 'numeric',
-    hour: 'numeric', minute: '2-digit',
-  })
-}
 
 function expiryText(expiresAt: number): { text: string; expired: boolean } {
   const now = Date.now() / 1000

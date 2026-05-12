@@ -77,6 +77,20 @@ export function SettingsDialog({
   const [confirmDeleteLogs, setConfirmDeleteLogs] = useState(false)
   const [deletingLogs, setDeletingLogs] = useState(false)
 
+  const resetToProps = () => {
+    setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
+    setLocalProxyMode(proxyMode)
+    setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
+    setLocalPreventSleep(preventSleep)
+    setLocalTheme(theme)
+    setLocalTerminalTheme(terminalTheme)
+    setLocalEditorTheme(editorTheme)
+    setLocalCheckForUpdates(checkForUpdates)
+    setLocalSuppressGuideOffer(suppressGuideOffer)
+    setLocalSSHAgentSocketPath(sshAgentSocketPath)
+    setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
+  }
+
   const hasChanges =
     localProxyMode !== proxyMode ||
     localSuppressSystemFileWarnings !== suppressSystemFileWarnings ||
@@ -91,32 +105,12 @@ export function SettingsDialog({
 
   useEffect(() => {
     if (open) {
-      setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
-      setLocalProxyMode(proxyMode)
-      setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
-      setLocalPreventSleep(preventSleep)
-      setLocalTheme(theme)
-      setLocalTerminalTheme(terminalTheme)
-      setLocalEditorTheme(editorTheme)
-      setLocalCheckForUpdates(checkForUpdates)
-      setLocalSuppressGuideOffer(suppressGuideOffer)
-      setLocalSSHAgentSocketPath(sshAgentSocketPath)
-      setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
+      resetToProps()
     }
   }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, suppressGuideOffer, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath])
 
   const handleCancel = () => {
-    setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
-    setLocalProxyMode(proxyMode)
-    setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
-    setLocalPreventSleep(preventSleep)
-    setLocalTheme(theme)
-    setLocalTerminalTheme(terminalTheme)
-    setLocalEditorTheme(editorTheme)
-    setLocalCheckForUpdates(checkForUpdates)
-    setLocalSuppressGuideOffer(suppressGuideOffer)
-    setLocalSSHAgentSocketPath(sshAgentSocketPath)
-    setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
+    resetToProps()
     setShowUninstallConfirm(false)
     setConfirmDeleteLogs(false)
     onOpenChange(false)
@@ -147,17 +141,7 @@ export function SettingsDialog({
     if (!newOpen) {
       setShowUninstallConfirm(false)
       setConfirmDeleteLogs(false)
-      setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
-      setLocalProxyMode(proxyMode)
-      setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
-      setLocalPreventSleep(preventSleep)
-      setLocalTheme(theme)
-      setLocalTerminalTheme(terminalTheme)
-      setLocalEditorTheme(editorTheme)
-      setLocalCheckForUpdates(checkForUpdates)
-      setLocalSuppressGuideOffer(suppressGuideOffer)
-      setLocalSSHAgentSocketPath(sshAgentSocketPath)
-      setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
+      resetToProps()
     }
     onOpenChange(newOpen)
   }

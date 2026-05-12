@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { handleError } from '@/lib/errorMessages'
+import { formatBytes, formatDate } from '@/lib/format'
 import Editor from '@monaco-editor/react'
 import ini from 'ini'
 import { Button } from '@/components/ui/button'
@@ -201,16 +202,6 @@ export function ConfigEditor({ isConnected, theme }: ConfigEditorProps) {
     return () => window.removeEventListener('resize', calculateHeight)
   }, [content, validationError, isDirty])
 
-  const formatTimestamp = (timestamp: number) => {
-    return new Date(timestamp * 1000).toLocaleString()
-  }
-
-  const formatSize = (size: number) => {
-    if (size < 1024) return `${size} B`
-    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-    return `${(size / (1024 * 1024)).toFixed(1)} MB`
-  }
-
   return (
     <div className="space-y-4">
       {/* Warning banner */}
@@ -269,7 +260,7 @@ export function ConfigEditor({ isConnected, theme }: ConfigEditorProps) {
                     >
                       <div className="font-medium">{backup.name}</div>
                       <div className="text-xs text-muted-foreground">
-                        {formatTimestamp(backup.timestamp)} • {formatSize(backup.size)}
+                        {formatDate(backup.timestamp)} • {formatBytes(backup.size)}
                       </div>
                     </CommandItem>
                   ))}

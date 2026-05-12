@@ -59,10 +59,17 @@ export function VellumInstallPrompt({
         {!bootstrapping && (
           <>
             {!bootstrapError && (
-              <p className="text-sm text-muted-foreground">
-                Vellum is a lightweight package manager for reMarkable devices.
-                It enables easy installation and management of mods and extensions.
-              </p>
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Vellum is a lightweight package manager for reMarkable devices.
+                  It enables easy installation and management of mods and extensions.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Vellum and any packages installed through it are third-party software provided
+                  as-is with no warranty. reManager is not responsible for any data loss, device
+                  damage, or other issues that may result from their use.
+                </p>
+              </>
             )}
 
             <div className="flex justify-end pt-2">

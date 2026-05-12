@@ -1,12 +1,16 @@
 package device
 
-import "reManager/internal/component"
+import (
+	rmdevice "github.com/rmitchellscott/remarkable-go/device"
+
+	"reManager/internal/component"
+)
 
 type SystemTask struct {
 	ID                 string
 	Label              string
 	Description        string
-	DeviceTypes        []component.DeviceType
+	DeviceTypes        []rmdevice.Type
 	Command            func(ctx component.CommandContext) []component.CommandResult
 	RequiresTerminal   bool
 	NeedsWriteableRoot bool

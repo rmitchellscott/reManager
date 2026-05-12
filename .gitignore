@@ -1,3 +1,7 @@
+# Go Workspace
+go.work
+go.work.sum
+
 # Build Artifacts
 build/bin/
 frontend/dist/

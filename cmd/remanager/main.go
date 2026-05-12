@@ -6,14 +6,17 @@ import (
 	"strings"
 	"syscall"
 
+	rmdevice "github.com/rmitchellscott/remarkable-go/device"
+	rmexecutor "github.com/rmitchellscott/remarkable-go/executor"
+	rmfilesystem "github.com/rmitchellscott/remarkable-go/filesystem"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 
 	"reManager/internal/component"
-	"reManager/internal/device"
 	"reManager/internal/executor"
 	"reManager/internal/installer"
+	"reManager/internal/sshconfig"
 	"reManager/internal/vellum"
 )
 
@@ -98,7 +101,7 @@ func statusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show installed packages on connected device",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, deviceType, err := connect()
+			client, deviceType, _, err := connect()
 			if err != nil {
 				return err
 			}
@@ -107,7 +110,7 @@ func statusCmd() *cobra.Command {
 			exec := executor.NewSSHExecutor(client)
 			vellumClient := vellum.NewClient(exec)
 
-			fmt.Printf("Connected to %s (%s)\n\n", host, device.GetDisplayName(deviceType))
+			fmt.Printf("Connected to %s (%s)\n\n", host, deviceType.DisplayName())
 
 			installed, err := vellumClient.IsInstalled()
 			if err != nil {
@@ -140,7 +143,7 @@ func bootstrapCmd() *cobra.Command {
 		Use:   "bootstrap",
 		Short: "Install vellum package manager on the device",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, deviceType, err := connect()
+			client, deviceType, arch, err := connect()
 			if err != nil {
 				return err
 			}
@@ -149,7 +152,7 @@ func bootstrapCmd() *cobra.Command {
 			exec := executor.NewSSHExecutor(client)
 			vellumClient := vellum.NewClient(exec)
 
-			fmt.Printf("Connected to %s (%s)\n\n", host, device.GetDisplayName(deviceType))
+			fmt.Printf("Connected to %s (%s)\n\n", host, deviceType.DisplayName())
 
 			installed, err := vellumClient.IsInstalled()
 			if err != nil {
@@ -160,8 +163,6 @@ func bootstrapCmd() *cobra.Command {
 				fmt.Println("Vellum is already installed.")
 				return nil
 			}
-
-			arch := device.GetArchitecture(component.DeviceType(deviceType))
 
 			fmt.Println("Installing vellum...")
 			err = vellumClient.BootstrapOfflineWithPackages(client, arch, func(line string) {
@@ -184,7 +185,7 @@ func installCmd() *cobra.Command {
 		Short: "Install packages on the device",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, deviceType, err := connect()
+			client, deviceType, arch, err := connect()
 			if err != nil {
 				return err
 			}
@@ -207,10 +208,9 @@ func installCmd() *cobra.Command {
 				return fmt.Errorf("error loading metadata: %w", err)
 			}
 
-			arch := device.GetArchitecture(component.DeviceType(deviceType))
 			ctx := component.CommandContext{
 				Arch:   arch,
-				Device: component.DeviceType(deviceType),
+				Device: deviceType,
 			}
 
 			inst := installer.NewInstaller(vellumClient, metadata, exec)
@@ -284,7 +284,7 @@ func uninstallCmd() *cobra.Command {
 		Short: "Uninstall packages from the device",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, deviceType, err := connect()
+			client, deviceType, arch, err := connect()
 			if err != nil {
 				return err
 			}
@@ -307,10 +307,9 @@ func uninstallCmd() *cobra.Command {
 				return fmt.Errorf("error loading metadata: %w", err)
 			}
 
-			arch := device.GetArchitecture(component.DeviceType(deviceType))
 			ctx := component.CommandContext{
 				Arch:   arch,
-				Device: component.DeviceType(deviceType),
+				Device: deviceType,
 			}
 
 			inst := installer.NewInstaller(vellumClient, metadata, exec)
@@ -433,7 +432,7 @@ func maintenanceCmd() *cobra.Command {
 				return fmt.Errorf("command not found: %s", commandID)
 			}
 
-			client, deviceType, err := connect()
+			client, deviceType, arch, err := connect()
 			if err != nil {
 				return err
 			}
@@ -444,10 +443,9 @@ func maintenanceCmd() *cobra.Command {
 			if maintCmd.Hook != "" {
 				hookFunc := vellum.GetHook(maintCmd.Hook)
 				if hookFunc != nil {
-					arch := device.GetArchitecture(component.DeviceType(deviceType))
 					ctx := component.CommandContext{
 						Arch:   arch,
-						Device: component.DeviceType(deviceType),
+						Device: deviceType,
 					}
 
 					hookResult, err := hookFunc(ctx)
@@ -497,13 +495,13 @@ func maintenanceCmd() *cobra.Command {
 	}
 }
 
-func connect() (*ssh.Client, string, error) {
+func connect() (*ssh.Client, rmdevice.Type, rmdevice.Architecture, error) {
 	var authMethods []ssh.AuthMethod
 
 	if keyPath != "" {
 		keyData, err := os.ReadFile(keyPath)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to read key file: %w", err)
+			return nil, rmdevice.Unknown, "", fmt.Errorf("failed to read key file: %w", err)
 		}
 
 		signer, err := ssh.ParsePrivateKey(keyData)
@@ -513,14 +511,14 @@ func connect() (*ssh.Client, string, error) {
 				passphrase, err := term.ReadPassword(int(syscall.Stdin))
 				fmt.Println()
 				if err != nil {
-					return nil, "", fmt.Errorf("failed to read passphrase: %w", err)
+					return nil, rmdevice.Unknown, "", fmt.Errorf("failed to read passphrase: %w", err)
 				}
 				signer, err = ssh.ParsePrivateKeyWithPassphrase(keyData, passphrase)
 				if err != nil {
-					return nil, "", fmt.Errorf("failed to parse key: %w", err)
+					return nil, rmdevice.Unknown, "", fmt.Errorf("failed to parse key: %w", err)
 				}
 			} else {
-				return nil, "", fmt.Errorf("failed to parse key: %w", err)
+				return nil, rmdevice.Unknown, "", fmt.Errorf("failed to parse key: %w", err)
 			}
 		}
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
@@ -530,48 +528,14 @@ func connect() (*ssh.Client, string, error) {
 			pwBytes, err := term.ReadPassword(int(syscall.Stdin))
 			fmt.Println()
 			if err != nil {
-				return nil, "", fmt.Errorf("failed to read password: %w", err)
+				return nil, rmdevice.Unknown, "", fmt.Errorf("failed to read password: %w", err)
 			}
 			password = string(pwBytes)
 		}
 		authMethods = append(authMethods, ssh.Password(password))
 	}
 
-	config := &ssh.ClientConfig{
-		User:            "root",
-		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Config: ssh.Config{
-			KeyExchanges: []string{
-				"curve25519-sha256",
-				"curve25519-sha256@libssh.org",
-				"ecdh-sha2-nistp256",
-				"ecdh-sha2-nistp384",
-				"ecdh-sha2-nistp521",
-				"diffie-hellman-group14-sha256",
-				"diffie-hellman-group14-sha1",
-				"diffie-hellman-group1-sha1",
-			},
-			Ciphers: []string{
-				"chacha20-poly1305@openssh.com",
-				"aes256-ctr",
-				"aes128-ctr",
-				"aes256-cbc",
-				"aes128-cbc",
-				"3des-cbc",
-			},
-			MACs: []string{
-				"hmac-sha2-256",
-				"hmac-sha1",
-			},
-		},
-		// Explicit host key algorithms required for Dropbear 2022.83 compatibility
-		HostKeyAlgorithms: []string{
-			ssh.KeyAlgoED25519,
-			ssh.KeyAlgoRSASHA256,
-			ssh.KeyAlgoRSA,
-		},
-	}
+	config := sshconfig.NewClientConfig("root", authMethods)
 
 	addr := host
 	if !strings.Contains(host, ":") {
@@ -582,35 +546,26 @@ func connect() (*ssh.Client, string, error) {
 
 	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to connect: %w", err)
+		return nil, rmdevice.Unknown, "", fmt.Errorf("failed to connect: %w", err)
 	}
 
-	session, err := client.NewSession()
+	fs, err := rmfilesystem.NewSSH(client)
 	if err != nil {
 		client.Close()
-		return nil, "", fmt.Errorf("failed to create session: %w", err)
+		return nil, rmdevice.Unknown, "", fmt.Errorf("failed to create filesystem: %w", err)
 	}
-	defer session.Close()
 
-	output, err := session.CombinedOutput("cat /sys/devices/soc0/machine")
+	deviceType, err := rmdevice.Detect(fs)
+	fs.Close()
 	if err != nil {
-		return client, "unknown", nil
+		return client, rmdevice.Unknown, "", nil
 	}
 
-	machine := strings.TrimSpace(string(output))
-	var deviceType string
-	switch {
-	case strings.Contains(machine, "reMarkable 1"):
-		deviceType = "rm1"
-	case strings.Contains(machine, "reMarkable 2"):
-		deviceType = "rm2"
-	case strings.Contains(machine, "Ferrari"):
-		deviceType = "rmpp"
-	case strings.Contains(machine, "Chiappa"):
-		deviceType = "rmppm"
-	default:
-		deviceType = machine
+	exec := rmexecutor.NewSSH(client)
+	arch, err := rmdevice.DetectArchitecture(exec)
+	if err != nil {
+		return client, deviceType, "", nil
 	}
 
-	return client, deviceType, nil
+	return client, deviceType, arch, nil
 }

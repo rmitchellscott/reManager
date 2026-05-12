@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	rmdevice "github.com/rmitchellscott/remarkable-go/device"
 	"golang.org/x/crypto/ssh"
 
-	"reManager/internal/component"
 	"reManager/internal/httputil"
 )
 
@@ -103,16 +103,16 @@ func parseAPKToolsVersion(bootstrapScript []byte) (string, error) {
 	return string(matches[1]), nil
 }
 
-func getArchFiles(arch component.DeviceArchitecture) (apkFile, vellumFile string) {
+func getArchFiles(arch rmdevice.Architecture) (apkFile, vellumFile string) {
 	switch arch {
-	case component.ArchAarch64:
+	case rmdevice.Aarch64:
 		return "apk-aarch64", "vellum-linux-arm64"
 	default:
 		return "apk-armv7", "vellum-linux-armv7"
 	}
 }
 
-func loadLocalBootstrapFiles(dir string, arch component.DeviceArchitecture, onProgress func(string)) (*BootstrapFiles, error) {
+func loadLocalBootstrapFiles(dir string, arch rmdevice.Architecture, onProgress func(string)) (*BootstrapFiles, error) {
 	files := &BootstrapFiles{}
 	apkFile, vellumFile := getArchFiles(arch)
 	files.APKFilename = apkFile
@@ -145,7 +145,7 @@ func loadLocalBootstrapFiles(dir string, arch component.DeviceArchitecture, onPr
 	return files, nil
 }
 
-func downloadBootstrapFiles(arch component.DeviceArchitecture, onProgress func(string)) (*BootstrapFiles, error) {
+func downloadBootstrapFiles(arch rmdevice.Architecture, onProgress func(string)) (*BootstrapFiles, error) {
 	if localDir := os.Getenv("VELLUM_BOOTSTRAP_DIR"); localDir != "" {
 		return loadLocalBootstrapFiles(localDir, arch, onProgress)
 	}
@@ -213,7 +213,7 @@ func downloadBootstrapFiles(arch component.DeviceArchitecture, onProgress func(s
 	return files, nil
 }
 
-func (c *Client) BootstrapOffline(sshClient *ssh.Client, arch component.DeviceArchitecture, onOutput func(line string)) error {
+func (c *Client) BootstrapOffline(sshClient *ssh.Client, arch rmdevice.Architecture, onOutput func(line string)) error {
 	onOutput("Downloading bootstrap files...\n")
 	files, err := downloadBootstrapFiles(arch, func(msg string) {
 		onOutput(msg + "\n")
@@ -284,13 +284,13 @@ func (c *Client) BootstrapOffline(sshClient *ssh.Client, arch component.DeviceAr
 	return nil
 }
 
-func (c *Client) BootstrapOfflineWithPackages(sshClient *ssh.Client, arch component.DeviceArchitecture, onOutput func(line string)) error {
+func (c *Client) BootstrapOfflineWithPackages(sshClient *ssh.Client, arch rmdevice.Architecture, onOutput func(line string)) error {
 	if err := c.BootstrapOffline(sshClient, arch, onOutput); err != nil {
 		return err
 	}
 
 	repoArch := string(arch)
-	if arch == component.ArchArm32 {
+	if arch == rmdevice.Arm32 {
 		repoArch = "armv7"
 	}
 

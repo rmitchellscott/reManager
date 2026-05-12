@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { handleError } from '@/lib/errorMessages'
+import { formatBytes, formatDate, formatDateFull } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
@@ -102,21 +103,6 @@ interface SystemFileWarning {
   action: 'upload' | 'delete' | 'rename' | 'mkdir'
   path: string
   onConfirm: () => void
-}
-
-function formatSize(bytes: number): string {
-  if (bytes === 0) return '--'
-  const units = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(1024))
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
-}
-
-function formatDate(timestamp: number): string {
-  return new Date(timestamp * 1000).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
 }
 
 function getFileIcon(file: FileInfo) {
@@ -721,7 +707,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
               </div>
               <Progress value={transferProgress.percentage} />
               <div className="text-xs text-muted-foreground">
-                {formatSize(transferProgress.bytesSent)} / {formatSize(transferProgress.totalBytes)}
+                {formatBytes(transferProgress.bytesSent)} / {formatBytes(transferProgress.totalBytes)}
               </div>
             </div>
           )}
@@ -752,7 +738,7 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
               <div className="text-xs text-muted-foreground space-y-1">
                 <div>Current: {folderTransferProgress.currentFile}</div>
                 <div>Files: {folderTransferProgress.filesDone} / {folderTransferProgress.filesTotal}</div>
-                <div>{formatSize(folderTransferProgress.bytesDone)} / {formatSize(folderTransferProgress.bytesTotal)}</div>
+                <div>{formatBytes(folderTransferProgress.bytesDone)} / {formatBytes(folderTransferProgress.bytesTotal)}</div>
               </div>
             </div>
           )}
@@ -818,8 +804,15 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
                       {getFileIcon(file)}
                       <span className="truncate">{file.name}</span>
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{file.isDir ? '--' : formatSize(file.size)}</TableCell>
-                    <TableCell className="hidden md:table-cell">{formatDate(file.modTime)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{file.isDir ? '--' : formatBytes(file.size)}</TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>{formatDate(file.modTime)}</span>
+                        </TooltipTrigger>
+                        <TooltipContent>{formatDateFull(file.modTime)}</TooltipContent>
+                      </Tooltip>
+                    </TableCell>
                     <TableCell className="pr-2">
                       <Popover>
                         <PopoverTrigger asChild>
