@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { formatBytes } from '@/lib/format'
 
 interface StagedFile {
   id: string
@@ -27,12 +28,6 @@ interface ImportPDFDialogProps {
   isConnected: boolean
   hasLibrarian: boolean
   onOpenChange: (open: boolean) => void
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange }: ImportPDFDialogProps) {
@@ -413,7 +408,7 @@ function FileCard({
         {file.status === 'uploading' && <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />}
       </div>
       <div className="flex items-center gap-1.5 px-3 pb-2 pt-0.5">
-        <span className="text-[11px] text-muted-foreground">{formatFileSize(file.size)}</span>
+        <span className="text-[11px] text-muted-foreground">{formatBytes(file.size)}</span>
         <span className="text-[11px] text-muted-foreground">&middot;</span>
 
         {file.fileType === 'pdf' ? (

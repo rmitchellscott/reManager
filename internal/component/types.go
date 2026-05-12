@@ -40,11 +40,3 @@ type HookExecutionResult struct {
 	DialogConfig *DialogConfig
 	Command      *CommandResult
 }
-
-type HookType string
-
-const (
-	HookTypeDialog       HookType = "dialog"
-	HookTypeConfirmation HookType = "confirmation"
-	HookTypeCustom       HookType = "custom"
-)

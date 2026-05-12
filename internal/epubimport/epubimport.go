@@ -38,17 +38,6 @@ type epubContent struct {
 	ZoomMode              string                 `json:"zoomMode"`
 }
 
-type docMetadata struct {
-	CreatedTime    string `json:"createdTime"`
-	LastModified   string `json:"lastModified"`
-	LastOpened     string `json:"lastOpened"`
-	LastOpenedPage int    `json:"lastOpenedPage"`
-	Parent         string `json:"parent"`
-	Pinned         bool   `json:"pinned"`
-	Type           string `json:"type"`
-	VisibleName    string `json:"visibleName"`
-}
-
 func Upload(client *sftp.Client, epubData []byte, visibleName, parentID string) (string, error) {
 	nowMs := strconv.FormatInt(time.Now().UnixMilli(), 10)
 
@@ -77,7 +66,7 @@ func Upload(client *sftp.Client, epubData []byte, visibleName, parentID string) 
 		ZoomMode:              "bestFit",
 	}
 
-	metadata := docMetadata{
+	metadata := pdfimport.DocMetadata{
 		CreatedTime:    nowMs,
 		LastModified:   nowMs,
 		LastOpened:     "0",

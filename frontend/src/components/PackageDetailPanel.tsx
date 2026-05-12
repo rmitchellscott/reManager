@@ -3,32 +3,7 @@ import { Button } from '@/components/ui/button'
 import { SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { ExternalLink, Plus, Trash2, Check, AlertTriangle, ArrowLeft, ArrowRight, X, Heart, BookOpen } from 'lucide-react'
 import { StatusBadge } from '@/components/StatusBadge'
-
-interface OSConstraint {
-  version: string
-  operator: '>=' | '<' | '>' | '<=' | '='
-}
-
-interface PackageInfo {
-  name: string
-  version: string
-  description: string
-  upstreamAuthor: string
-  categories: string[]
-  url: string
-  license: string
-  devices: string[]
-  depends: string[]
-  conflicts: string[]
-  osMin: string | null
-  osMax: string | null
-  osConstraints: OSConstraint[] | null
-  compatible: boolean
-  incompatibleReason?: string
-  status: string
-  donateUrl: string | null
-  readmeUrl: string | null
-}
+import { PackageInfo } from '@/lib/types'
 
 interface PackageDetailPanelProps {
   pkg: PackageInfo

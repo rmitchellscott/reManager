@@ -13,6 +13,7 @@ import (
 
 	"reManager/internal/debug"
 	"reManager/internal/httputil"
+	versionpkg "reManager/internal/version"
 )
 
 const (
@@ -380,7 +381,7 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			if !isVersionCompatible(info, deviceType, firmware, arch) {
 				continue
 			}
-			if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+			if bestVersion == "" || versionpkg.Compare(version, bestVersion) > 0 {
 				bestVersion = version
 				bestInfo = info
 			}
@@ -394,7 +395,7 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 				if !isVersionCompatible(info, deviceType, "", arch) {
 					continue
 				}
-				if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+				if bestVersion == "" || versionpkg.Compare(version, bestVersion) > 0 {
 					bestVersion = version
 					bestInfo = info
 				}
@@ -408,7 +409,7 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			compatible = false
 			incompatibleReason = "device"
 			for version, info := range versions {
-				if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+				if bestVersion == "" || versionpkg.Compare(version, bestVersion) > 0 {
 					bestVersion = version
 					bestInfo = info
 				}
@@ -476,7 +477,7 @@ func (m *MetadataStore) GetPackageForTargetOS(name, targetOS, deviceType, arch s
 		if !isVersionCompatible(info, deviceType, targetOS, arch) {
 			continue
 		}
-		if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+		if bestVersion == "" || versionpkg.Compare(version, bestVersion) > 0 {
 			bestVersion = version
 			bestInfo = info
 		}
@@ -533,7 +534,7 @@ func (m *MetadataStore) depsInstallable(name, deviceType, firmware, arch string,
 		if !isVersionCompatible(info, deviceType, firmware, arch) {
 			continue
 		}
-		if bestVersion == "" || compareVersions(version, bestVersion) > 0 {
+		if bestVersion == "" || versionpkg.Compare(version, bestVersion) > 0 {
 			bestVersion = version
 			v := info
 			bestInfo = &v
@@ -585,7 +586,7 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 	if firmware != "" {
 		if len(info.OSConstraints) > 0 {
 			for _, c := range info.OSConstraints {
-				cmp := compareVersions(firmware, c.Version)
+				cmp := versionpkg.Compare(firmware, c.Version)
 				switch c.Operator {
 				case ">=":
 					if cmp < 0 {
@@ -612,12 +613,12 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 		} else {
 			// Legacy fallback: os_max is exclusive
 			if info.OSMin != nil && *info.OSMin != "" {
-				if compareVersions(firmware, *info.OSMin) < 0 {
+				if versionpkg.Compare(firmware, *info.OSMin) < 0 {
 					return false
 				}
 			}
 			if info.OSMax != nil && *info.OSMax != "" {
-				if compareVersions(firmware, *info.OSMax) >= 0 {
+				if versionpkg.Compare(firmware, *info.OSMax) >= 0 {
 					return false
 				}
 			}
@@ -636,60 +637,3 @@ func stripDepVersion(dep string) string {
 	return dep
 }
 
-func compareVersions(a, b string) int {
-	aParts := parseVersionParts(a)
-	bParts := parseVersionParts(b)
-
-	maxLen := len(aParts)
-	if len(bParts) > maxLen {
-		maxLen = len(bParts)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		var aNum, bNum int
-		if i < len(aParts) {
-			aNum = aParts[i]
-		}
-		if i < len(bParts) {
-			bNum = bParts[i]
-		}
-		if aNum > bNum {
-			return 1
-		}
-		if aNum < bNum {
-			return -1
-		}
-	}
-	return 0
-}
-
-func parseVersionParts(v string) []int {
-	var parts []int
-	var current string
-	for _, c := range v {
-		if c == '.' || c == '-' {
-			if current != "" {
-				parts = append(parts, parseNum(current))
-				current = ""
-			}
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		parts = append(parts, parseNum(current))
-	}
-	return parts
-}
-
-func parseNum(s string) int {
-	num := 0
-	for _, c := range s {
-		if c >= '0' && c <= '9' {
-			num = num*10 + int(c-'0')
-		} else {
-			break
-		}
-	}
-	return num
-}

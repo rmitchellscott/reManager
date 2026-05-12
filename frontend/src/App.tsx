@@ -1,171 +1,37 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { Toaster, toast } from 'sonner'
 import { applyThemeWithPortal } from './main'
 import { debugLog } from '@/lib/utils'
-import { handleError, getUserFriendlyMessage } from '@/lib/errorMessages'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { Sheet, SheetContent } from '@/components/ui/sheet'
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
-import { Skeleton } from '@/components/ui/skeleton'
 import { ProgressModal } from '@/components/ProgressModal'
-import { PackageDetailPanel } from '@/components/PackageDetailPanel'
 import { ConsolidatedWarningBanner, hasActiveWarnings } from '@/components/ConsolidatedWarningBanner'
 import { BannerSwitcher } from '@/components/BannerSwitcher'
-import { UpgradeChecklist } from '@/components/UpgradeChecklist'
-import { StatusBadge } from '@/components/StatusBadge'
-import { ReadmeDialog } from '@/components/ReadmeDialog'
-import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { VellumInstallSuccessDialog } from '@/components/VellumInstallSuccessDialog'
 import { VellumUninstallSuccessDialog } from '@/components/VellumUninstallSuccessDialog'
 import { SettingsDialog } from '@/components/SettingsDialog'
-import { InteractiveTerminal } from '@/components/InteractiveTerminal'
-import { FileBrowser } from '@/components/FileBrowser'
-import { ConfigEditor } from '@/components/ConfigEditor'
-import { BackupRestoreDialog } from '@/components/BackupRestore'
-import { CheckOSDialog } from '@/components/CheckOSDialog'
+import { PageHeader } from '@/components/PageHeader'
 import { SupportBundlePage } from '@/components/SupportBundlePage'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
-import { ImportPDFDialog } from '@/components/ImportPDFDialog'
-import { SoftwareManagerDialog } from '@/components/SoftwareManagerDialog'
 import { UserGuideOffer } from '@/components/UserGuideOffer'
-import { TimezoneCombobox } from '@/components/TimezoneCombobox'
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
+import { ConnectPage } from '@/pages/ConnectPage'
+import { AppProvider } from '@/contexts/AppContext'
+import { useConnectionEvents } from '@/hooks/useConnectionEvents'
+import { useVellumEvents } from '@/hooks/useVellumEvents'
+import { useInstallEvents } from '@/hooks/useInstallEvents'
+import { useMaintenanceEvents } from '@/hooks/useMaintenanceEvents'
+import { useWarnings } from '@/hooks/useWarnings'
+import { UtilitiesTab } from '@/tabs/UtilitiesTab'
+import { MaintenanceTab } from '@/tabs/MaintenanceTab'
+import { ModsTab } from '@/tabs/ModsTab'
 import { Badge } from '@/components/ui/badge'
 import { Banner } from '@/components/ui/banner'
-import { Loader2, Unplug, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, Settings, WifiOff, Eye, EyeOff, RefreshCw, Info, LifeBuoy, CheckCircle2, BookOpen } from 'lucide-react'
+import { Loader2, Check, AlertTriangle, AlertCircle, WifiOff, Info, CheckCircle2, BookOpen } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
-
-interface PackageInfo {
-  name: string
-  version: string
-  description: string
-  upstreamAuthor: string
-  categories: string[]
-  url: string
-  license: string
-  devices: string[]
-  depends: string[]
-  conflicts: string[]
-  osMin: string | null
-  osMax: string | null
-  osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
-  compatible: boolean
-  incompatibleReason?: string
-  status: string
-  donateUrl: string | null
-  readmeUrl: string | null
-}
-
-interface MaintenanceCommandInfo {
-  id: string
-  label: string
-  description: string
-  requiresTerminal: boolean
-  allowStop: boolean
-  hook?: string
-}
-
-interface SystemTaskInfo {
-  id: string
-  label: string
-  description: string
-  requiresTerminal: boolean
-  needsWriteableRoot: boolean
-}
-
-interface SSHKey {
-  path: string
-  name: string
-}
-
-interface SavedDevice {
-  id: string
-  name: string
-  host: string
-  authType: 'password' | 'key' | 'agent'
-  keyPath?: string
-  lastConnected?: number
-}
-
-interface UpdateServiceStatus {
-  enabled: boolean
-  running: boolean
-}
-
-interface InstallProgress {
-  component: string
-  index: number
-  total: number
-  status: string
-  message: string
-}
-
-interface InstallResult {
-  success: boolean
-  errors: string[]
-  dnsError?: boolean
-}
-
-interface DialogActionRequest {
-  id: string
-  label: string
-  type: string
-  value: string
-}
-
-interface DialogRequest {
-  title: string
-  message: string
-  note: string
-  steps: string[]
-  confirmText: string
-  cancelText: string
-  inProgressMessage: string
-  infoOnly: boolean
-  installFlow?: boolean
-  actions: DialogActionRequest[]
-}
-
-interface InstallSimulationResult {
-  packages: string[]
-  requested: string[]
-}
-
-interface UninstallSimulationResult {
-  packages: string[]
-  blocked: Record<string, string[]> | null
-  recursivePackages: string[] | null
-  worldDeps: string[] | null
-  allAffected: string[] | null
-}
-
-interface InstalledPackagesResult {
-  packages: string[]
-  osUpgraded: boolean
-  prevVersion: string
-  newVersion: string
-}
-
-interface HashtabVersionStatus {
-  installed: boolean
-  hashtabVersion: string
-  firmwareVersion: string
-  needsRebuild: boolean
-}
-
-interface TimezoneStatus {
-  deviceTimezone: string
-  savedTimezone: string
-  needsUpdate: boolean
-}
+import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, Step } from '@/lib/types'
 
 declare global {
   interface Window {
@@ -293,6 +159,7 @@ declare global {
           }[]>
           InstallOSVersion(version: string): void
           CancelOSInstall(): void
+          CheckOSCompatibility(targetVersion: string): Promise<CompatibilityResult>
           IsSleepScreenSupported(): Promise<boolean>
           GetSleepScreen(): Promise<string>
           SetSleepScreen(imagePath: string): Promise<void>
@@ -320,83 +187,50 @@ declare global {
   }
 }
 
-type Step = 'connect' | 'select' | 'install' | 'done'
-
 export default function App() {
   const [step, setStep] = useState<Step>('connect')
-  const [host, setHost] = useState('10.11.99.1')
-  const [authType, setAuthType] = useState<'password' | 'key' | 'agent'>('password')
   const [sshAgentAvailable, setSSHAgentAvailable] = useState(false)
-  const [password, setPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
-  const [showKeyPassphrase, setShowKeyPassphrase] = useState(false)
   const [availableKeys, setAvailableKeys] = useState<SSHKey[]>([])
-  const [selectedKey, setSelectedKey] = useState<string>('')
-  const [customKeyName, setCustomKeyName] = useState<string>('')
-  const [keyPassphrase, setKeyPassphrase] = useState('')
-  const [connecting, setConnecting] = useState(false)
   const [device, setDevice] = useState<string>('')
   const [deviceInfo, setDeviceInfo] = useState<Record<string, string>>({})
   const [installedPackages, setInstalledPackages] = useState<Map<string, string>>(new Map())
   const [refreshingPackages, setRefreshingPackages] = useState(false)
   const [vellumInstalled, setVellumInstalled] = useState<boolean | null>(null)
-  const [warningsChecked, setWarningsChecked] = useState(false)
-  const [bootstrapping, setBootstrapping] = useState(false)
-  const [bootstrapOutput, setBootstrapOutput] = useState('')
-  const [bootstrapError, setBootstrapError] = useState<string | null>(null)
-  const [bootstrapSuccess, setBootstrapSuccess] = useState(false)
-  const [installing, setInstalling] = useState(false)
-  const [output, setOutput] = useState('')
-  const [currentComponent, setCurrentComponent] = useState('')
-  const [progressStatus, setProgressStatus] = useState('')
-  const [showRebuildDialog, setShowRebuildDialog] = useState(false)
-  const [showStartUIDialog, setShowStartUIDialog] = useState(false)
-  const [dialogRequest, setDialogRequest] = useState<DialogRequest | null>(null)
-  const dialogRespondedRef = useRef(false)
-  const [runningHookTitle, setRunningHookTitle] = useState<string | null>(null)
-  const connectAttemptRef = useRef(0)
+  const {
+    warningsChecked, setWarningsChecked,
+    osUpgradeDetected, setOsUpgradeDetected,
+    prevOsVersion, setPrevOsVersion,
+    newOsVersion, setNewOsVersion,
+    osMismatchDetected, setOsMismatchDetected,
+    osMismatchDetectedRef,
+    storedOsVersion, setStoredOsVersion,
+    currentOsVersion, setCurrentOsVersion,
+    checklistLoading, setChecklistLoading,
+    compatibilityStatus, setCompatibilityStatus,
+    hashtabMismatch, setHashtabMismatch,
+    hashtabMissing, setHashtabMissing,
+    timezoneMismatch, setTimezoneMismatch,
+    deviceTimezone, setDeviceTimezone,
+    selectedTimezone, setSelectedTimezone,
+    reenableStatus, setReenableStatus,
+    showAutoUpdateBanner, setShowAutoUpdateBanner,
+    updateServiceStatus, setUpdateServiceStatus,
+    xochitlRunning, setXochitlRunning,
+    xoviActive, setXoviActive,
+    guideOffer, setGuideOffer,
+    guideInstalling, setGuideInstalling,
+    showGuideRestartDialog, setShowGuideRestartDialog,
+  } = useWarnings()
 
+  const [installing, setInstalling] = useState(false)
   const [activeTab, setActiveTab] = useState<'mods' | 'maintenance' | 'utilities'>('mods')
   const [installQueue, setInstallQueue] = useState<Set<string>>(new Set())
   const [uninstallQueue, setUninstallQueue] = useState<Set<string>>(new Set())
-  const [pendingUninstall, setPendingUninstall] = useState<{
-    componentIds: string[]
-    componentNames: string[]
-    dependents: Array<{ id: string; name: string }>
-  } | null>(null)
-  const [pendingOrphanRemoval, setPendingOrphanRemoval] = useState<{
-    itemToRemove: string
-    orphans: Array<{ id: string; name: string }>
-  } | null>(null)
   const [uninstalling, setUninstalling] = useState(false)
-  const [maintenanceOutput, setMaintenanceOutput] = useState('')
   const [commandRunning, setCommandRunning] = useState(false)
-  const [rescanning, setRescanning] = useState(false)
-  const [currentRunningCommand, setCurrentRunningCommand] = useState<{
-    componentId: string
-    commandId: string
-  } | null>(null)
-  const [updateServiceStatus, setUpdateServiceStatus] = useState<UpdateServiceStatus>({
-    enabled: false,
-    running: false,
-  })
-  const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
-  const [xochitlRunning, setXochitlRunning] = useState(true)
-  const [xoviActive, setXoviActive] = useState(false)
-  const [commandContext, setCommandContext] = useState<'install' | 'maintenance' | null>(null)
-  const commandContextRef = useRef<'install' | 'maintenance' | null>(null)
-  const runningSystemTaskRef = useRef<string | null>(null)
-  const settingTimezoneRef = useRef(false)
-  const manuallyStoppedRef = useRef(false)
 
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [showSupportBundles, setShowSupportBundles] = useState(false)
-  const [showFileBrowser, setShowFileBrowser] = useState(false)
-  const [showImportPDF, setShowImportPDF] = useState(false)
-  const [showSoftwareManager, setShowSoftwareManager] = useState(false)
-  const [showConfigEditor, setShowConfigEditor] = useState(false)
-  const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
-  const [isTerminalRunning, setIsTerminalRunning] = useState(false)
   const [appVersion, setAppVersion] = useState('dev')
   const [tabVisibility, setTabVisibility] = useState<Record<string, boolean>>({
     mods: true,
@@ -415,46 +249,15 @@ export default function App() {
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
-  const [vellumUninstalling, setVellumUninstalling] = useState(false)
-  const [vellumUninstallOutput, setVellumUninstallOutput] = useState('')
-  const [vellumUninstallError, setVellumUninstallError] = useState<string | null>(null)
-  const [vellumUninstallSuccess, setVellumUninstallSuccess] = useState(false)
-  const [vellumBrokenInstall, setVellumBrokenInstall] = useState<string[] | null>(null)
-  const [vellumCleaning, setVellumCleaning] = useState(false)
 
-  const [showProgressModal, setShowProgressModal] = useState(false)
-  const [progressModalType, setProgressModalType] = useState<'install' | 'maintenance' | null>(null)
-  const [progressIndex, setProgressIndex] = useState(0)
-  const [progressTotal, setProgressTotal] = useState(0)
-  const [progressPercentage, setProgressPercentage] = useState(0)
 
   const [packages, setPackages] = useState<PackageInfo[]>([])
   const [systemTasks, setSystemTasks] = useState<SystemTaskInfo[]>([])
   const [maintenanceCommands, setMaintenanceCommands] = useState<Record<string, MaintenanceCommandInfo[]>>({})
 
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([])
-  const [deviceSortMode, setDeviceSortMode] = useState<'recent' | 'alpha'>(() => {
-    const saved = localStorage.getItem('deviceSortMode')
-    return saved === 'alpha' ? 'alpha' : 'recent'
-  })
-  const [showAddForm, setShowAddForm] = useState(false)
-  const [showSaveDeviceDialog, setShowSaveDeviceDialog] = useState(false)
-  const [saveDeviceError, setSaveDeviceError] = useState('')
-  const [deviceName, setDeviceName] = useState('')
-  const [deviceToDelete, setDeviceToDelete] = useState<string | null>(null)
-  const [editingDevice, setEditingDevice] = useState<SavedDevice | null>(null)
-  const [connectingDeviceId, setConnectingDeviceId] = useState<string | null>(null)
   const [connectedDeviceId, setConnectedDeviceId] = useState('')
   const [queueError, setQueueError] = useState<string | null>(null)
-  const [lastInstallSuccess, setLastInstallSuccess] = useState<boolean | null>(null)
-  const [lastOperationType, setLastOperationType] = useState<'install' | 'uninstall' | null>(null)
-  const [selectedPackage, setSelectedPackage] = useState<PackageInfo | null>(null)
-  const [sidebarViewOnly, setSidebarViewOnly] = useState(false)
-  const [readmeDialogOpen, setReadmeDialogOpen] = useState(false)
-  const [readmeUrl, setReadmeUrl] = useState<string | null>(null)
-  const [readmePackageName, setReadmePackageName] = useState('')
-  const [sidebarIncompatible, setSidebarIncompatible] = useState(false)
-  const [sidebarHistory, setSidebarHistory] = useState<PackageInfo[]>([])
   const [pendingInstallConfirm, setPendingInstallConfirm] = useState<{
     packages: string[]
     requested: string[]
@@ -469,87 +272,20 @@ export default function App() {
     useRecursive: boolean
     worldDeps?: string[]
   } | null>(null)
-  const [simulatingInstall, setSimulatingInstall] = useState(false)
-  const [simulatingUninstall, setSimulatingUninstall] = useState(false)
 
-  const [osUpgradeDetected, setOsUpgradeDetected] = useState(false)
-  const [prevOsVersion, setPrevOsVersion] = useState('')
-  const [newOsVersion, setNewOsVersion] = useState('')
   const [runningReenable, setRunningReenable] = useState(false)
-  const [reenableStatus, setReenableStatus] = useState('')
-  const [pendingPackageUpgrade, setPendingPackageUpgrade] = useState<string[] | null>(null)
-  const [simulatingUpgrade, setSimulatingUpgrade] = useState(false)
-  const [showNoUpgradesDialog, setShowNoUpgradesDialog] = useState(false)
   const [upgradesAvailable, setUpgradesAvailable] = useState(false)
-  const [showCheckOSDialog, setShowCheckOSDialog] = useState(false)
 
-  const [osMismatchDetected, setOsMismatchDetected] = useState(false)
-  const osMismatchDetectedRef = useRef(false)
-  const [storedOsVersion, setStoredOsVersion] = useState('')
-  const [currentOsVersion, setCurrentOsVersion] = useState('')
-  const [checklistLoading, setChecklistLoading] = useState(false)
-  const [compatibilityStatus, setCompatibilityStatus] = useState<{
-    installedPackages: string[]
-    compatiblePackages: string[]
-    incompatiblePackages: string[]
-    currentOsVersion: string
-    storedOsVersion: string
-    fetchFailed: boolean
-    statusMap?: Record<string, string>
-  } | null>(null)
-
-  const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
-  const [hashtabMissing, setHashtabMissing] = useState(false)
   const xoviNotRunning = useMemo(() =>
     installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch && !hashtabMissing,
     [installedPackages, xochitlRunning, xoviActive, hashtabMismatch, hashtabMissing]
   )
 
-  const [timezoneMismatch, setTimezoneMismatch] = useState<TimezoneStatus | null>(null)
-  const [selectedTimezone, setSelectedTimezone] = useState('')
-  const [deviceTimezone, setDeviceTimezone] = useState('')
-  const [settingTimezone, setSettingTimezone] = useState(false)
-  const [runningSystemTask, setRunningSystemTask] = useState<string | null>(null)
 
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'lost' | 'reconnecting' | 'failed'>('connected')
-  const [reconnectAttempt, setReconnectAttempt] = useState(0)
-  const [reconnectMaxAttempts, setReconnectMaxAttempts] = useState(0)
-  const [connectionError, setConnectionError] = useState<string | null>(null)
+  const deviceRef = useRef(device)
+  deviceRef.current = device
 
-  const [showFilesystemRestoreError, setShowFilesystemRestoreError] = useState(false)
-  const [isRetryingFilesystemRestore, setIsRetryingFilesystemRestore] = useState(false)
-  const [writeableRootBusy, setWriteableRootBusy] = useState(false)
 
-  const [guideOffer, setGuideOffer] = useState<'install' | 'update' | null>(null)
-  const [guideInstalling, setGuideInstalling] = useState(false)
-  const [showGuideRestartDialog, setShowGuideRestartDialog] = useState(false)
-
-  const [search, setSearch] = useState('')
-  const [categoryFilter, setCategoryFilter] = useState('all')
-  const [developerFilter, setDeveloperFilter] = useState('all')
-  const [viewMode, setViewMode] = useState<'full' | 'compact'>(() => {
-    const saved = localStorage.getItem('packageViewMode')
-    return saved === 'compact' ? 'compact' : 'full'
-  })
-
-  const sortedDevices = useMemo(() => {
-    return [...savedDevices].sort((a, b) => {
-      if (deviceSortMode === 'alpha') {
-        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-      }
-      return (b.lastConnected || 0) - (a.lastConnected || 0)
-    })
-  }, [savedDevices, deviceSortMode])
-
-  const categories = useMemo(() => {
-    const cats = new Set(packages.flatMap(p => p.categories || []))
-    return Array.from(cats).sort()
-  }, [packages])
-
-  const developers = useMemo(() => {
-    const devs = new Set(packages.map(p => p.upstreamAuthor).filter(Boolean))
-    return Array.from(devs).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
-  }, [packages])
 
   const resolvedAppTheme = useMemo((): 'dark' | 'light' => {
     if (theme === 'system') {
@@ -572,57 +308,199 @@ export default function App() {
     return editorTheme === 'dark' ? 'dark' : 'light'
   }, [editorTheme, resolvedAppTheme])
 
-  const filteredPackages = useMemo(() => {
-    return [...packages]
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-      .filter(pkg => {
-        if (search && !pkg.name.toLowerCase().includes(search.toLowerCase()) &&
-            !pkg.description.toLowerCase().includes(search.toLowerCase())) {
-          return false
-        }
-        if (categoryFilter !== 'all' && !(pkg.categories || []).includes(categoryFilter)) {
-          return false
-        }
-        if (developerFilter !== 'all' && pkg.upstreamAuthor !== developerFilter) {
-          return false
-        }
-        return true
-      })
-  }, [packages, search, categoryFilter, developerFilter])
-
-  const installedFiltered = useMemo(() =>
-    filteredPackages.filter(pkg => installedPackages.has(pkg.name)),
-    [filteredPackages, installedPackages]
-  )
-
-  const availableFiltered = useMemo(() => {
-    const available = filteredPackages.filter(pkg => !installedPackages.has(pkg.name))
-    return available.sort((a, b) => {
-      if (a.compatible !== b.compatible) return a.compatible ? -1 : 1
-      return 0
-    })
-  }, [filteredPackages, installedPackages])
-
-  useEffect(() => {
-    if (selectedPackage) {
-      const updated = packages.find(p => p.name === selectedPackage.name)
-      if (updated && updated !== selectedPackage) {
-        setSelectedPackage(updated)
-      }
+  const rescanAllPackages = async () => {
+    try {
+      const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
+      setInstalledPackages(new Map(Object.entries(installedVersions || {})))
+      return true
+    } catch (err) {
+      console.error('Failed to rescan package status:', err)
+      return false
     }
-  }, [packages])
+  }
 
-  useEffect(() => {
-    commandContextRef.current = commandContext
-  }, [commandContext])
+  const resetOperationStateRef = useRef<() => void>(() => {})
+  const refreshDeviceStateRef = useRef<(deviceType: string) => Promise<void>>(async () => {})
+  const handleConnectionRestored = useCallback(async (deviceType: string) => {
+    resetOperationStateRef.current()
+    if (deviceType) {
+      setDevice(deviceType)
+    }
+    try {
+      await refreshDeviceStateRef.current(deviceType)
+    } catch (err) {
+      debugLog('Failed to refresh device info on reconnect:', err)
+    }
+    await rescanAllPackages()
+  }, [])
 
-  useEffect(() => {
-    localStorage.setItem('packageViewMode', viewMode)
-  }, [viewMode])
+  const handleConnectionLost = useCallback(() => {
+    resetOperationStateRef.current()
+  }, [])
 
-  useEffect(() => {
-    localStorage.setItem('deviceSortMode', deviceSortMode)
-  }, [deviceSortMode])
+  const {
+    connectionStatus,
+    setConnectionStatus,
+    reconnectAttempt,
+    setReconnectAttempt,
+    reconnectMaxAttempts,
+    connectionError,
+    setConnectionError,
+    showFilesystemRestoreError,
+    isRetryingFilesystemRestore,
+    writeableRootBusy,
+    setWriteableRootBusy,
+    handleRetryRestore: handleFilesystemRestoreRetry,
+    handleRebootDevice: handleFilesystemRestoreReboot,
+    handleDismissRestoreError: handleFilesystemRestoreDismiss,
+  } = useConnectionEvents({
+    onConnectionRestored: handleConnectionRestored,
+    onConnectionLost: handleConnectionLost,
+    deviceRef,
+  })
+
+  const {
+    bootstrapping,
+    setBootstrapping,
+    bootstrapOutput,
+    setBootstrapOutput,
+    bootstrapError,
+    setBootstrapError,
+    bootstrapSuccess,
+    setBootstrapSuccess,
+    vellumBrokenInstall,
+    setVellumBrokenInstall,
+    vellumCleaning,
+    setVellumCleaning,
+    vellumUninstalling,
+    setVellumUninstalling,
+    vellumUninstallOutput,
+    setVellumUninstallOutput,
+    vellumUninstallError,
+    setVellumUninstallError,
+    vellumUninstallSuccess,
+    setVellumUninstallSuccess,
+  } = useVellumEvents({
+    setVellumInstalled,
+    setInstalledPackages,
+    setShowSettingsDialog,
+    rescanAllPackages,
+  })
+
+  const checkDnsProxyError = async (dnsError: boolean) => {
+    if (!dnsError || dnsErrorShown) return
+    const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
+    if (!currentProxyMode) {
+      setShowDnsErrorModal(true)
+      setDnsErrorShown(true)
+    }
+  }
+
+  const installedPackagesRef = useRef(installedPackages)
+  installedPackagesRef.current = installedPackages
+
+  const selectedTimezoneRef = useRef(selectedTimezone)
+  selectedTimezoneRef.current = selectedTimezone
+
+  const {
+    output,
+    setOutput,
+    currentComponent,
+    progressStatus,
+    progressIndex,
+    setProgressIndex,
+    progressTotal,
+    setProgressTotal,
+    progressPercentage,
+    setProgressPercentage,
+    showProgressModal,
+    setShowProgressModal,
+    progressModalType,
+    setProgressModalType,
+    showRebuildDialog,
+    setShowRebuildDialog,
+    dialogRequest,
+    setDialogRequest,
+    dialogRespondedRef,
+    runningHookTitle,
+    setRunningHookTitle,
+    lastInstallSuccess,
+    setLastInstallSuccess,
+    lastOperationType,
+    setLastOperationType,
+    showStartUIDialog,
+    setShowStartUIDialog,
+  } = useInstallEvents({
+    setInstalling,
+    setUninstalling,
+    setCommandRunning,
+    setInstallQueue,
+    setXochitlRunning,
+    setXoviActive,
+    setHashtabMismatch,
+    setHashtabMissing,
+    setCompatibilityStatus,
+    checkDnsProxyError,
+    rescanAllPackages,
+    osMismatchDetectedRef,
+    installedPackagesRef,
+  })
+
+  const {
+    maintenanceOutput,
+    setMaintenanceOutput,
+    commandContext,
+    setCommandContext,
+    currentRunningCommand,
+    setCurrentRunningCommand,
+    runningSystemTask,
+    setRunningSystemTask,
+    runningSystemTaskRef,
+    settingTimezone,
+    setSettingTimezone,
+    settingTimezoneRef,
+    manuallyStoppedRef,
+    rescanning,
+    setRescanning,
+  } = useMaintenanceEvents({
+    setOutput,
+    setCommandRunning,
+    setShowProgressModal,
+    setProgressModalType,
+    setDialogRequest,
+    setRunningHookTitle,
+    setInstalling,
+    setHashtabMismatch,
+    setHashtabMissing,
+    setTimezoneMismatch,
+    setDeviceTimezone,
+    setSelectedTimezone,
+    setUpdateServiceStatus,
+    setXochitlRunning,
+    setXoviActive,
+    setUpgradesAvailable,
+    setOsMismatchDetected,
+    osMismatchDetectedRef,
+    setChecklistLoading,
+    setCompatibilityStatus,
+    setDeviceInfo,
+    setPackages,
+    checkDnsProxyError,
+    rescanAllPackages,
+    deviceRef,
+    installedPackagesRef,
+    selectedTimezoneRef,
+    setActiveTab,
+  })
+
+  const startMaintenanceOperation = (options?: { showModal?: boolean; resetProgress?: boolean }) => {
+    if (options?.showModal !== false) setShowProgressModal(true)
+    setProgressModalType('maintenance')
+    if (options?.resetProgress !== false) setProgressPercentage(0)
+    setCommandRunning(true)
+    setMaintenanceOutput('')
+    setCommandContext('maintenance')
+  }
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -640,11 +518,6 @@ export default function App() {
         debugLog('[DEBUG] loadInitialData: got pkgs', pkgs?.length, pkgs)
 
         setAvailableKeys(keys || [])
-        if (keys && keys.length > 0) {
-          setSelectedKey(keys[0].path)
-        } else {
-          setSelectedKey('')
-        }
         setSSHAgentAvailable(!!agentAvail)
 
         setPackages(pkgs || [])
@@ -683,7 +556,6 @@ export default function App() {
         }
       } catch (err) {
         debugLog('Could not load initial data:', err)
-        setSelectedKey('')
       }
     }
     loadInitialData()
@@ -747,22 +619,6 @@ export default function App() {
     }
   }, [tabVisibility.mods, tabVisibility.utilities, activeTab])
 
-  const handleKeySelect = async (value: string) => {
-    if (value === '__other__') {
-      const path = await window.go.main.App.SelectKeyFile()
-      if (path) {
-        setSelectedKey(path)
-        const fileName = path.split('/').pop() || path
-        setCustomKeyName(fileName)
-      } else if (!selectedKey) {
-        setCustomKeyName('')
-      }
-    } else {
-      setSelectedKey(value)
-      setCustomKeyName('')
-    }
-  }
-
   const resetOperationState = () => {
     setInstallQueue(new Set())
     setUninstallQueue(new Set())
@@ -786,8 +642,6 @@ export default function App() {
     setVellumCleaning(false)
     setConnectionError(null)
     setReconnectAttempt(0)
-    setShowFileBrowser(false)
-    setShowConfigEditor(false)
     setWriteableRootBusy(false)
     setUpgradesAvailable(false)
     setSettingTimezone(false)
@@ -798,9 +652,9 @@ export default function App() {
     setInstalling(false)
     setUninstalling(false)
     setRunningReenable(false)
-    setSimulatingUpgrade(false)
     setXochitlRunning(true)
   }
+  resetOperationStateRef.current = resetOperationState
 
   const refreshDeviceState = async (deviceType: string) => {
     const info = await window.go.main.App.GetDeviceInfo()
@@ -824,713 +678,8 @@ export default function App() {
     const maintCmds = await window.go.main.App.GetAllMaintenanceCommands()
     setMaintenanceCommands(maintCmds || {})
   }
+  refreshDeviceStateRef.current = refreshDeviceState
 
-  const handleConnectToSavedDevice = async (id: string) => {
-    const thisAttempt = ++connectAttemptRef.current
-    setConnecting(true)
-    setConnectingDeviceId(id)
-
-    try {
-      const result = await window.go.main.App.ConnectToSavedDevice(id)
-
-      if (thisAttempt !== connectAttemptRef.current) return
-
-      if (result.success) {
-        setConnectedDeviceId(id)
-        const deviceType = result.device || 'unknown'
-        setDevice(deviceType)
-        await refreshDeviceState(deviceType)
-        setStep('select')
-      } else {
-        toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
-      }
-    } catch (err) {
-      if (thisAttempt !== connectAttemptRef.current) return
-      toast.error(handleError(err, 'Connection'))
-    } finally {
-      if (thisAttempt === connectAttemptRef.current) {
-        setConnecting(false)
-        setConnectingDeviceId(null)
-      }
-    }
-  }
-
-  const handleDeleteClick = (id: string) => {
-    setDeviceToDelete(id)
-  }
-
-  const handleConfirmDelete = async () => {
-    if (!deviceToDelete) return
-    try {
-      await window.go.main.App.DeleteSavedDevice(deviceToDelete)
-      setSavedDevices(prev => prev.filter(d => d.id !== deviceToDelete))
-    } catch (err) {
-      console.error('Failed to delete saved device:', err)
-    }
-    setDeviceToDelete(null)
-  }
-
-  const handleEditDevice = (device: SavedDevice) => {
-    setEditingDevice(device)
-    setDeviceName(device.name)
-    setHost(device.host)
-    setAuthType(device.authType as 'password' | 'key' | 'agent')
-    if (device.authType === 'key' && device.keyPath) {
-      setSelectedKey(device.keyPath)
-    }
-    setShowAddForm(true)
-  }
-
-  const handleSaveEditedDevice = async () => {
-    if (!editingDevice) return
-    try {
-      const pw = authType === 'password' ? password : ''
-      const kp = authType === 'key' ? selectedKey : ''
-      const kpp = authType === 'key' ? keyPassphrase : ''
-
-      await window.go.main.App.SaveDevice(editingDevice.id, deviceName, host, authType, pw, kp, kpp)
-
-      const devices = await window.go.main.App.GetSavedDevices()
-      setSavedDevices(devices || [])
-
-      setEditingDevice(null)
-      setShowAddForm(false)
-      resetFormFields()
-    } catch (err) {
-      console.error('Failed to save device:', err)
-    }
-  }
-
-  const handleCancelForm = () => {
-    setShowAddForm(false)
-    setEditingDevice(null)
-    resetFormFields()
-  }
-
-  const resetFormFields = () => {
-    setHost('10.11.99.1')
-    setAuthType('password')
-    setPassword('')
-    setKeyPassphrase('')
-    setDeviceName('')
-    if (availableKeys.length > 0) {
-      setSelectedKey(availableKeys[0].path)
-    } else {
-      setSelectedKey('')
-    }
-  }
-
-  useEffect(() => {
-    if (typeof window.runtime === 'undefined') {
-      debugLog('window.runtime is undefined, events will not work')
-      return
-    }
-    debugLog('Setting up event listeners')
-
-    const unsubscribeOutput = window.runtime.EventsOn('command:output', (...args: unknown[]) => {
-      const data = args[0] as string
-      debugLog('Received command:output:', data)
-
-      if (commandContextRef.current === 'maintenance') {
-        setMaintenanceOutput((prev) => prev + data)
-      } else {
-        setOutput((prev) => prev + data)
-      }
-    })
-
-    const unsubscribeDone = window.runtime.EventsOn('command:done', async (...args: unknown[]) => {
-      const success = args[0] as boolean
-      debugLog('Received command:done:', success)
-
-      if (runningSystemTaskRef.current || settingTimezoneRef.current) {
-        if (!success && !manuallyStoppedRef.current) {
-          setMaintenanceOutput((prev) => prev + '\n[Command failed]\n')
-          setShowProgressModal(true)
-          runningSystemTaskRef.current = null
-          settingTimezoneRef.current = false
-          setCommandRunning(false)
-          setRunningSystemTask(null)
-          setSettingTimezone(false)
-          const status = await window.go.main.App.GetUpdateServiceStatus()
-          setUpdateServiceStatus(status)
-          const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-          setXochitlRunning(xochitlStatus.running)
-          setXoviActive(xochitlStatus.xoviActive)
-        }
-        return
-      }
-
-      if (!success && manuallyStoppedRef.current) {
-        manuallyStoppedRef.current = false
-        setShowProgressModal(false)
-        setMaintenanceOutput('')
-        setProgressModalType(null)
-        setCommandRunning(false)
-        setRunningSystemTask(null)
-        setSettingTimezone(false)
-        setCommandContext(null)
-        return
-      }
-      if (!success) {
-        if (commandContextRef.current === 'maintenance') {
-          setMaintenanceOutput((prev) => prev + '\n[Command failed]\n')
-          setShowProgressModal(true)
-        } else {
-          setOutput((prev) => prev + '\n[Command failed]\n')
-        }
-      }
-      // Refresh status after maintenance commands
-      if (commandContextRef.current === 'maintenance') {
-        const [hashtabStatus, tzStatus] = await Promise.all([
-          window.go.main.App.CheckHashtabVersion(),
-          window.go.main.App.GetTimezoneStatus(),
-        ])
-        let updateStatus = await window.go.main.App.GetUpdateServiceStatus()
-        const maxAttempts = 6
-        for (let i = 0; i < maxAttempts && updateStatus.enabled !== updateStatus.running; i++) {
-          await new Promise(r => setTimeout(r, 500))
-          updateStatus = await window.go.main.App.GetUpdateServiceStatus()
-        }
-        setUpdateServiceStatus(updateStatus)
-        const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-        setXochitlRunning(xochitlStatus.running)
-        setXoviActive(xochitlStatus.xoviActive)
-        if (hashtabStatus.needsRebuild) {
-          setHashtabMismatch(hashtabStatus)
-        } else {
-          setHashtabMismatch(null)
-        }
-        setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
-
-        if (tzStatus.needsUpdate) {
-          setTimezoneMismatch(tzStatus)
-        } else {
-          setTimezoneMismatch(null)
-        }
-        if (tzStatus.deviceTimezone) {
-          setDeviceTimezone(tzStatus.deviceTimezone)
-          if (!selectedTimezone) {
-            setSelectedTimezone(tzStatus.savedTimezone || tzStatus.deviceTimezone)
-          }
-        }
-        setCommandRunning(false)
-        setRunningSystemTask(null)
-        setSettingTimezone(false)
-        setCommandContext(null)
-      } else {
-        const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-        setXochitlRunning(xochitlStatus.running)
-        setXoviActive(xochitlStatus.xoviActive)
-        setCommandRunning(false)
-        setRunningSystemTask(null)
-        setSettingTimezone(false)
-        setCommandContext(null)
-      }
-    })
-
-    const unsubscribeProgress = window.runtime.EventsOn('install:progress', (...args: unknown[]) => {
-      const progress = args[0] as InstallProgress
-      debugLog('Received install:progress:', progress)
-      setCurrentComponent(progress.component)
-      setProgressStatus(progress.status)
-      setProgressTotal(progress.total)
-
-      setProgressIndex(progress.index)
-      if (progress.total > 0 && progress.index >= 0) {
-        setProgressPercentage(Math.round(((progress.index + 1) / progress.total) * 100))
-      }
-
-      if (progress.status === 'downloading' || progress.status === 'transferring' || progress.status === 'installing') {
-        if (progress.message) {
-          setOutput((prev) => prev + progress.message + '\n')
-        }
-      } else if (progress.status === 'completed') {
-        setOutput((prev) => prev + `${progress.message}\n`)
-      } else if (progress.status === 'error') {
-        setOutput((prev) => prev + `Error: ${progress.message}\n`)
-      }
-    })
-
-    const unsubscribeComplete = window.runtime.EventsOn('install:complete', async (...args: unknown[]) => {
-      const result = args[0] as InstallResult
-      debugLog('Received install:complete:', result)
-
-      setLastInstallSuccess(result.success)
-
-      if (result.success) {
-        setOutput((prev) => prev + '\n=== Operation complete! ===\n')
-        setProgressPercentage(100)
-      } else {
-        setOutput((prev) => prev + `\nErrors occurred:\n${result.errors.join('\n')}\n`)
-      }
-
-      // Show DNS error modal if proxy mode is disabled and DNS error detected (once per session)
-      const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
-      if (result.dnsError && !currentProxyMode && !dnsErrorShown) {
-        setShowDnsErrorModal(true)
-        setDnsErrorShown(true)
-      }
-
-      await rescanAllPackages()
-
-      // Re-check OS compatibility after uninstall (packages may now be compatible)
-      if (osMismatchDetectedRef.current) {
-        window.go.main.App.GetPackageCompatibilityStatus().then(status => {
-          setCompatibilityStatus(status)
-        }).catch(() => {})
-      }
-
-      // Re-check hashtab version (installs may update the hashtab)
-      const hashtabStatus = await window.go.main.App.CheckHashtabVersion()
-      if (hashtabStatus.needsRebuild) {
-        setHashtabMismatch(hashtabStatus)
-      } else {
-        setHashtabMismatch(null)
-      }
-      setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
-
-      const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-      setXochitlRunning(xochitlStatus.running)
-      setXoviActive(xochitlStatus.xoviActive)
-
-      setInstalling(false)
-      setUninstalling(false)
-      setCommandRunning(false)
-      setCurrentComponent('')
-      setProgressStatus('')
-      setCommandContext(null)
-      setDialogRequest(null)
-      setRunningHookTitle(null)
-      setInstallQueue(new Set())
-    })
-
-    const unsubscribeDialog = window.runtime.EventsOn('hook:dialog', (...args: unknown[]) => {
-      const dialog = args[0] as DialogRequest
-      debugLog('Received hook:dialog:', dialog)
-      dialogRespondedRef.current = false
-      setDialogRequest(dialog)
-      setShowRebuildDialog(true)
-    })
-
-    const unsubscribeHookStarted = window.runtime.EventsOn('hook:started', (...args: unknown[]) => {
-      const data = args[0] as { title: string }
-      setRunningHookTitle(data.title)
-    })
-
-    const unsubscribeBootstrapPrompt = window.runtime.EventsOn('vellum:bootstrap-prompt', () => {
-      debugLog('Received vellum:bootstrap-prompt')
-      setVellumInstalled(false)
-    })
-
-    const unsubscribeBootstrapStart = window.runtime.EventsOn('vellum:bootstrap-start', () => {
-      debugLog('Received vellum:bootstrap-start')
-      setBootstrapping(true)
-      setBootstrapOutput('')
-      setBootstrapError(null)
-      setBootstrapSuccess(false)
-    })
-
-    const unsubscribeBootstrapOutput = window.runtime.EventsOn('vellum:bootstrap-output', (...args: unknown[]) => {
-      const line = args[0] as string
-      setBootstrapOutput((prev) => prev + line)
-    })
-
-    const unsubscribeBootstrapComplete = window.runtime.EventsOn('vellum:bootstrap-complete', () => {
-      debugLog('Received vellum:bootstrap-complete')
-      setBootstrapping(false)
-      setBootstrapSuccess(true)
-      setVellumInstalled(true)
-      rescanAllPackages()
-    })
-
-    const unsubscribeBootstrapError = window.runtime.EventsOn('vellum:bootstrap-error', (...args: unknown[]) => {
-      const errMsg = args[0] as string
-      debugLog('Received vellum:bootstrap-error:', errMsg)
-      setBootstrapping(false)
-      setBootstrapError(errMsg)
-    })
-
-    const unsubscribeVellumReady = window.runtime.EventsOn('vellum:ready', () => {
-      debugLog('Received vellum:ready')
-      setVellumInstalled(true)
-    })
-
-    const unsubscribeVellumUninstallStart = window.runtime.EventsOn('vellum:uninstall-start', () => {
-      debugLog('Received vellum:uninstall-start')
-      setVellumUninstalling(true)
-      setVellumUninstallOutput('')
-      setVellumUninstallError(null)
-      setVellumUninstallSuccess(false)
-    })
-
-    const unsubscribeVellumUninstallOutput = window.runtime.EventsOn('vellum:uninstall-output', (...args: unknown[]) => {
-      const line = args[0] as string
-      setVellumUninstallOutput((prev) => prev + line)
-    })
-
-    const unsubscribeVellumUninstallComplete = window.runtime.EventsOn('vellum:uninstall-complete', () => {
-      debugLog('Received vellum:uninstall-complete')
-      setVellumUninstalling(false)
-      setVellumInstalled(false)
-      setInstalledPackages(new Map())
-      setShowSettingsDialog(false)
-      setVellumUninstallSuccess(true)
-    })
-
-    const unsubscribeVellumUninstallError = window.runtime.EventsOn('vellum:uninstall-error', (...args: unknown[]) => {
-      const errMsg = args[0] as string
-      debugLog('Received vellum:uninstall-error:', errMsg)
-      setVellumUninstalling(false)
-      setVellumUninstallError(errMsg)
-    })
-
-    const unsubscribeBrokenInstall = window.runtime.EventsOn('vellum:broken-install', (...args: unknown[]) => {
-      const missing = args[0] as string[]
-      debugLog('Received vellum:broken-install, missing:', missing)
-      setVellumBrokenInstall(missing)
-    })
-
-    const unsubscribeCleanupStart = window.runtime.EventsOn('vellum:cleanup-start', () => {
-      debugLog('Received vellum:cleanup-start')
-      setVellumCleaning(true)
-    })
-
-    const unsubscribeCleanupComplete = window.runtime.EventsOn('vellum:cleanup-complete', () => {
-      debugLog('Received vellum:cleanup-complete')
-      setVellumCleaning(false)
-      setVellumBrokenInstall(null)
-    })
-
-    const unsubscribeCleanupError = window.runtime.EventsOn('vellum:cleanup-error', (...args: unknown[]) => {
-      const errMsg = args[0] as string
-      debugLog('Received vellum:cleanup-error:', errMsg)
-      setVellumCleaning(false)
-    })
-
-    const unsubscribeConnectWarnings = window.runtime.EventsOn('connect:warnings', (...args: unknown[]) => {
-      const w = args[0] as {
-        osMismatch?: { prevVersion: string; newVersion: string }
-        compatibilityStatus?: {
-          installedPackages: string[]
-          compatiblePackages: string[]
-          incompatiblePackages: string[]
-          currentOsVersion: string
-          storedOsVersion: string
-          fetchFailed: boolean
-          statusMap?: Record<string, string>
-        }
-        reenableStatus?: string
-        hashtabMismatch?: HashtabVersionStatus
-        hashtabMissing?: boolean
-        autoUpdateEnabled?: { enabled: boolean; running: boolean }
-        timezoneStatus?: TimezoneStatus
-        timezoneMismatch?: TimezoneStatus
-        xochitlNotRunning?: boolean
-        xoviNotRunning?: boolean
-      }
-      debugLog('Received connect:warnings:', w)
-      setWarningsChecked(true)
-
-      if (w.osMismatch) {
-        debugLog('connect:warnings — setting osMismatchDetected=true', w.osMismatch)
-        setOsMismatchDetected(true)
-        osMismatchDetectedRef.current = true
-        setStoredOsVersion(w.osMismatch.prevVersion)
-        setCurrentOsVersion(w.osMismatch.newVersion)
-        if (w.compatibilityStatus) {
-          debugLog('connect:warnings — compatibilityStatus received inline')
-          setCompatibilityStatus(w.compatibilityStatus)
-        }
-      } else {
-        debugLog('connect:warnings — no osMismatch, clearing')
-        setOsMismatchDetected(false)
-        osMismatchDetectedRef.current = false
-      }
-      if (w.reenableStatus) {
-        setReenableStatus(w.reenableStatus)
-      }
-      if (w.hashtabMismatch) {
-        setHashtabMismatch(w.hashtabMismatch)
-      } else {
-        setHashtabMismatch(null)
-      }
-      setHashtabMissing(!!w.hashtabMissing)
-      if (w.autoUpdateEnabled) {
-        setShowAutoUpdateBanner(true)
-      } else {
-        setShowAutoUpdateBanner(false)
-      }
-      if (w.timezoneStatus?.deviceTimezone) {
-        setDeviceTimezone(w.timezoneStatus.deviceTimezone)
-        setSelectedTimezone(w.timezoneStatus.savedTimezone || w.timezoneStatus.deviceTimezone)
-      }
-      if (w.timezoneMismatch) {
-        setTimezoneMismatch(w.timezoneMismatch)
-        setDeviceTimezone(w.timezoneMismatch.deviceTimezone)
-        setSelectedTimezone(w.timezoneMismatch.savedTimezone || w.timezoneMismatch.deviceTimezone)
-      } else {
-        setTimezoneMismatch(null)
-      }
-      setXochitlRunning(!w.xochitlNotRunning)
-
-    })
-
-    const unsubscribeGuideOffer = window.runtime.EventsOn('guide:offer', (...args: unknown[]) => {
-      const data = args[0] as { type: 'install' | 'update' }
-      setGuideOffer(data.type)
-    })
-
-    const unsubscribeTimezoneComplete = window.runtime.EventsOn('timezone:complete', (...args: unknown[]) => {
-      const timezone = args[0] as string
-      debugLog('Timezone set complete:', timezone)
-      settingTimezoneRef.current = false
-      setSettingTimezone(false)
-      setCommandRunning(false)
-      setTimezoneMismatch(null)
-      setDeviceTimezone(timezone)
-      window.go.main.App.GetTimezoneStatus().then(status => {
-        if (status.needsUpdate) {
-          setTimezoneMismatch(status)
-        }
-      }).catch(() => {})
-    })
-
-    const unsubscribeTimezoneError = window.runtime.EventsOn('timezone:error', (...args: unknown[]) => {
-      console.error('Timezone error:', args[0])
-      settingTimezoneRef.current = false
-      setSettingTimezone(false)
-      setCommandRunning(false)
-    })
-
-
-    const unsubscribeUpgradeBlocked = window.runtime.EventsOn('upgrade:blocked', (...args: unknown[]) => {
-      const compat = args[0] as {
-        compatible: string[]
-        incompatible: string[]
-        noConstraint: string[]
-        fetchFailed: boolean
-      }
-      debugLog('Received upgrade:blocked:', compat)
-      setChecklistLoading(false)
-    })
-
-    const unsubscribeUpgradeError = window.runtime.EventsOn('upgrade:error', (...args: unknown[]) => {
-      const errMsg = args[0] as string
-      debugLog('Received upgrade:error:', errMsg)
-      setChecklistLoading(false)
-    })
-
-    const unsubscribeUpgradeComplete = window.runtime.EventsOn('upgrade:complete', async (...args: unknown[]) => {
-      const result = args[0] as { success: boolean; dnsError: boolean }
-      debugLog('Received upgrade:complete:', result)
-      setChecklistLoading(false)
-      if (result.success) {
-        setUpgradesAvailable(false)
-        setOsMismatchDetected(false)
-        osMismatchDetectedRef.current = false
-        setCompatibilityStatus(null)
-        setRescanning(true)
-        try {
-          const info = await window.go.main.App.GetDeviceInfo()
-          setDeviceInfo(info)
-          const arch = await window.go.main.App.GetDeviceArchitecture(device)
-          const filteredPkgs = await window.go.main.App.GetPackages(device, info.firmware || '', arch)
-          setPackages(filteredPkgs || [])
-        } catch (err) {
-          debugLog('Failed to refresh device info after upgrade:', err)
-        }
-        await rescanAllPackages()
-        setRescanning(false)
-      }
-      setCommandRunning(false)
-      setCommandContext(null)
-      if (result.dnsError && !dnsErrorShown) {
-        const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
-        if (!currentProxyMode) {
-          setShowDnsErrorModal(true)
-          setDnsErrorShown(true)
-        }
-      }
-    })
-
-    const unsubscribePackageUpgradeComplete = window.runtime.EventsOn('package-upgrade:complete', async (...args: unknown[]) => {
-      const result = args[0] as { success: boolean; dnsError: boolean }
-      debugLog('Received package-upgrade:complete:', result)
-      if (result.success) {
-        setUpgradesAvailable(false)
-        setRescanning(true)
-        try {
-          const info = await window.go.main.App.GetDeviceInfo()
-          setDeviceInfo(info)
-          const arch = await window.go.main.App.GetDeviceArchitecture(device)
-          const filteredPkgs = await window.go.main.App.GetPackages(device, info.firmware || '', arch)
-          setPackages(filteredPkgs || [])
-        } catch (err) {
-          debugLog('Failed to refresh device info after package upgrade:', err)
-        }
-        await rescanAllPackages()
-        setRescanning(false)
-      }
-      const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-      setXochitlRunning(xochitlStatus.running)
-      setXoviActive(xochitlStatus.xoviActive)
-      setCommandRunning(false)
-      setCommandContext(null)
-      if (result.dnsError && !dnsErrorShown) {
-        const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
-        if (!currentProxyMode) {
-          setShowDnsErrorModal(true)
-          setDnsErrorShown(true)
-        }
-      }
-    })
-
-    const unsubscribeSystemTaskComplete = window.runtime.EventsOn('systemtask:complete', async (...args: unknown[]) => {
-      const success = args[0] as boolean
-      debugLog('Received systemtask:complete:', success)
-
-      const [hashtabStatus, tzStatus] = await Promise.all([
-        window.go.main.App.CheckHashtabVersion(),
-        window.go.main.App.GetTimezoneStatus(),
-      ])
-      let updateStatus = await window.go.main.App.GetUpdateServiceStatus()
-      const maxAttempts = 6
-      for (let i = 0; i < maxAttempts && updateStatus.enabled !== updateStatus.running; i++) {
-        await new Promise(r => setTimeout(r, 500))
-        updateStatus = await window.go.main.App.GetUpdateServiceStatus()
-      }
-      setUpdateServiceStatus(updateStatus)
-      const xochitlStatus = await window.go.main.App.GetXochitlStatus()
-      setXochitlRunning(xochitlStatus.running)
-      setXoviActive(xochitlStatus.xoviActive)
-      if (hashtabStatus.needsRebuild) {
-        setHashtabMismatch(hashtabStatus)
-      } else {
-        setHashtabMismatch(null)
-      }
-      setHashtabMissing(!hashtabStatus.installed && installedPackages.has('qt-resource-rebuilder'))
-      if (tzStatus.needsUpdate) {
-        setTimezoneMismatch(tzStatus)
-      } else {
-        setTimezoneMismatch(null)
-      }
-      if (tzStatus.deviceTimezone) {
-        setDeviceTimezone(tzStatus.deviceTimezone)
-        if (!selectedTimezone) {
-          setSelectedTimezone(tzStatus.savedTimezone || tzStatus.deviceTimezone)
-        }
-      }
-      runningSystemTaskRef.current = null
-      setCommandRunning(false)
-      setRunningSystemTask(null)
-    })
-
-
-    const unsubscribeConnectionLost = window.runtime.EventsOn('connection:lost', (...args: unknown[]) => {
-      const data = args[0] as { reason: string; code?: string; deviceId: string }
-      debugLog('Received connection:lost:', data)
-      resetOperationState()
-      setConnectionStatus('lost')
-      setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
-    })
-
-    const unsubscribeConnectionReconnecting = window.runtime.EventsOn('connection:reconnecting', (...args: unknown[]) => {
-      const data = args[0] as { attempt: number; maxAttempts: number; deviceId: string }
-      debugLog('Received connection:reconnecting:', data)
-      setConnectionStatus('reconnecting')
-      setReconnectAttempt(data.attempt)
-      setReconnectMaxAttempts(data.maxAttempts)
-    })
-
-    const unsubscribeConnectionRestored = window.runtime.EventsOn('connection:restored', async (...args: unknown[]) => {
-      const data = args[0] as { deviceId: string; device: string }
-      debugLog('Received connection:restored:', data)
-      resetOperationState()
-      setConnectionStatus('connected')
-
-      const deviceType = data.device || device
-      if (data.device) {
-        setDevice(data.device)
-      }
-
-      try {
-        await refreshDeviceState(deviceType)
-      } catch (err) {
-        debugLog('Failed to refresh device info on reconnect:', err)
-      }
-
-      await rescanAllPackages()
-    })
-
-    const unsubscribeConnectionFailed = window.runtime.EventsOn('connection:failed', (...args: unknown[]) => {
-      const data = args[0] as { reason: string; code?: string; deviceId: string }
-      debugLog('Received connection:failed:', data)
-      setConnectionStatus('failed')
-      setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
-    })
-
-    const unsubscribeFilesystemRestoreError = window.runtime.EventsOn('filesystem:restore-error', (...args: unknown[]) => {
-      const data = args[0] as { message: string }
-      debugLog('Received filesystem:restore-error:', data)
-      setShowFilesystemRestoreError(true)
-    })
-
-    const unsubscribeWriteableRootBusy = window.runtime.EventsOn('writeable-root:busy', (...args: unknown[]) => {
-      setWriteableRootBusy(args[0] as boolean)
-    })
-
-    const unsubscribeUpgradesAvailable = window.runtime.EventsOn('packages:upgrades-available', (...args: unknown[]) => {
-      const data = args[0] as { packages: string[] }
-      debugLog('Received packages:upgrades-available:', data)
-      setUpgradesAvailable(true)
-      toast.info(`${data.packages.length} package upgrade${data.packages.length !== 1 ? 's' : ''} available`, {
-        action: {
-          label: 'Go to Maintenance',
-          onClick: () => setActiveTab('maintenance'),
-        },
-        duration: 6000,
-      })
-    })
-
-    return () => {
-      unsubscribeOutput()
-      unsubscribeDone()
-      unsubscribeProgress()
-      unsubscribeComplete()
-      unsubscribeDialog()
-      unsubscribeHookStarted()
-      unsubscribeBootstrapPrompt()
-      unsubscribeBootstrapStart()
-      unsubscribeBootstrapOutput()
-      unsubscribeBootstrapComplete()
-      unsubscribeBootstrapError()
-      unsubscribeVellumReady()
-      unsubscribeVellumUninstallStart()
-      unsubscribeVellumUninstallOutput()
-      unsubscribeVellumUninstallComplete()
-      unsubscribeVellumUninstallError()
-      unsubscribeBrokenInstall()
-      unsubscribeCleanupStart()
-      unsubscribeCleanupComplete()
-      unsubscribeCleanupError()
-      unsubscribeConnectWarnings()
-      unsubscribeGuideOffer()
-      unsubscribeTimezoneComplete()
-      unsubscribeTimezoneError()
-      unsubscribeUpgradeBlocked()
-      unsubscribeUpgradeError()
-      unsubscribeUpgradeComplete()
-      unsubscribePackageUpgradeComplete()
-      unsubscribeSystemTaskComplete()
-      unsubscribeConnectionLost()
-      unsubscribeConnectionReconnecting()
-      unsubscribeConnectionRestored()
-      unsubscribeConnectionFailed()
-      unsubscribeFilesystemRestoreError()
-      unsubscribeWriteableRootBusy()
-      unsubscribeUpgradesAvailable()
-    }
-  }, [])
 
   useEffect(() => {
     if (pendingXoviInfo === null) {
@@ -1539,83 +688,6 @@ export default function App() {
     }
   }, [pendingXoviInfo])
 
-
-  const handleConnect = async (saveAfterConnect: boolean) => {
-    const thisAttempt = ++connectAttemptRef.current
-    setConnecting(true)
-
-    try {
-      let result
-      if (authType === 'agent') {
-        result = await window.go.main.App.ConnectWithAgent(host)
-      } else if (authType === 'key') {
-        result = await window.go.main.App.ConnectWithKey(host, selectedKey, keyPassphrase)
-      } else {
-        result = await window.go.main.App.Connect(host, password)
-      }
-
-      if (thisAttempt !== connectAttemptRef.current) {
-        return
-      }
-
-      if (result.success) {
-        const deviceType = result.device || 'unknown'
-        setDevice(deviceType)
-        await refreshDeviceState(deviceType)
-
-        if (saveAfterConnect) {
-          const info = await window.go.main.App.GetDeviceInfo()
-          const displayName = info.machine || ''
-          setDeviceName(displayName || host)
-          setShowSaveDeviceDialog(true)
-        }
-
-        setStep('select')
-        setShowAddForm(false)
-      } else {
-        toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
-      }
-    } catch (err) {
-      if (thisAttempt !== connectAttemptRef.current) {
-        return
-      }
-      toast.error(handleError(err, 'Connection'))
-    } finally {
-      if (thisAttempt === connectAttemptRef.current) {
-        setConnecting(false)
-      }
-    }
-  }
-
-  const handleSaveDevice = async () => {
-    setSaveDeviceError('')
-    try {
-      const pw = authType === 'password' ? password : ''
-      const kp = authType === 'key' ? selectedKey : ''
-      const kpp = authType === 'key' ? keyPassphrase : ''
-
-      await window.go.main.App.SaveDevice('', deviceName, host, authType, pw, kp, kpp)
-
-
-      const devices = await window.go.main.App.GetSavedDevices()
-      setSavedDevices(devices || [])
-
-      setShowSaveDeviceDialog(false)
-    } catch (err) {
-      const friendlyMessage = handleError(err, 'Save device')
-      if (friendlyMessage.includes('keyring')) {
-        const devices = await window.go.main.App.GetSavedDevices()
-        setSavedDevices(devices || [])
-      }
-      setSaveDeviceError(friendlyMessage)
-    }
-  }
-
-  const handleCancelConnect = async () => {
-    connectAttemptRef.current++
-    await window.go.main.App.CancelConnect()
-    setConnecting(false)
-  }
 
   const handleDisconnect = async () => {
     await window.go.main.App.Disconnect()
@@ -1641,26 +713,6 @@ export default function App() {
       setVellumUninstallError(null)
       setVellumUninstallSuccess(false)
     }
-  }
-
-  const handleFilesystemRestoreRetry = async () => {
-    setIsRetryingFilesystemRestore(true)
-    try {
-      await window.go.main.App.RetryRestoreFilesystem()
-      setShowFilesystemRestoreError(false)
-    } catch (err) {
-      debugLog('Filesystem restore retry failed:', err)
-    }
-    setIsRetryingFilesystemRestore(false)
-  }
-
-  const handleFilesystemRestoreReboot = async () => {
-    await window.go.main.App.RebootDevice()
-    setShowFilesystemRestoreError(false)
-  }
-
-  const handleFilesystemRestoreDismiss = () => {
-    setShowFilesystemRestoreError(false)
   }
 
   const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newPreventSleep: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string, newCheckForUpdates: boolean, newSSHAgentSocketPath: string) => {
@@ -1708,62 +760,6 @@ export default function App() {
   }
 
 
-  const getConflict = (pkg: PackageInfo): string | null => {
-    for (const conflict of pkg.conflicts) {
-      if (installedPackages.has(conflict)) {
-        return `Conflicts with installed: ${conflict}`
-      }
-      if (installQueue.has(conflict)) {
-        return `Conflicts with queued: ${conflict}`
-      }
-    }
-    for (const queuedName of installQueue) {
-      const queuedPkg = packages.find(p => p.name === queuedName)
-      if (queuedPkg?.conflicts.includes(pkg.name)) {
-        return `Conflicts with queued: ${queuedName}`
-      }
-    }
-    return null
-  }
-
-  const addToQueue = (name: string) => {
-    if (uninstallQueue.has(name)) {
-      setQueueError(`Cannot add — ${name} is queued for removal`)
-      setTimeout(() => setQueueError(null), 4000)
-      return
-    }
-
-    const newQueue = new Set(installQueue)
-    newQueue.add(name)
-    setInstallQueue(newQueue)
-  }
-
-  const removeFromQueue = (name: string) => {
-    const newQueue = new Set(installQueue)
-    newQueue.delete(name)
-    setInstallQueue(newQueue)
-  }
-
-  const confirmOrphanRemoval = (removeOrphans: boolean) => {
-    if (!pendingOrphanRemoval) return
-
-    const newQueue = new Set(installQueue)
-    newQueue.delete(pendingOrphanRemoval.itemToRemove)
-
-    if (removeOrphans) {
-      for (const orphan of pendingOrphanRemoval.orphans) {
-        newQueue.delete(orphan.id)
-      }
-    }
-
-    setInstallQueue(newQueue)
-    setPendingOrphanRemoval(null)
-  }
-
-  const clearQueue = () => {
-    setInstallQueue(new Set())
-  }
-
   const handleInstallQueue = async (allPackages?: string[]) => {
     const toInstall = allPackages || Array.from(installQueue).filter((name) => !installedPackages.has(name))
 
@@ -1784,44 +780,6 @@ export default function App() {
 
     await window.go.main.App.InstallPackages(toInstall, device)
     setInstallQueue(new Set())
-  }
-
-  const addToUninstallQueue = (name: string) => {
-    if (installQueue.has(name)) {
-      setQueueError(`Cannot remove — ${name} is queued for installation`)
-      setTimeout(() => setQueueError(null), 4000)
-      return
-    }
-
-    const newQueue = new Set(uninstallQueue)
-    newQueue.add(name)
-    setUninstallQueue(newQueue)
-  }
-
-  const confirmUninstallWithDependents = (includeAll: boolean) => {
-    if (!pendingUninstall) return
-
-    const newQueue = new Set(uninstallQueue)
-    for (const id of pendingUninstall.componentIds) {
-      newQueue.add(id)
-    }
-    if (includeAll) {
-      for (const dep of pendingUninstall.dependents) {
-        newQueue.add(dep.id)
-      }
-    }
-    setUninstallQueue(newQueue)
-    setPendingUninstall(null)
-  }
-
-  const removeFromUninstallQueue = (id: string) => {
-    const newQueue = new Set(uninstallQueue)
-    newQueue.delete(id)
-    setUninstallQueue(newQueue)
-  }
-
-  const clearUninstallQueue = () => {
-    setUninstallQueue(new Set())
   }
 
   const handleUninstallQueue = async (allPackages?: string[]) => {
@@ -1846,61 +804,13 @@ export default function App() {
     setUninstallQueue(new Set())
   }
 
-  const rescanAllPackages = async () => {
-    try {
-      const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
-      setInstalledPackages(new Map(Object.entries(installedVersions || {})))
-      return true
-    } catch (err) {
-      console.error('Failed to rescan package status:', err)
-      return false
-    }
-  }
 
-  const handleViewReadme = (url: string) => {
-    const isMarkdown = url.endsWith('.md') || new URL(url).hostname === 'raw.githubusercontent.com'
-    if (isMarkdown) {
-      setReadmeUrl(url)
-      setReadmePackageName(selectedPackage?.name || '')
-      setReadmeDialogOpen(true)
-    } else {
-      window.runtime.BrowserOpenURL(url)
-    }
-  }
+  const selectPackageForOSRef = useRef<((name: string, targetOS: string, isCompatible?: boolean) => Promise<void>) | null>(null)
 
   const handleSelectPackageForOS = async (name: string, targetOS: string, isCompatible: boolean = true) => {
-    try {
-      const arch = await window.go.main.App.GetDeviceArchitecture(device)
-      let pkg = await window.go.main.App.GetPackageForOS(name, targetOS, device, arch)
-      if (!pkg) {
-        pkg = packages.find(p => p.name === name) || null
-      }
-      if (pkg) {
-        setSidebarViewOnly(true)
-        setSidebarIncompatible(!isCompatible)
-        setSelectedPackage(pkg)
-      }
-    } catch (err) {
-      console.error('Failed to get package for OS:', err)
+    if (selectPackageForOSRef.current) {
+      await selectPackageForOSRef.current(name, targetOS, isCompatible)
     }
-  }
-
-  const handleRefreshPackages = async () => {
-    setRefreshingPackages(true)
-    try {
-      await window.go.main.App.RefreshMetadata()
-      if (device) {
-        const info = await window.go.main.App.GetDeviceInfo()
-        setDeviceInfo(info)
-        const arch = await window.go.main.App.GetDeviceArchitecture(device)
-        const filteredPkgs = await window.go.main.App.GetPackages(device, info.firmware || '', arch)
-        setPackages(filteredPkgs || [])
-      }
-      await rescanAllPackages()
-    } catch (err) {
-      console.error('Failed to refresh packages:', err)
-    }
-    setRefreshingPackages(false)
   }
 
   const handleTabChange = async (value: 'mods' | 'maintenance' | 'utilities') => {
@@ -1915,12 +825,7 @@ export default function App() {
 
   const handleRunReenable = async () => {
     setRunningReenable(true)
-    setShowProgressModal(true)
-    setProgressModalType('maintenance')
-    setProgressPercentage(0)
-    setCommandRunning(true)
-    setMaintenanceOutput('')
-    setCommandContext('maintenance')
+    startMaintenanceOperation()
 
     await window.go.main.App.RunReenable()
 
@@ -1932,32 +837,6 @@ export default function App() {
     setCommandRunning(false)
     setCommandContext(null)
     setOsUpgradeDetected(false)
-  }
-
-  const handleCheckUpgrades = async () => {
-    setSimulatingUpgrade(true)
-    try {
-      const result = await window.go.main.App.SimulatePackageUpgrade()
-      if (result.hasUpgrades) {
-        setPendingPackageUpgrade(result.packages)
-      } else {
-        setShowNoUpgradesDialog(true)
-      }
-    } catch (err) {
-      console.error('Failed to check upgrades:', err)
-    } finally {
-      setSimulatingUpgrade(false)
-    }
-  }
-
-  const confirmPackageUpgrade = async () => {
-    setPendingPackageUpgrade(null)
-    setShowProgressModal(true)
-    setProgressModalType('maintenance')
-    setMaintenanceOutput('')
-    setCommandRunning(true)
-    setCommandContext('maintenance')
-    await window.go.main.App.RunPackageUpgrade()
   }
 
   const handleTimezoneChange = async (timezone: string) => {
@@ -1979,21 +858,13 @@ export default function App() {
     if (!selectedTimezone) return
     settingTimezoneRef.current = true
     setSettingTimezone(true)
-    setProgressModalType('maintenance')
-    setMaintenanceOutput('')
-    setCommandRunning(true)
-    setCommandContext('maintenance')
+    startMaintenanceOperation({ showModal: false, resetProgress: false })
     window.go.main.App.SetDeviceTimezone(selectedTimezone, device)
   }
 
   const handleChecklistUpgrade = async () => {
     setChecklistLoading(true)
-    setShowProgressModal(true)
-    setProgressModalType('maintenance')
-    setProgressPercentage(0)
-    setCommandRunning(true)
-    setMaintenanceOutput('')
-    setCommandContext('maintenance')
+    startMaintenanceOperation()
 
     await window.go.main.App.RunUpgrade()
   }
@@ -2010,11 +881,7 @@ export default function App() {
   const handleSystemTask = async (taskId: string) => {
     runningSystemTaskRef.current = taskId
     setRunningSystemTask(taskId)
-    setProgressModalType('maintenance')
-    setProgressPercentage(0)
-    setCommandRunning(true)
-    setMaintenanceOutput('')
-    setCommandContext('maintenance')
+    startMaintenanceOperation({ showModal: false })
 
     await window.go.main.App.RunSystemTask(taskId, device)
   }
@@ -2030,13 +897,10 @@ export default function App() {
       setCurrentRunningCommand({ componentId, commandId })
     }
     if (!cmd.hook) {
-      setShowProgressModal(true)
-      setProgressModalType('maintenance')
-      setProgressPercentage(0)
-      setCommandRunning(true)
-      setMaintenanceOutput('')
+      startMaintenanceOperation()
+    } else {
+      setCommandContext('maintenance')
     }
-    setCommandContext('maintenance')
 
     await window.go.main.App.RunMaintenanceCommand(componentId, commandId, device)
   }
@@ -2093,312 +957,66 @@ export default function App() {
     return ''
   }
 
+  const appContextValue = useMemo(() => ({
+    device,
+    deviceInfo,
+    connectionStatus,
+    connectionError,
+    connectedDeviceId,
+    installedPackages,
+    setInstalledPackages,
+    packages,
+    setPackages,
+    vellumInstalled,
+    setVellumInstalled,
+    commandRunning,
+    setCommandRunning,
+    installing,
+    uninstalling,
+    writeableRootBusy,
+    appVersion,
+    resolvedAppTheme,
+    resolvedTerminalTheme,
+    resolvedEditorTheme,
+    tabVisibility,
+    suppressSystemFileWarnings,
+    refreshDeviceState,
+    rescanAllPackages,
+    startMaintenanceOperation,
+    checkDnsProxyError,
+  }), [
+    device, deviceInfo, connectionStatus, connectionError, connectedDeviceId,
+    installedPackages, packages, vellumInstalled,
+    commandRunning, installing, uninstalling, writeableRootBusy,
+    appVersion, resolvedAppTheme, resolvedTerminalTheme, resolvedEditorTheme,
+    tabVisibility, suppressSystemFileWarnings,
+  ])
+
   return (
+    <AppProvider value={appContextValue}>
     <div className="min-h-screen p-6">
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">reManager</h1>
-            <p className="text-muted-foreground">Manage packages on your reMarkable</p>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            {device && deviceInfo.firmware && (
-              <span className="text-muted-foreground">
-                {deviceInfo.machine || device} ({deviceInfo.firmware})
-              </span>
-            )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="sm" onClick={() => setShowSettingsDialog(true)}>
-                  <Settings className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Settings</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="sm" onClick={() => setShowSupportBundles(true)}>
-                  <LifeBuoy className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Support</TooltipContent>
-            </Tooltip>
-            {device && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="sm" onClick={handleDisconnect}>
-                    <Unplug className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Disconnect</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          device={device}
+          deviceMachine={deviceInfo.machine}
+          firmware={deviceInfo.firmware}
+          onSettings={() => setShowSettingsDialog(true)}
+          onDisconnect={handleDisconnect}
+          onSupport={() => setShowSupportBundles(true)}
+        />
 
-        {step === 'connect' && (
-          <>
-            {/* Show saved devices list OR add form */}
-            {savedDevices.length > 0 && !showAddForm ? (
-              <div className="space-y-4">
-                <div className="flex justify-end">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setDeviceSortMode(m => m === 'recent' ? 'alpha' : 'recent')}
-                      >
-                        {deviceSortMode === 'recent' ? 'Recent' : 'A-Z'}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {deviceSortMode === 'recent' ? 'Sort alphabetically' : 'Sort by recent'}
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-                {sortedDevices.map((savedDevice) => (
-                  <Card key={savedDevice.id}>
-                    <CardContent className="pt-6">
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-1">
-                          <h3 className="font-semibold text-lg">{savedDevice.name}</h3>
-                          <p className="text-sm text-muted-foreground">{savedDevice.host}</p>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            onClick={() => handleEditDevice(savedDevice)}
-                            disabled={connecting}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() => handleDeleteClick(savedDevice.id)}
-                            disabled={connecting}
-                          >
-                            Remove
-                          </Button>
-                          {connecting && connectingDeviceId === savedDevice.id ? (
-                            <Button onClick={handleCancelConnect} variant="outline">
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Cancel
-                            </Button>
-                          ) : (
-                            <Button
-                              onClick={() => handleConnectToSavedDevice(savedDevice.id)}
-                              disabled={connecting}
-                            >
-                              Connect
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => setShowAddForm(true)}
-                >
-                  Add reMarkable
-                </Button>
-              </div>
-            ) : (
-              <Card>
-                <CardHeader>
-                  {editingDevice ? (
-                    <Input
-                      value={deviceName}
-                      onChange={(e) => setDeviceName(e.target.value)}
-                      placeholder="Device Name"
-                      className="text-2xl font-semibold h-auto py-1 px-2 -mx-2"
-                    />
-                  ) : (
-                    <CardTitle>Connect to reMarkable</CardTitle>
-                  )}
-                  <CardDescription>
-                    Find your IP and password in Settings - General - Help - Copyrights and licenses.
-                    <br />
-                    Paper Pro, Paper Pro Move, and Paper Pure require{' '}
-                    <button
-                      onClick={() => window.runtime.BrowserOpenURL('https://support.remarkable.com/s/article/Developer-mode')}
-                      className="underline hover:text-foreground">
-                      developer mode
-                    </button>{' '}
-                    to be enabled.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="host">IP Address</Label>
-                    <Input
-                      id="host"
-                      value={host}
-                      onChange={(e) => setHost(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !connecting) {
-                          const canConnect = authType === 'agent' ? true : authType === 'password' ? !!password : (!!selectedKey && selectedKey !== '__other__')
-                          if (canConnect) handleConnect(true)
-                        }
-                      }}
-                      placeholder="10.11.99.1"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Authentication</Label>
-                    <RadioGroup
-                      value={authType}
-                      onValueChange={(value) => setAuthType(value as 'password' | 'key' | 'agent')}
-                      className="flex gap-4"
-                    >
-                      <div className="flex items-center gap-2">
-                        <RadioGroupItem value="password" id="auth-password" />
-                        <Label htmlFor="auth-password" className="cursor-pointer font-normal">Password</Label>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <RadioGroupItem value="key" id="auth-key" />
-                        <Label htmlFor="auth-key" className="cursor-pointer font-normal">
-                          SSH Key
-                        </Label>
-                      </div>
-                      {sshAgentAvailable && (
-                        <div className="flex items-center gap-2">
-                          <RadioGroupItem value="agent" id="auth-agent" />
-                          <Label htmlFor="auth-agent" className="cursor-pointer font-normal">
-                            SSH Agent
-                          </Label>
-                        </div>
-                      )}
-                    </RadioGroup>
-                  </div>
-
-                  {authType === 'agent' ? (
-                    <p className="text-sm text-muted-foreground">
-                      Authentication will use keys from your running SSH agent.
-                    </p>
-                  ) : authType === 'password' ? (
-                    <div className="space-y-2">
-                      <Label htmlFor="password">SSH Password</Label>
-                      <div className="relative">
-                        <Input
-                          id="password"
-                          type={showPassword ? "text" : "password"}
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !connecting && password) {
-                              handleConnect(true)
-                            }
-                          }}
-                          placeholder="Enter SSH password"
-                          className="pr-10"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                        >
-                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="space-y-2">
-                        <Label htmlFor="sshKey">SSH Key</Label>
-                        <Select value={selectedKey} onValueChange={handleKeySelect}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select a key">
-                              {customKeyName || availableKeys.find(k => k.path === selectedKey)?.name || 'Select a key'}
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableKeys.map((key) => (
-                              <SelectItem key={key.path} value={key.path}>
-                                {key.name}
-                              </SelectItem>
-                            ))}
-                            <SelectItem value="__other__">Other...</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="keyPassphrase">Key Passphrase (if encrypted)</Label>
-                        <div className="relative">
-                          <Input
-                            id="keyPassphrase"
-                            type={showKeyPassphrase ? "text" : "password"}
-                            value={keyPassphrase}
-                            onChange={(e) => setKeyPassphrase(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && !connecting) {
-                                handleConnect(true)
-                              }
-                            }}
-                            placeholder="Leave empty if not encrypted"
-                            className="pr-10"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowKeyPassphrase(!showKeyPassphrase)}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                          >
-                            {showKeyPassphrase ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  <div className="flex justify-between">
-                    <div>
-                      {savedDevices.length > 0 && (
-                        <Button variant="outline" onClick={handleCancelForm} disabled={connecting}>
-                          Cancel
-                        </Button>
-                      )}
-                    </div>
-                    <div className="flex gap-2">
-                      {connecting ? (
-                        <Button onClick={handleCancelConnect} variant="outline">
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Cancel
-                        </Button>
-                      ) : editingDevice ? (
-                        <Button
-                          onClick={handleSaveEditedDevice}
-                          disabled={!deviceName.trim() || (authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey)}
-                        >
-                          Save
-                        </Button>
-                      ) : (
-                        <>
-                          <Button
-                            variant="outline"
-                            onClick={() => handleConnect(false)}
-                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey}
-                          >
-                            Connect
-                          </Button>
-                          <Button
-                            onClick={() => handleConnect(true)}
-                            disabled={authType === 'agent' ? false : authType === 'password' ? !password : !selectedKey}
-                          >
-                            Save and Connect
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </>
-        )}
+        <ConnectPage
+          step={step}
+          setStep={setStep}
+          savedDevices={savedDevices}
+          setSavedDevices={setSavedDevices}
+          setDevice={setDevice}
+          deviceInfo={deviceInfo}
+          setConnectedDeviceId={setConnectedDeviceId}
+          onConnected={refreshDeviceState}
+          initialKeys={availableKeys}
+          initialAgentAvailable={sshAgentAvailable}
+        />
 
         {/* Connection Status Banner */}
         {step !== 'connect' && connectionStatus !== 'connected' && (
@@ -2538,1025 +1156,76 @@ export default function App() {
             </TabsList>
 
             {tabVisibility.mods && (
-            <TabsContent value="mods">
-              {vellumInstalled === null || (vellumInstalled && !warningsChecked) ? (
-                <div className="space-y-6">
-                  <div className="flex flex-wrap gap-2">
-                    <Skeleton className="h-9 flex-1 min-w-[200px]" />
-                    <Skeleton className="h-9 w-9" />
-                    <Skeleton className="h-9 w-32" />
-                    <Skeleton className="h-9 w-32" />
-                  </div>
-                  <Card>
-                    <div className="px-6 py-4">
-                      <Skeleton className="h-4 w-32" />
-                    </div>
-                    <div className="divide-y px-6 pb-4">
-                      {Array.from({ length: 8 }).map((_, i) => (
-                        <div key={i} className="py-3 flex items-center gap-4">
-                          <div className="flex-1 min-w-0">
-                            {viewMode === 'compact' ? (
-                              <div className="flex items-center gap-2">
-                                <Skeleton className="h-4 w-[160px] shrink-0" />
-                                <Skeleton className="h-4 flex-1" />
-                              </div>
-                            ) : (
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-2">
-                                  <Skeleton className="h-4 w-32" />
-                                  <Skeleton className="h-5 w-16 rounded-full" />
-                                </div>
-                                <Skeleton className="h-4 w-3/4" />
-                              </div>
-                            )}
-                          </div>
-                          <Skeleton className="h-8 w-20 shrink-0" />
-                        </div>
-                      ))}
-                    </div>
-                  </Card>
-                </div>
-              ) : vellumBrokenInstall !== null ? (
-                <Card>
-                  <CardHeader>
-                    <div className="flex items-center gap-2">
-                      <AlertCircle className="h-5 w-5 text-destructive" />
-                      <CardTitle>Vellum Installation Incomplete</CardTitle>
-                    </div>
-                    <CardDescription>
-                      Your Vellum installation is missing core packages and needs to be reinstalled.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <p className="text-sm text-muted-foreground">
-                      Missing packages: {vellumBrokenInstall.join(', ')}
-                    </p>
-                    <div className="flex justify-end pt-2">
-                      <Button
-                        onClick={() => window.go.main.App.CleanupBrokenVellum()}
-                        disabled={vellumCleaning}
-                      >
-                        {vellumCleaning ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Cleaning up...
-                          </>
-                        ) : (
-                          'Clean up and reinstall'
-                        )}
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ) : vellumInstalled === false ? (
-                <VellumInstallPrompt
-                  bootstrapping={bootstrapping}
-                  bootstrapOutput={bootstrapOutput}
-                  bootstrapError={bootstrapError}
-                  onInstall={() => window.go.main.App.BootstrapVellum()}
-                  terminalTheme={resolvedTerminalTheme}
-                />
-              ) : osMismatchDetected ? (
-                <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
-                  {compatibilityStatus ? (
-                    <UpgradeChecklist
-                      storedOsVersion={compatibilityStatus.storedOsVersion || storedOsVersion}
-                      currentOsVersion={compatibilityStatus.currentOsVersion || currentOsVersion}
-                      compatiblePackages={compatibilityStatus.compatiblePackages || []}
-                      incompatiblePackages={compatibilityStatus.incompatiblePackages || []}
-                      loading={checklistLoading}
-                      fetchFailed={compatibilityStatus.fetchFailed || false}
-                      uninstallQueue={uninstallQueue}
-                      onAddToUninstallQueue={addToUninstallQueue}
-                      onRemoveFromUninstallQueue={removeFromUninstallQueue}
-                      onRunUpgrade={handleChecklistUpgrade}
-                      onGoToUtilities={() => setActiveTab('utilities')}
-                      onSelectPackage={handleSelectPackageForOS}
-                      statusMap={compatibilityStatus.statusMap}
-                    />
-                  ) : (
-                    <Card>
-                      <CardHeader>
-                        <div className="flex items-center gap-2">
-                          <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                          <CardTitle>OS Change Detected</CardTitle>
-                        </div>
-                        <CardDescription>
-                          Your reMarkable OS has changed from {storedOsVersion} to {currentOsVersion}.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Checking package compatibility...
-                        </div>
-                      </CardContent>
-                    </Card>
-                  )}
-                </div>
-              ) : (
-              <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
-                  {/* Filters */}
-                  <div className="flex flex-wrap gap-2">
-                    <div className="flex gap-2 w-full md:contents">
-                      <div className="relative flex-1">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          placeholder="Search mods..."
-                          value={search}
-                          onChange={(e) => setSearch(e.target.value)}
-                          className={`pl-9 ${search ? 'pr-8' : ''}`}
-                        />
-                        {search && (
-                          <button
-                            onClick={() => setSearch('')}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="md:order-last"
-                            onClick={handleRefreshPackages}
-                            disabled={refreshingPackages}
-                          >
-                            {refreshingPackages ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <RefreshCw className="h-4 w-4" />
-                            )}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Refresh package list</TooltipContent>
-                      </Tooltip>
-                    </div>
-                    <div className="flex gap-2 w-full md:contents">
-                      <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                        <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
-                          <SelectValue placeholder="Category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All Categories</SelectItem>
-                          {categories.map((cat) => (
-                            <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Select value={developerFilter} onValueChange={setDeveloperFilter}>
-                        <SelectTrigger className="flex-1 md:flex-none md:w-[160px]">
-                          <SelectValue placeholder="Developer" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All Developers</SelectItem>
-                          {developers.map((dev) => (
-                            <SelectItem key={dev} value={dev}>{dev}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Select value={viewMode} onValueChange={(v) => setViewMode(v as 'full' | 'compact')}>
-                        <SelectTrigger className="flex-1 md:flex-none md:w-[120px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="full">Full</SelectItem>
-                          <SelectItem value="compact">Compact</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  {/* Installed Section */}
-                  {installedFiltered.length > 0 && (
-                    <Card>
-                      <Accordion type="single" collapsible defaultValue="installed">
-                        <AccordionItem value="installed" className="border-none">
-                          <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
-                            Installed ({installedFiltered.length})
-                          </AccordionTrigger>
-                          <AccordionContent>
-                            <div className="divide-y px-6 pb-4">
-                              {installedFiltered.map((pkg, index) => {
-                                const isQueued = uninstallQueue.has(pkg.name)
-                                const prevQueued = index > 0 && uninstallQueue.has(installedFiltered[index - 1].name)
-                                const nextQueued = index < installedFiltered.length - 1 && uninstallQueue.has(installedFiltered[index + 1].name)
-                                const row = (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${isQueued ? `border-l-4 border-destructive pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : !pkg.compatible ? 'border-l-4 border-yellow-500 pl-3 border-t border-t-yellow-500' : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
-                                  <div
-                                    className="flex-1 min-w-0 cursor-pointer"
-                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(!pkg.compatible); setSelectedPackage(pkg) }}
-                                  >
-                                    {viewMode === 'compact' ? (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0">
-                                          <span className="font-medium truncate block">{pkg.name}</span>
-                                          <StatusBadge status={pkg.status} />
-                                        </div>
-                                        <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
-                                      </div>
-                                    ) : (
-                                      <>
-                                        <div className="flex items-center gap-2">
-                                          <span className="font-medium">{pkg.name}</span>
-                                          {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
-                                          <StatusBadge status={pkg.status} />
-                                        </div>
-                                        <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
-                                        {pkg.upstreamAuthor && (
-                                          <span className="text-sm text-muted-foreground">
-                                            by {pkg.upstreamAuthor}
-                                          </span>
-                                        )}
-                                      </>
-                                    )}
-                                  </div>
-                                  {isQueued ? (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => removeFromUninstallQueue(pkg.name)}
-                                    >
-                                      <Check className="h-4 w-4 mr-1" />
-                                      Queued
-                                    </Button>
-                                  ) : (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => addToUninstallQueue(pkg.name)}
-                                      disabled={installing || uninstalling || connectionStatus !== 'connected'}
-                                    >
-                                      <Trash2 className="h-4 w-4 mr-1" />
-                                      Remove
-                                    </Button>
-                                  )}
-                                  </div>
-                                )
-                                return !pkg.compatible ? (
-                                  <Tooltip key={pkg.name}>
-                                    <TooltipTrigger asChild>{row}</TooltipTrigger>
-                                    <TooltipContent>{pkg.incompatibleReason === 'device' ? 'Does not support your reMarkable model' : 'Does not support your current OS'}</TooltipContent>
-                                  </Tooltip>
-                                ) : row
-                              })}
-                            </div>
-                          </AccordionContent>
-                        </AccordionItem>
-                      </Accordion>
-                    </Card>
-                  )}
-
-                  {/* Available Section */}
-                  {availableFiltered.length > 0 && (
-                    <Card>
-                      <Accordion type="single" collapsible defaultValue="available">
-                        <AccordionItem value="available" className="border-none">
-                          <AccordionTrigger className="px-6 py-4 text-sm font-semibold uppercase tracking-wide hover:no-underline">
-                            Available ({availableFiltered.filter(p => p.compatible).length}{availableFiltered.some(p => !p.compatible) && ` · ${availableFiltered.filter(p => !p.compatible).length} incompatible`})
-                          </AccordionTrigger>
-                          <AccordionContent>
-                            <div className="divide-y px-6 pb-4">
-                              {availableFiltered.map((pkg, index) => {
-                                const isQueued = installQueue.has(pkg.name)
-                                const prevQueued = index > 0 && installQueue.has(availableFiltered[index - 1].name)
-                                const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
-                                const conflict = getConflict(pkg)
-                                return (
-                                  <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
-                                  <div
-                                    className="flex-1 min-w-0 cursor-pointer"
-                                    onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(!pkg.compatible); setSelectedPackage(pkg) }}
-                                  >
-                                    {viewMode === 'compact' ? (
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-[120px] md:w-[160px] lg:w-[200px] xl:w-[240px] shrink-0">
-                                          <span className="font-medium truncate block">{pkg.name}</span>
-                                          <StatusBadge status={pkg.status} />
-                                        </div>
-                                        <span className="text-sm text-muted-foreground truncate">{pkg.description}</span>
-                                      </div>
-                                    ) : (
-                                      <>
-                                        <div className="flex items-center gap-2">
-                                          <span className="font-medium">{pkg.name}</span>
-                                          {(pkg.categories || []).map(cat => <Badge key={cat} variant="outline">{cat}</Badge>)}
-                                          <StatusBadge status={pkg.status} />
-                                        </div>
-                                        <p className="text-sm text-muted-foreground mt-1">{pkg.description}</p>
-                                        {pkg.upstreamAuthor && (
-                                          <span className="text-sm text-muted-foreground">
-                                            by {pkg.upstreamAuthor}
-                                          </span>
-                                        )}
-                                      </>
-                                    )}
-                                  </div>
-                                  {!pkg.compatible ? (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <span>
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            disabled
-                                          >
-                                            Incompatible
-                                          </Button>
-                                        </span>
-                                      </TooltipTrigger>
-                                      <TooltipContent>{pkg.incompatibleReason === 'device' ? 'Does not support your reMarkable model' : 'Does not support your current OS'}</TooltipContent>
-                                    </Tooltip>
-                                  ) : isQueued ? (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => removeFromQueue(pkg.name)}
-                                    >
-                                      <Check className="h-4 w-4 mr-1" />
-                                      Queued
-                                    </Button>
-                                  ) : conflict ? (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <span>
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            disabled
-                                          >
-                                            <Plus className="h-4 w-4 mr-1" />
-                                            Add
-                                          </Button>
-                                        </span>
-                                      </TooltipTrigger>
-                                      <TooltipContent>{conflict}</TooltipContent>
-                                    </Tooltip>
-                                  ) : (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => addToQueue(pkg.name)}
-                                      disabled={installing || uninstalling || connectionStatus !== 'connected'}
-                                    >
-                                      <Plus className="h-4 w-4 mr-1" />
-                                      Add
-                                    </Button>
-                                  )}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        </AccordionContent>
-                        </AccordionItem>
-                      </Accordion>
-                    </Card>
-                  )}
-
-                  {filteredPackages.length === 0 && (
-                    <p className="text-center text-muted-foreground py-8">
-                      {packages.length === 0 ? 'No mods available' : 'No mods match your filters'}
-                    </p>
-                  )}
-
-                  {/* Queue Error */}
-                  {queueError && (
-                    <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-lg text-sm">
-                      {queueError}
-                    </div>
-                  )}
-                </div>
-              )}
-            </TabsContent>
+              <ModsTab
+                warningsChecked={warningsChecked}
+                osMismatchDetected={osMismatchDetected}
+                storedOsVersion={storedOsVersion}
+                currentOsVersion={currentOsVersion}
+                checklistLoading={checklistLoading}
+                compatibilityStatus={compatibilityStatus}
+                bootstrapping={bootstrapping}
+                bootstrapOutput={bootstrapOutput}
+                bootstrapError={bootstrapError}
+                vellumBrokenInstall={vellumBrokenInstall}
+                vellumCleaning={vellumCleaning}
+                installQueue={installQueue}
+                setInstallQueue={setInstallQueue}
+                uninstallQueue={uninstallQueue}
+                setUninstallQueue={setUninstallQueue}
+                queueError={queueError}
+                setQueueError={setQueueError}
+                refreshingPackages={refreshingPackages}
+                setRefreshingPackages={setRefreshingPackages}
+                setPendingInstallConfirm={setPendingInstallConfirm}
+                setPendingUninstallConfirm={setPendingUninstallConfirm}
+                setActiveTab={setActiveTab}
+                handleChecklistUpgrade={handleChecklistUpgrade}
+                selectPackageForOSRef={selectPackageForOSRef}
+              />
             )}
 
-            <TabsContent value="maintenance">
-              <div className="space-y-6">
-                {/* System Commands Section */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>System Commands</CardTitle>
-                    <CardDescription>Device-level maintenance tasks</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {/* Auto-Update Status */}
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">Auto-Update Status:</span>
-                        <Badge variant={updateServiceStatus.enabled ? 'default' : 'secondary'}>
-                          {updateServiceStatus.enabled ? 'Enabled' : 'Disabled'}
-                        </Badge>
-                        <Badge variant={updateServiceStatus.running ? 'default' : 'secondary'}>
-                          {updateServiceStatus.running ? 'Running' : 'Stopped'}
-                        </Badge>
-                      </div>
 
-                      <div className="grid grid-cols-2 gap-4">
-                        {systemTasks.map((task) => {
-                          const isEnableDisabled = task.id === 'enable-updates' && updateServiceStatus.enabled && updateServiceStatus.running
-                          const isDisableDisabled = task.id === 'disable-updates' && !updateServiceStatus.enabled && !updateServiceStatus.running
-                          const shouldHighlight = (task.id === 'disable-updates' && updateServiceStatus.enabled) || (task.id === 'restart-xochitl' && !xochitlRunning)
-                          const isRunning = runningSystemTask === task.id
-                          return (
-                            <Button
-                              key={task.id}
-                              onClick={() => handleSystemTask(task.id)}
-                              disabled={commandRunning || isEnableDisabled || isDisableDisabled || connectionStatus !== 'connected' || (task.needsWriteableRoot && writeableRootBusy)}
-                              variant={shouldHighlight ? 'default' : 'outline'}
-                            >
-                              {isRunning ? (
-                                <>
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  {task.label}
-                                </>
-                              ) : (
-                                task.label
-                              )}
-                            </Button>
-                          )
-                        })}
-                      </div>
-
-                      {/* Timezone */}
-                      <div className="grid grid-cols-2 gap-4 pt-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium whitespace-nowrap">Timezone:</span>
-                          <TimezoneCombobox
-                            value={selectedTimezone || timezoneMismatch?.deviceTimezone || ''}
-                            onChange={handleTimezoneChange}
-                            disabled={connectionStatus !== 'connected'}
-                          />
-                        </div>
-                        <Button
-                          onClick={handleSetTimezone}
-                          disabled={settingTimezone || connectionStatus !== 'connected' || !selectedTimezone || selectedTimezone === deviceTimezone || writeableRootBusy}
-                          variant={timezoneMismatch?.needsUpdate ? 'default' : 'outline'}
-                        >
-                          {settingTimezone ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Set Timezone
-                            </>
-                          ) : (
-                            'Set Timezone'
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Package Maintenance Section */}
-                {vellumInstalled && (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Package Maintenance</CardTitle>
-                      <CardDescription>Package-specific commands</CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      {/* Vellum Commands */}
-                      <div>
-                        <h4 className="font-medium">Vellum</h4>
-                        <p className="text-sm text-muted-foreground mb-2">Package manager for reMarkable tablets</p>
-                        <div className="grid grid-cols-3 gap-2">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                onClick={handleRunReenable}
-                                disabled={commandRunning || runningReenable || connectionStatus !== 'connected' || reenableStatus === 'unneeded' || writeableRootBusy}
-                                variant={reenableStatus === 'needed' ? 'default' : 'outline'}
-                                size="sm"
-                                className="flex-1"
-                              >
-                                Reenable
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Reenable packages that modify the system partition</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                onClick={handleCheckUpgrades}
-                                disabled={commandRunning || simulatingUpgrade || connectionStatus !== 'connected'}
-                                variant={upgradesAvailable ? 'default' : 'outline'}
-                                size="sm"
-                                className="flex-1"
-                              >
-                                {simulatingUpgrade ? 'Checking...' : 'Upgrade'}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Check for and install package updates</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                onClick={() => setShowCheckOSDialog(true)}
-                                disabled={connectionStatus !== 'connected'}
-                                variant="outline"
-                                size="sm"
-                                className="flex-1"
-                              >
-                                Check OS
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Check package compatibility with a target OS version</TooltipContent>
-                          </Tooltip>
-                        </div>
-                      </div>
-
-                      {/* Separator if there are package commands */}
-                      {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length > 0 && (
-                        <div className="border-t" />
-                      )}
-
-                      {/* Package-specific Commands */}
-                      {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length > 0 && (
-                        <div className="space-y-4">
-                          {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]).sort((a, b) => a.name.localeCompare(b.name)).map((pkg) => (
-                            <div key={pkg.name}>
-                              <h4 className="font-medium">{pkg.name}</h4>
-                              {pkg.description && <p className="text-sm text-muted-foreground mb-2">{pkg.description}</p>}
-                              <div className="grid grid-cols-3 gap-2">
-                                {maintenanceCommands[pkg.name]?.map((cmd) => {
-                                  const isRunning = currentRunningCommand?.componentId === pkg.name &&
-                                                   currentRunningCommand?.commandId === cmd.id
-                                  const isHashtabRebuild = pkg.name === 'qt-resource-rebuilder' && cmd.id === 'rebuild_hashtable'
-                                  const isXoviStart = pkg.name === 'xovi' && cmd.id === 'start'
-                                  const xoviNeedsStart = isXoviStart && xochitlRunning && !xoviActive
-                                  const shouldHighlight = (isHashtabRebuild && (hashtabMismatch || hashtabMissing)) || (xoviNeedsStart && !hashtabMismatch && !hashtabMissing)
-                                  const isDisabledByMismatch = isXoviStart && (!!hashtabMismatch || hashtabMissing)
-
-                                  return (
-                                    <div key={cmd.id} className="flex gap-2">
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <Button
-                                            onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
-                                            disabled={isDisabledByMismatch || (commandRunning && !isRunning) || connectionStatus !== 'connected' || writeableRootBusy}
-                                            variant={shouldHighlight ? 'default' : 'outline'}
-                                            size="sm"
-                                            className="flex-1"
-                                          >
-                                            {cmd.label}
-                                          </Button>
-                                        </TooltipTrigger>
-                                        {cmd.description && (
-                                          <TooltipContent>{cmd.description}</TooltipContent>
-                                        )}
-                                      </Tooltip>
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                )}
-              </div>
-            </TabsContent>
+            <MaintenanceTab
+              systemTasks={systemTasks}
+              maintenanceCommands={maintenanceCommands}
+              updateServiceStatus={updateServiceStatus}
+              xochitlRunning={xochitlRunning}
+              xoviActive={xoviActive}
+              hashtabMismatch={hashtabMismatch}
+              hashtabMissing={hashtabMissing}
+              reenableStatus={reenableStatus}
+              upgradesAvailable={upgradesAvailable}
+              timezoneMismatch={timezoneMismatch}
+              selectedTimezone={selectedTimezone}
+              deviceTimezone={deviceTimezone}
+              runningSystemTask={runningSystemTask}
+              currentRunningCommand={currentRunningCommand}
+              settingTimezone={settingTimezone}
+              showStartUIDialog={showStartUIDialog}
+              setShowStartUIDialog={setShowStartUIDialog}
+              handleSystemTask={handleSystemTask}
+              handleComponentMaintenance={handleComponentMaintenance}
+              handleRunReenable={handleRunReenable}
+              handleTimezoneChange={handleTimezoneChange}
+              handleSetTimezone={handleSetTimezone}
+              handleSelectPackageForOS={handleSelectPackageForOS}
+              runningReenable={runningReenable}
+            />
 
             {tabVisibility.utilities && (
-              <TabsContent value="utilities" forceMount className={activeTab === 'utilities' ? '' : 'hidden'}>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Card className={isTerminalRunning ? 'md:col-span-2' : ''}>
-                    <CardHeader>
-                      <CardTitle>Terminal</CardTitle>
-                      <CardDescription>Interactive SSH shell</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <InteractiveTerminal
-                        isConnected={connectionStatus === 'connected'}
-                        visible={activeTab === 'utilities'}
-                        onRunningChange={setIsTerminalRunning}
-                        theme={resolvedTerminalTheme}
-                      />
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>File Browser</CardTitle>
-                      <CardDescription>Browse and transfer files</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <Button
-                        className="w-full"
-                        variant="outline"
-                        onClick={() => setShowFileBrowser(true)}
-                        disabled={connectionStatus !== 'connected'}
-                      >
-                        Open File Browser
-                      </Button>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Configuration Editor</CardTitle>
-                      <CardDescription>Edit settings</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <Button
-                        className="w-full"
-                        variant="outline"
-                        onClick={() => setShowConfigEditor(true)}
-                        disabled={connectionStatus !== 'connected'}
-                      >
-                        xochitl.conf
-                      </Button>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Backup & Restore</CardTitle>
-                      <CardDescription>Manage device backups</CardDescription>
-                    </CardHeader>
-                    <CardContent className="flex gap-2">
-                      <Button
-                        className="flex-1"
-                        variant="outline"
-                        onClick={() => setBackupDialogMode('backup')}
-                        disabled={connectionStatus !== 'connected'}
-                      >
-                        Backup
-                      </Button>
-                      <Button
-                        className="flex-1"
-                        variant="outline"
-                        onClick={() => setBackupDialogMode('restore')}
-                        disabled={connectionStatus !== 'connected'}
-                      >
-                        Restore
-                      </Button>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Document Import</CardTitle>
-                      <CardDescription>Upload documents to your reMarkable library</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <Button
-                        className="w-full"
-                        variant="outline"
-                        onClick={() => setShowImportPDF(true)}
-                        disabled={connectionStatus !== 'connected'}
-                      >
-                        Import
-                      </Button>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>OS Manager</CardTitle>
-                      <CardDescription>View, install, and switch OS versions.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <Button
-                        className="w-full"
-                        variant="outline"
-                        onClick={() => setShowSoftwareManager(true)}
-                        disabled={connectionStatus !== 'connected'}
-                      >
-                        Manage
-                      </Button>
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
+              <UtilitiesTab
+                activeTab={activeTab}
+                handleSelectPackageForOS={handleSelectPackageForOS}
+                onSettings={() => setShowSettingsDialog(true)}
+                onDisconnect={handleDisconnect}
+              />
             )}
           </Tabs>
 
-          {/* Queue Section - Fixed at bottom, visible on all tabs */}
-          {(installQueue.size > 0 || uninstallQueue.size > 0) && (
-            <div className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4">
-              {/* Install Queue */}
-              {installQueue.size > 0 && (
-                <div>
-                  <Accordion type="single" collapsible>
-                    <AccordionItem value="install-queue" className="border-none">
-                      <AccordionTrigger className="py-2 text-sm font-medium hover:no-underline">
-                        Install Queue ({installQueue.size})
-                      </AccordionTrigger>
-                      <AccordionContent>
-                        <div className="space-y-1 mb-3">
-                          {Array.from(installQueue).map((name) => {
-                            return (
-                              <div
-                                key={name}
-                                className="flex items-center justify-between text-sm py-1"
-                              >
-                                <span>{name}</span>
-                                <button
-                                  onClick={() => removeFromQueue(name)}
-                                  className="text-muted-foreground hover:text-foreground"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </AccordionContent>
-                    </AccordionItem>
-                  </Accordion>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      className="flex-1"
-                      onClick={clearQueue}
-                      disabled={installing || uninstalling}
-                    >
-                      Clear Install Queue
-                    </Button>
-                    <Button
-                      className="flex-1"
-                      onClick={async () => {
-                        setSimulatingInstall(true)
-                        try {
-                          const sim = await window.go.main.App.SimulateInstall([...installQueue], device)
-                          const filteredPackages = sim.packages.filter((name: string) => !installedPackages.has(name))
-                          if (filteredPackages.length === 0) {
-                            setQueueError('All packages are already installed')
-                            setTimeout(() => setQueueError(null), 4000)
-                            setInstallQueue(new Set())
-                          } else {
-                            setPendingInstallConfirm({ packages: filteredPackages, requested: sim.requested })
-                          }
-                        } catch (err) {
-                          console.error('SimulateInstall failed:', err)
-                          const pkgs = [...installQueue].filter((name) => !installedPackages.has(name))
-                          if (pkgs.length === 0) {
-                            setQueueError('All packages are already installed')
-                            setTimeout(() => setQueueError(null), 4000)
-                            setInstallQueue(new Set())
-                          } else {
-                            setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
-                          }
-                        } finally {
-                          setSimulatingInstall(false)
-                        }
-                      }}
-                      disabled={installing || uninstalling || simulatingInstall || connectionStatus !== 'connected'}
-                    >
-                      {installing ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Installing...
-                        </>
-                      ) : simulatingInstall ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Checking...
-                        </>
-                      ) : (
-                        'Install Selected'
-                      )}
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Uninstall Queue */}
-              {uninstallQueue.size > 0 && (
-                <div>
-                  <Accordion type="single" collapsible>
-                    <AccordionItem value="uninstall-queue" className="border-none">
-                      <AccordionTrigger className="py-2 text-sm font-medium text-destructive hover:no-underline">
-                        Uninstall Queue ({uninstallQueue.size})
-                      </AccordionTrigger>
-                      <AccordionContent>
-                        <div className="space-y-1 mb-3">
-                          {Array.from(uninstallQueue).map((name) => {
-                            return (
-                              <div
-                                key={name}
-                                className="flex items-center justify-between text-sm py-1"
-                              >
-                                <span>{name}</span>
-                                <button
-                                  onClick={() => removeFromUninstallQueue(name)}
-                                  className="text-muted-foreground hover:text-foreground"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </AccordionContent>
-                    </AccordionItem>
-                  </Accordion>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      className="flex-1"
-                      onClick={clearUninstallQueue}
-                      disabled={installing || uninstalling}
-                    >
-                      Clear Uninstall Queue
-                    </Button>
-                    <Button
-                      className="flex-1"
-                      onClick={async () => {
-                        setSimulatingUninstall(true)
-                        try {
-                          const selected = [...uninstallQueue]
-                          const sim = await window.go.main.App.SimulateUninstall(selected)
-                          if (sim.worldDeps && sim.worldDeps.length > 0) {
-                            setPendingUninstallConfirm({
-                              selected,
-                              packages: sim.allAffected || selected,
-                              blocked: null,
-                              useRecursive: false,
-                              worldDeps: sim.worldDeps
-                            })
-                          } else if (sim.blocked && Object.keys(sim.blocked).length > 0) {
-                            setPendingUninstallConfirm({
-                              selected,
-                              packages: sim.recursivePackages || sim.packages || selected,
-                              blocked: sim.blocked,
-                              useRecursive: true
-                            })
-                          } else {
-                            setPendingUninstallConfirm({
-                              selected,
-                              packages: (sim.packages && sim.packages.length > 0) ? sim.packages : selected,
-                              blocked: null,
-                              useRecursive: false
-                            })
-                          }
-                        } catch (err) {
-                          console.error('SimulateUninstall failed:', err)
-                          const selected = [...uninstallQueue]
-                          setPendingUninstallConfirm({
-                            selected,
-                            packages: selected,
-                            blocked: null,
-                            useRecursive: false
-                          })
-                        } finally {
-                          setSimulatingUninstall(false)
-                        }
-                      }}
-                      disabled={installing || uninstalling || simulatingUninstall || connectionStatus !== 'connected'}
-                    >
-                      {uninstalling ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Removing...
-                        </>
-                      ) : simulatingUninstall ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Checking...
-                        </>
-                      ) : (
-                        'Uninstall Selected'
-                      )}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
           </>
         )}
       </div>
 
-      {/* Uninstall Dependents Confirmation Dialog */}
-      <Dialog open={pendingUninstall !== null} onOpenChange={(open) => !open && setPendingUninstall(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              Components Have Dependents
-            </DialogTitle>
-            <DialogDescription>
-              <div className="space-y-4 pt-4">
-                <p>
-                  The following installed components depend on{' '}
-                  <strong>{pendingUninstall?.componentNames.join(', ')}</strong>:
-                </p>
-                <ul className="list-disc list-inside space-y-1 text-sm">
-                  {pendingUninstall?.dependents.map((dep) => (
-                    <li key={dep.id}>{dep.name}</li>
-                  ))}
-                </ul>
-                <p>These components may not work correctly after removal.</p>
-              </div>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="flex-col sm:flex-row gap-2">
-            <Button variant="outline" onClick={() => setPendingUninstall(null)}>
-              Cancel
-            </Button>
-            <Button variant="outline" onClick={() => confirmUninstallWithDependents(false)}>
-              Remove Only {pendingUninstall?.componentNames[0]}
-            </Button>
-            <Button variant="destructive" onClick={() => confirmUninstallWithDependents(true)}>
-              Remove All ({(pendingUninstall?.componentIds.length || 0) + (pendingUninstall?.dependents.length || 0)})
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Package Upgrade Confirmation Dialog */}
-      <Dialog open={pendingPackageUpgrade !== null} onOpenChange={(open) => !open && setPendingPackageUpgrade(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Upgrade Packages</DialogTitle>
-            <DialogDescription>
-              The following {pendingPackageUpgrade?.length} package{pendingPackageUpgrade?.length !== 1 ? 's' : ''} will be upgraded:
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[40vh] overflow-y-auto">
-            <ul className="list-disc list-inside space-y-1 text-sm">
-              {pendingPackageUpgrade?.sort().map((pkg) => (
-                <li key={pkg}>{pkg}</li>
-              ))}
-            </ul>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPendingPackageUpgrade(null)}>
-              Cancel
-            </Button>
-            <Button onClick={confirmPackageUpgrade}>
-              Upgrade ({pendingPackageUpgrade?.length})
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* No Updates Available Dialog */}
-      <Dialog open={showNoUpgradesDialog} onOpenChange={setShowNoUpgradesDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>No Updates Available</DialogTitle>
-            <DialogDescription>
-              All packages are up to date.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button onClick={() => setShowNoUpgradesDialog(false)}>OK</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <ImportPDFDialog
-        open={showImportPDF}
-        isConnected={connectionStatus === 'connected'}
-        hasLibrarian={installedPackages.has('librarian')}
-        onOpenChange={setShowImportPDF}
-      />
-
-      <SoftwareManagerDialog
-        open={showSoftwareManager}
-        onOpenChange={setShowSoftwareManager}
-        isConnected={connectionStatus === 'connected'}
-        vellumInstalled={vellumInstalled}
-        onSelectPackageForOS={handleSelectPackageForOS}
-      />
-
-      {/* Backup & Restore Dialog */}
-      <BackupRestoreDialog
-        mode={backupDialogMode}
-        onClose={() => setBackupDialogMode(null)}
-      />
-
-      {/* Orphan Dependency Removal Dialog */}
-      <Dialog open={pendingOrphanRemoval !== null} onOpenChange={(open) => !open && setPendingOrphanRemoval(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Remove Dependencies?</DialogTitle>
-            <DialogDescription>
-              <div className="space-y-4 pt-4">
-                <p>
-                  The following dependencies are no longer needed by any queued items:
-                </p>
-                <ul className="list-disc list-inside space-y-1 text-sm">
-                  {pendingOrphanRemoval?.orphans.map((dep) => (
-                    <li key={dep.id}>{dep.name}</li>
-                  ))}
-                </ul>
-                <p>Would you like to remove them from the queue as well?</p>
-              </div>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => confirmOrphanRemoval(false)}>
-              Keep in Queue
-            </Button>
-            <Button onClick={() => confirmOrphanRemoval(true)}>
-              Remove All
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Progress Modal */}
       <Dialog
@@ -3983,11 +1652,7 @@ export default function App() {
                         setShowRebuildDialog(false)
                         setDialogRequest(null)
                         if (commandContext === 'maintenance') {
-                          setShowProgressModal(true)
-                          setProgressModalType('maintenance')
-                          setProgressPercentage(0)
-                          setCommandRunning(true)
-                          setMaintenanceOutput('')
+                          startMaintenanceOperation()
                         }
                         window.go.main.App.RespondToDialog('confirm')
                       }}
@@ -4033,173 +1698,6 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Start UI Chooser Dialog (shown when xochitl isn't running and xovi is installed) */}
-      <Dialog open={showStartUIDialog} onOpenChange={setShowStartUIDialog}>
-        <DialogContent className="relative">
-          <Button
-            variant="ghost"
-            size="xs"
-            className="absolute right-2 top-2"
-            onClick={() => setShowStartUIDialog(false)}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-yellow-500" />
-              reMarkable UI stopped
-            </DialogTitle>
-            <DialogDescription>
-              The reMarkable interface is currently stopped. How would you like to start it?
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-2 pt-2">
-            <Button
-              className="w-full justify-center gap-2"
-              disabled={!!hashtabMismatch || hashtabMissing}
-              onClick={() => {
-                setShowStartUIDialog(false)
-                handleComponentMaintenance('xovi', 'start')
-              }}
-            >
-              Start UI with Mods
-            </Button>
-            {(hashtabMismatch || hashtabMissing) && (
-              <p className="text-xs text-muted-foreground text-center -mt-1">
-                {hashtabMissing ? 'Disabled — hashtable not built' : 'Disabled due to hashtable mismatch'}
-              </p>
-            )}
-            <Button
-              variant="outline"
-              className="w-full justify-center gap-2"
-              onClick={() => {
-                setShowStartUIDialog(false)
-                handleSystemTask('restart-xochitl')
-              }}
-            >
-              Start UI without Mods
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Remove Confirmation Dialog */}
-      <Dialog open={deviceToDelete !== null} onOpenChange={(open) => !open && setDeviceToDelete(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Remove "{savedDevices.find(d => d.id === deviceToDelete)?.name}"?</DialogTitle>
-            <DialogDescription>
-              This will remove the saved connection and credentials.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeviceToDelete(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleConfirmDelete}>
-              Remove
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Save Device Dialog */}
-      <Dialog open={showSaveDeviceDialog} onOpenChange={(open) => {
-        setShowSaveDeviceDialog(open)
-        if (!open) setSaveDeviceError('')
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Save Device</DialogTitle>
-            <DialogDescription>
-              Save this device for quick reconnection in the future. Your credentials will be stored securely.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="deviceName">Device Name</Label>
-              <Input
-                id="deviceName"
-                value={deviceName}
-                onChange={(e) => setDeviceName(e.target.value)}
-                placeholder={deviceInfo.machine || 'My reMarkable'}
-              />
-            </div>
-            {saveDeviceError && (
-              <p className="text-sm text-destructive">{saveDeviceError}</p>
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowSaveDeviceDialog(false)}
-            >
-              {saveDeviceError ? 'Close' : 'Skip'}
-            </Button>
-            {!saveDeviceError && (
-              <Button onClick={handleSaveDevice} disabled={!deviceName.trim()}>
-                Save Device
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-
-      {/* Package Detail Side Panel */}
-      <Sheet open={selectedPackage !== null} onOpenChange={(open) => { if (!open) { setSelectedPackage(null); setSidebarViewOnly(false); setSidebarIncompatible(false); setSidebarHistory([]) } }}>
-        <SheetContent side="right" className="w-[400px] sm:w-[450px] sm:max-w-none flex flex-col">
-          {selectedPackage && (
-            <PackageDetailPanel
-              pkg={selectedPackage}
-              isInstalled={installedPackages.has(selectedPackage.name)}
-              installedPackages={installedPackages}
-              installedVersion={installedPackages.get(selectedPackage.name)}
-              onInstall={() => {
-                addToQueue(selectedPackage.name)
-                setSelectedPackage(null)
-              }}
-              onUninstall={() => {
-                addToUninstallQueue(selectedPackage.name)
-                setSelectedPackage(null)
-              }}
-              isQueued={installQueue.has(selectedPackage.name) || uninstallQueue.has(selectedPackage.name)}
-              queueType={installQueue.has(selectedPackage.name) ? 'install' : uninstallQueue.has(selectedPackage.name) ? 'uninstall' : null}
-              disabled={installing || uninstalling || connectionStatus !== 'connected'}
-              onSelectPackage={(name) => {
-                const pkg = packages.find(p => p.name === name)
-                if (pkg) {
-                  if (selectedPackage) setSidebarHistory(h => [...h, selectedPackage])
-                  setSidebarViewOnly(false)
-                  setSidebarIncompatible(false)
-                  setSelectedPackage(pkg)
-                }
-              }}
-              allPackages={packages}
-              firmware={deviceInfo.firmware || ''}
-              conflict={getConflict(selectedPackage)}
-              isOsCompatible={selectedPackage.compatible}
-              viewOnly={sidebarViewOnly}
-              showIncompatible={sidebarIncompatible}
-              onViewReadme={handleViewReadme}
-              onBack={sidebarHistory.length > 0 ? () => {
-                const prev = sidebarHistory[sidebarHistory.length - 1]
-                setSidebarHistory(h => h.slice(0, -1))
-                setSelectedPackage(prev)
-                setSidebarViewOnly(false)
-                setSidebarIncompatible(false)
-              } : undefined}
-            />
-          )}
-        </SheetContent>
-      </Sheet>
-
-      <ReadmeDialog
-        open={readmeDialogOpen}
-        onOpenChange={setReadmeDialogOpen}
-        url={readmeUrl}
-        packageName={readmePackageName}
-      />
 
       <SettingsDialog
         open={showSettingsDialog}
@@ -4286,119 +1784,8 @@ export default function App() {
         isRetrying={isRetryingFilesystemRestore}
       />
 
-      <CheckOSDialog
-        open={showCheckOSDialog}
-        onOpenChange={setShowCheckOSDialog}
-        isConnected={connectionStatus === 'connected'}
-        onSelectPackage={handleSelectPackageForOS}
-      />
-
-      {showFileBrowser && (
-        <div className="fixed inset-0 z-50 bg-background overflow-auto">
-          <div className="min-h-screen p-6">
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h1 className="text-3xl font-bold text-foreground">reManager</h1>
-                  <p className="text-muted-foreground">Manage packages on your reMarkable</p>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  {device && deviceInfo.firmware && (
-                    <span className="text-muted-foreground">
-                      {deviceInfo.machine || device} ({deviceInfo.firmware})
-                    </span>
-                  )}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="sm" onClick={() => setShowSettingsDialog(true)}>
-                        <Settings className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Settings</TooltipContent>
-                  </Tooltip>
-                  {device && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button variant="ghost" size="sm" onClick={handleDisconnect}>
-                          <Unplug className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Disconnect</TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-              </div>
-              <hr className="border-border" />
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold">File Browser</h2>
-                <Button variant="ghost" size="sm" onClick={() => setShowFileBrowser(false)}>
-                  <X className="h-4 w-4 mr-2" />
-                  Close
-                </Button>
-              </div>
-              <FileBrowser
-                isConnected={connectionStatus === 'connected'}
-                suppressSystemFileWarnings={suppressSystemFileWarnings}
-                isVisible={showFileBrowser}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showConfigEditor && (
-        <div className="fixed inset-0 z-50 bg-background overflow-auto">
-          <div className="min-h-screen p-6">
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h1 className="text-3xl font-bold text-foreground">reManager</h1>
-                  <p className="text-muted-foreground">Manage packages on your reMarkable</p>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  {device && deviceInfo.firmware && (
-                    <span className="text-muted-foreground">
-                      {deviceInfo.machine || device} ({deviceInfo.firmware})
-                    </span>
-                  )}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="sm" onClick={() => setShowSettingsDialog(true)}>
-                        <Settings className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Settings</TooltipContent>
-                  </Tooltip>
-                  {device && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button variant="ghost" size="sm" onClick={handleDisconnect}>
-                          <Unplug className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Disconnect</TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-              </div>
-
-              <hr className="border-border" />
-
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold">xochitl.conf Editor</h2>
-                <Button variant="ghost" size="sm" onClick={() => setShowConfigEditor(false)}>
-                  <X className="h-4 w-4 mr-2" />
-                  Close
-                </Button>
-              </div>
-
-              <ConfigEditor isConnected={connectionStatus === 'connected'} theme={resolvedEditorTheme} />
-            </div>
-          </div>
-        </div>
-      )}
-
       <Toaster position="bottom-right" richColors />
     </div>
+    </AppProvider>
   )
 }

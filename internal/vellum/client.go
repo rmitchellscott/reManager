@@ -55,15 +55,6 @@ func (c *Client) ValidateInstall() (valid bool, missing []string, err error) {
 	return len(missing) == 0, missing, nil
 }
 
-func (c *Client) Add(packages ...string) error {
-	if len(packages) == 0 {
-		return nil
-	}
-	cmd := fmt.Sprintf("%s add %s", VellumBin, strings.Join(packages, " "))
-	_, err := c.executor.ExecuteWithOutput(cmd)
-	return err
-}
-
 func (c *Client) AddStreaming(onOutput func(line string), packages ...string) error {
 	if len(packages) == 0 {
 		return nil
@@ -75,27 +66,12 @@ func (c *Client) AddStreaming(onOutput func(line string), packages ...string) er
 	return err
 }
 
-func (c *Client) Del(packages ...string) error {
-	if len(packages) == 0 {
-		return nil
-	}
-	cmd := fmt.Sprintf("%s del %s", VellumBin, strings.Join(packages, " "))
-	_, err := c.executor.ExecuteWithOutput(cmd)
-	return err
-}
-
 func (c *Client) DelStreaming(onOutput func(line string), packages ...string) error {
 	if len(packages) == 0 {
 		return nil
 	}
 	cmd := fmt.Sprintf("%s del %s", VellumBin, strings.Join(packages, " "))
 	return c.executor.ExecuteStreaming(cmd, onOutput)
-}
-
-func (c *Client) Update() error {
-	cmd := fmt.Sprintf("%s update -y", VellumBin)
-	_, err := c.executor.ExecuteWithOutput(cmd)
-	return err
 }
 
 func (c *Client) List() ([]string, error) {

@@ -138,11 +138,3 @@ func Classify(err error) *UserError {
 	// Fallback - generic error
 	return New(ErrUnknown, "An unexpected error occurred.", err, false)
 }
-
-func ClassifyWithContext(err error, context string) *UserError {
-	ue := Classify(err)
-	if ue.Code == ErrUnknown {
-		ue.Message = context
-	}
-	return ue
-}

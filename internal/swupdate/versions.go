@@ -4,11 +4,12 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"net/http"
 	"regexp"
 	"sort"
-	"strconv"
-	"strings"
+	"time"
+
+	"reManager/internal/httputil"
+	"reManager/internal/version"
 )
 
 const bucketURL = "https://remarkable-software.s3.us-east-2.amazonaws.com/"
@@ -86,7 +87,7 @@ func ListVersions(deviceType string, installedVersions []string) ([]OSVersionInf
 	}
 
 	sort.Slice(versions, func(i, j int) bool {
-		return compareVersions(versions[i].Version, versions[j].Version) > 0
+		return version.Compare(versions[i].Version, versions[j].Version) > 0
 	})
 
 	if len(versions) > 0 {
@@ -106,7 +107,7 @@ func listBucket() ([]bucketObject, error) {
 			url += "&continuation-token=" + continuationToken
 		}
 
-		resp, err := http.Get(url)
+		resp, err := httputil.NewClient(30 * time.Second).Get(url)
 		if err != nil {
 			return nil, err
 		}
@@ -137,33 +138,6 @@ func listBucket() ([]bucketObject, error) {
 	return allObjects, nil
 }
 
-func isAbove322(version string) bool {
-	return compareVersions(version, "3.22") > 0
-}
-
-func compareVersions(a, b string) int {
-	partsA := strings.Split(a, ".")
-	partsB := strings.Split(b, ".")
-
-	maxLen := len(partsA)
-	if len(partsB) > maxLen {
-		maxLen = len(partsB)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		var na, nb int
-		if i < len(partsA) {
-			na, _ = strconv.Atoi(partsA[i])
-		}
-		if i < len(partsB) {
-			nb, _ = strconv.Atoi(partsB[i])
-		}
-		if na != nb {
-			if na > nb {
-				return 1
-			}
-			return -1
-		}
-	}
-	return 0
+func isAbove322(v string) bool {
+	return version.Compare(v, "3.22") > 0
 }

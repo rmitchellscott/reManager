@@ -17,8 +17,7 @@ const (
 	// File operation errors
 	ErrFileNotFound     = "ERR_FILE_NOT_FOUND"
 	ErrPermissionDenied = "ERR_PERMISSION_DENIED"
-	ErrDiskFull         = "ERR_DISK_FULL"
-	ErrPathInvalid      = "ERR_PATH_INVALID"
+	ErrDiskFull = "ERR_DISK_FULL"
 
 	// Storage/keyring errors
 	ErrKeyringFailed = "ERR_KEYRING_FAILED"
@@ -30,7 +29,6 @@ const (
 	ErrUnsupportedDevice = "ERR_UNSUPPORTED_DEVICE"
 
 	// Operation errors
-	ErrOperationFailed    = "ERR_OPERATION_FAILED"
 	ErrOperationCancelled = "ERR_OPERATION_CANCELLED"
 	ErrSFTPFailed         = "ERR_SFTP_FAILED"
 

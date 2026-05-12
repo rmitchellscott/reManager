@@ -5,7 +5,6 @@ import "reManager/internal/component"
 type ProgressStatus string
 
 const (
-	StatusPending    ProgressStatus = "pending"
 	StatusInstalling ProgressStatus = "installing"
 	StatusCompleted  ProgressStatus = "completed"
 	StatusError      ProgressStatus = "error"
@@ -20,11 +19,6 @@ type ProgressInfo struct {
 }
 
 type ProgressCallback func(progress ProgressInfo)
-
-type HookHandler interface {
-	HandleDialog(config *component.DialogConfig) (confirmed bool, err error)
-	HandleConfirmation(message string) (confirmed bool, err error)
-}
 
 type CommandExecutor interface {
 	Execute(commands []component.CommandResult) error

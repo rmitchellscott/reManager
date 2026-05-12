@@ -22,6 +22,7 @@ import { Download, Check, Loader2, X, AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 import { CheckOSDialog } from '@/components/CheckOSDialog'
+import { CompatibilityResult } from '@/lib/types'
 
 interface PartitionSlot {
   number: number
@@ -49,13 +50,6 @@ interface InstallProgress {
   phase: string
   percent: number
   message: string
-}
-
-interface CompatibilityResult {
-  compatible: string[]
-  incompatible: string[]
-  noConstraint: string[]
-  fetchFailed: boolean
 }
 
 interface SoftwareManagerDialogProps {
@@ -95,7 +89,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
 
   const checkCompatibility = useCallback(async (version: string): Promise<CompatibilityResult | null> => {
     try {
-      const res = await (window as any).go.main.App.CheckOSCompatibility(version)
+      const res = await window.go.main.App.CheckOSCompatibility(version)
       if (!res.fetchFailed) {
         setCompatCache(prev => ({ ...prev, [version]: res }))
         return res
