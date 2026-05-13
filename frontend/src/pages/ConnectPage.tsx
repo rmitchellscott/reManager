@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import { toast } from 'sonner'
 import { handleError, getUserFriendlyMessage } from '@/lib/errorMessages'
 import { Button } from '@/components/ui/button'
@@ -43,12 +43,23 @@ export function ConnectPage({
   const [showPassword, setShowPassword] = useState(false)
   const [keyPassphrase, setKeyPassphrase] = useState('')
   const [showKeyPassphrase, setShowKeyPassphrase] = useState(false)
-  const [availableKeys] = useState<SSHKey[]>(initialKeys)
+  const [availableKeys, setAvailableKeys] = useState<SSHKey[]>(initialKeys)
   const [selectedKey, setSelectedKey] = useState<string>(initialKeys.length > 0 ? initialKeys[0].path : '')
   const [customKeyName, setCustomKeyName] = useState<string>('')
-  const [sshAgentAvailable] = useState(initialAgentAvailable)
+  const [sshAgentAvailable, setSSHAgentAvailable] = useState(initialAgentAvailable)
   const [connecting, setConnecting] = useState(false)
   const connectAttemptRef = useRef(0)
+
+  useEffect(() => {
+    setAvailableKeys(initialKeys)
+    if (initialKeys.length > 0 && !selectedKey) {
+      setSelectedKey(initialKeys[0].path)
+    }
+  }, [initialKeys])
+
+  useEffect(() => {
+    setSSHAgentAvailable(initialAgentAvailable)
+  }, [initialAgentAvailable])
 
   const [showAddForm, setShowAddForm] = useState(false)
   const [editingDevice, setEditingDevice] = useState<SavedDevice | null>(null)

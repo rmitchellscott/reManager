@@ -244,9 +244,14 @@ func (a *App) startup(ctx context.Context) {
 	a.deviceInfoCache = deviceInfoCache
 
 	a.metadata = vellum.NewMetadataStore()
-	if err := a.metadata.Load(); err != nil {
-		fmt.Printf("Warning: could not load metadata: %v\n", err)
-	}
+	go func() {
+		if err := a.metadata.Load(); err != nil {
+			debug.Printf("[DEBUG] Failed to load metadata: %v\n", err)
+			runtime.EventsEmit(a.ctx, "metadata:error", err.Error())
+			return
+		}
+		runtime.EventsEmit(a.ctx, "metadata:loaded")
+	}()
 
 	go func() {
 		settings.OnSignalSettingChanged(func(changed settings.Changed) {
