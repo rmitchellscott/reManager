@@ -141,6 +141,9 @@ func (a *App) RefreshMetadata() error {
 
 func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 	debug.Printf("[DEBUG] GetPackages called, metadata=%p, deviceType=%s, firmware=%s, arch=%s\n", a.metadata, deviceType, firmware, arch)
+	if a.metadata == nil || !a.metadata.Ready() {
+		return []PackageInfo{}
+	}
 	packages := a.metadata.GetAllPackagesForDevice(deviceType, firmware, arch)
 	debug.Printf("[DEBUG] GetPackages got %d packages\n", len(packages))
 	result := []PackageInfo{}

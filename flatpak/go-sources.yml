@@ -23,10 +23,10 @@
   type: archive
   url: https://proxy.golang.org/github.com/pkg/sftp/@v/v1.13.10.zip
 - dest: vendor/github.com/rmitchellscott/remarkable-go
-  sha256: 6d38f4e14bcea30177db7e6eecbdd2a1cdfc028b854107a86e4722572b64528a
+  sha256: 7fc6e24a49974838555fa064ede2ee6300a1937f5446a23dc9523f6c8dce91f1
   strip-components: 3
   type: archive
-  url: https://proxy.golang.org/github.com/rmitchellscott/remarkable-go/@v/v0.3.1.zip
+  url: https://proxy.golang.org/github.com/rmitchellscott/remarkable-go/@v/v0.3.2.zip
 - dest: vendor/github.com/rymdport/portal
   sha256: 29be324d2b08f1736c4bafff0bbb816164ceac98c221967de8121e4827031805
   strip-components: 3
