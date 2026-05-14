@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	_ "embed"
+
 	"reManager/internal/debug"
 	"reManager/internal/httputil"
 	versionpkg "reManager/internal/version"
@@ -19,6 +21,9 @@ const (
 	RemanagerMetadataURL = "https://packages.vellum.delivery/remanager-metadata.json"
 	MetadataTimeout      = 10 * time.Second
 )
+
+//go:embed fallback_remanager.json
+var fallbackRemanagerJSON []byte
 
 type OSConstraint struct {
 	Version  string `json:"version"`
@@ -146,10 +151,12 @@ func (m *MetadataStore) Load() error {
 	debug.Printf("[DEBUG] Loaded %d packages from metadata\n", len(m.packages.Packages))
 
 	if err := m.loadRemanagerMetadata(); err != nil {
-		debug.Printf("[DEBUG] Remanager metadata fetch failed (non-fatal): %v\n", err)
-	} else {
-		debug.Printf("[DEBUG] Loaded %d remanager package configs\n", len(m.remanager.Packages))
+		debug.Printf("[DEBUG] HTTP fetch remanager failed: %v, using fallback\n", err)
+		if err := json.Unmarshal(fallbackRemanagerJSON, &m.remanager); err != nil {
+			return fmt.Errorf("failed to parse fallback remanager metadata: %w", err)
+		}
 	}
+	debug.Printf("[DEBUG] Loaded %d remanager package configs\n", len(m.remanager.Packages))
 
 	m.loaded = true
 	return nil
