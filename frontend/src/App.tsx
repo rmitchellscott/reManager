@@ -7,6 +7,8 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { ProgressModal } from '@/components/ProgressModal'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 import { ConsolidatedWarningBanner, hasActiveWarnings } from '@/components/ConsolidatedWarningBanner'
 import { BannerSwitcher } from '@/components/BannerSwitcher'
 import { VellumInstallSuccessDialog } from '@/components/VellumInstallSuccessDialog'
@@ -275,6 +277,7 @@ export default function App() {
 
   const [runningReenable, setRunningReenable] = useState(false)
   const [upgradesAvailable, setUpgradesAvailable] = useState(false)
+  const [reinstallInProgress, setReinstallInProgress] = useState(false)
 
   const xoviNotRunning = useMemo(() =>
     installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch && !hashtabMissing,
@@ -836,6 +839,12 @@ export default function App() {
     setOsUpgradeDetected(false)
   }
 
+  const handleRepairVellum = () => {
+    if (bootstrapping) return
+    setReinstallInProgress(true)
+    window.go.main.App.BootstrapVellum()
+  }
+
   const handleTimezoneChange = async (timezone: string) => {
     setSelectedTimezone(timezone)
     try {
@@ -1207,6 +1216,8 @@ export default function App() {
               handleSetTimezone={handleSetTimezone}
               handleSelectPackageForOS={handleSelectPackageForOS}
               runningReenable={runningReenable}
+              onRepairVellum={handleRepairVellum}
+              bootstrapping={bootstrapping}
             />
 
             {tabVisibility.utilities && (
@@ -1747,12 +1758,73 @@ export default function App() {
         connectedDeviceId={connectedDeviceId}
       />
 
+      <Dialog
+        open={reinstallInProgress && (bootstrapping || !!bootstrapError)}
+        closable={!bootstrapping}
+        onOpenChange={(open) => {
+          if (!open) {
+            setReinstallInProgress(false)
+            setBootstrapError(null)
+            setBootstrapOutput('')
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{bootstrapError ? 'Repair Failed' : 'Repairing Vellum...'}</DialogTitle>
+            <DialogDescription>
+              {bootstrapError
+                ? 'The Vellum repair did not complete.'
+                : 'Reinstalling Vellum with the latest version. Your installed mods are preserved.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {bootstrapping && (
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-sm">Working...</span>
+            </div>
+          )}
+
+          {bootstrapError && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{bootstrapError}</AlertDescription>
+            </Alert>
+          )}
+
+          {(bootstrapping || bootstrapError) && bootstrapOutput && (
+            <div className="h-[300px] rounded-lg overflow-hidden">
+              <TerminalWithCopy output={bootstrapOutput} theme={resolvedTerminalTheme} />
+            </div>
+          )}
+
+          {bootstrapError && (
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setReinstallInProgress(false)
+                  setBootstrapError(null)
+                  setBootstrapOutput('')
+                }}
+              >
+                Close
+              </Button>
+              <Button onClick={handleRepairVellum}>Retry</Button>
+            </DialogFooter>
+          )}
+        </DialogContent>
+      </Dialog>
+
       <VellumInstallSuccessDialog
         open={bootstrapSuccess}
+        reinstalled={reinstallInProgress}
         onOpenChange={(open) => {
           if (!open) {
             setBootstrapSuccess(false)
             setBootstrapOutput('')
+            setReinstallInProgress(false)
           }
         }}
       />

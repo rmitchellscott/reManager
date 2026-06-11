@@ -106,8 +106,11 @@ func (a *App) GetXochitlStatus() XochitlStatus {
 	output, err := a.runCommand("systemctl is-active xochitl")
 	running := err == nil && strings.TrimSpace(output) == "active"
 
-	_, err = a.runCommand("test -f /etc/systemd/system/xochitl.service.d/00-xovi.conf")
-	xoviActive := err == nil
+	xoviActive := false
+	if running {
+		_, err = a.runCommand(`tr '\0' '\n' < /proc/$(pidof xochitl)/environ | grep -q LD_PRELOAD.*xovi`)
+		xoviActive = err == nil
+	}
 
 	return XochitlStatus{Running: running, XoviActive: xoviActive}
 }

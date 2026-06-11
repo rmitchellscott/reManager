@@ -36,6 +36,8 @@ interface MaintenanceTabProps {
   handleSetTimezone: () => void
   handleSelectPackageForOS: (name: string, targetOS: string, isCompatible?: boolean) => Promise<void>
   runningReenable: boolean
+  onRepairVellum: () => void
+  bootstrapping: boolean
 }
 
 export function MaintenanceTab({
@@ -63,6 +65,8 @@ export function MaintenanceTab({
   handleSetTimezone,
   handleSelectPackageForOS,
   runningReenable,
+  onRepairVellum,
+  bootstrapping,
 }: MaintenanceTabProps) {
   const { installedPackages, packages, commandRunning, connectionStatus, writeableRootBusy, vellumInstalled, startMaintenanceOperation } = useAppContext()
 
@@ -70,6 +74,7 @@ export function MaintenanceTab({
   const [pendingPackageUpgrade, setPendingPackageUpgrade] = useState<string[] | null>(null)
   const [showCheckOSDialog, setShowCheckOSDialog] = useState(false)
   const [simulatingUpgrade, setSimulatingUpgrade] = useState(false)
+  const [showRepairConfirm, setShowRepairConfirm] = useState(false)
 
   const handleCheckUpgrades = async () => {
     setSimulatingUpgrade(true)
@@ -183,7 +188,7 @@ export function MaintenanceTab({
                 <div>
                   <h4 className="font-medium">Vellum</h4>
                   <p className="text-sm text-muted-foreground mb-2">Package manager for reMarkable tablets</p>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
@@ -211,6 +216,20 @@ export function MaintenanceTab({
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>Check for and install package updates</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          onClick={() => setShowRepairConfirm(true)}
+                          disabled={commandRunning || bootstrapping || connectionStatus !== 'connected' || writeableRootBusy}
+                          variant="outline"
+                          size="sm"
+                          className="flex-1"
+                        >
+                          Repair
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Reinstall Vellum with the latest version</TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -321,6 +340,26 @@ export function MaintenanceTab({
           </DialogHeader>
           <DialogFooter>
             <Button onClick={() => setShowNoUpgradesDialog(false)}>OK</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Repair Vellum Confirmation Dialog */}
+      <Dialog open={showRepairConfirm} onOpenChange={setShowRepairConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Repair Vellum</DialogTitle>
+            <DialogDescription>
+              Reinstalls Vellum with the latest version. Your installed mods are preserved.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRepairConfirm(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => { setShowRepairConfirm(false); onRepairVellum() }}>
+              Repair
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
