@@ -31,7 +31,7 @@ import { MaintenanceTab } from '@/tabs/MaintenanceTab'
 import { ModsTab } from '@/tabs/ModsTab'
 import { Badge } from '@/components/ui/badge'
 import { Banner } from '@/components/ui/banner'
-import { Loader2, Check, AlertTriangle, AlertCircle, WifiOff, Info, CheckCircle2, BookOpen } from 'lucide-react'
+import { Loader2, Check, AlertTriangle, AlertCircle, WifiOff, Info, CheckCircle2, BookOpen, Cpu } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, Step } from '@/lib/types'
 
@@ -212,6 +212,7 @@ export default function App() {
     compatibilityStatus, setCompatibilityStatus,
     hashtabMismatch, setHashtabMismatch,
     hashtabMissing, setHashtabMissing,
+    prerelease, setPrerelease,
     timezoneMismatch, setTimezoneMismatch,
     deviceTimezone, setDeviceTimezone,
     selectedTimezone, setSelectedTimezone,
@@ -233,6 +234,7 @@ export default function App() {
   const [commandRunning, setCommandRunning] = useState(false)
 
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
+  const [showSoftwareManager, setShowSoftwareManager] = useState(false)
   const [showSupportBundles, setShowSupportBundles] = useState(false)
   const [appVersion, setAppVersion] = useState('dev')
   const [tabVisibility, setTabVisibility] = useState<Record<string, boolean>>({
@@ -626,6 +628,7 @@ export default function App() {
     setOutput('')
     setHashtabMismatch(null)
     setHashtabMissing(false)
+    setPrerelease(null)
     setOsMismatchDetected(false)
     osMismatchDetectedRef.current = false
     setOsUpgradeDetected(false)
@@ -1102,7 +1105,7 @@ export default function App() {
               },
               {
                 id: 'warnings',
-                priority: 2,
+                priority: 3,
                 severity: 'warning',
                 icon: AlertTriangle,
                 active: warningsChecked && hasActiveWarnings(warningsData),
@@ -1123,8 +1126,35 @@ export default function App() {
                 ),
               },
               {
+                id: 'prerelease',
+                priority: 2,
+                severity: 'warning',
+                icon: Cpu,
+                active: warningsChecked && !!prerelease,
+                content: (
+                  <Banner
+                    severity="warning"
+                    icon={Cpu}
+                    title="Beta OS"
+                    actions={tabVisibility.utilities ? (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setActiveTab('utilities')
+                          setShowSoftwareManager(true)
+                        }}
+                      >
+                        Open OS Manager
+                      </Button>
+                    ) : undefined}
+                  >
+                    Your reMarkable is on {prerelease?.activeVersion}, newer than the latest stable release ({prerelease?.latestPublic}). reMarkable's <a href="https://support.remarkable.com/s/article/End-user-agreement-for-Opt-In-Beta" className="underline hover:text-foreground" onClick={(e) => { e.preventDefault(); window.runtime.BrowserOpenURL('https://support.remarkable.com/s/article/End-user-agreement-for-Opt-In-Beta') }}>beta program</a> doesn't permit installing third-party software, so packages aren't built for beta releases and you won't receive community support for issues on them. You can downgrade to a stable version in the OS Manager.
+                  </Banner>
+                ),
+              },
+              {
                 id: 'guide',
-                priority: 3,
+                priority: 4,
                 severity: 'info',
                 icon: BookOpen,
                 active: !!guideOffer,
@@ -1236,6 +1266,8 @@ export default function App() {
                 handleSelectPackageForOS={handleSelectPackageForOS}
                 onSettings={() => setShowSettingsDialog(true)}
                 onDisconnect={handleDisconnect}
+                showSoftwareManager={showSoftwareManager}
+                onShowSoftwareManagerChange={setShowSoftwareManager}
               />
             )}
           </Tabs>

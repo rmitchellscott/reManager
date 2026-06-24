@@ -17,9 +17,11 @@ interface UtilitiesTabProps {
   handleSelectPackageForOS: (name: string, targetOS: string, isCompatible?: boolean) => Promise<void>
   onSettings: () => void
   onDisconnect: () => Promise<void>
+  showSoftwareManager: boolean
+  onShowSoftwareManagerChange: (open: boolean) => void
 }
 
-export function UtilitiesTab({ activeTab, handleSelectPackageForOS, onSettings, onDisconnect }: UtilitiesTabProps) {
+export function UtilitiesTab({ activeTab, handleSelectPackageForOS, onSettings, onDisconnect, showSoftwareManager, onShowSoftwareManagerChange }: UtilitiesTabProps) {
   const ctx = useAppContext()
   const { connectionStatus, device, deviceInfo, installedPackages, vellumInstalled, suppressSystemFileWarnings } = ctx
   const resolvedTerminalTheme = ctx.resolvedTerminalTheme as 'dark' | 'light'
@@ -29,7 +31,6 @@ export function UtilitiesTab({ activeTab, handleSelectPackageForOS, onSettings, 
   const [showFileBrowser, setShowFileBrowser] = useState(false)
   const [showConfigEditor, setShowConfigEditor] = useState(false)
   const [showImportPDF, setShowImportPDF] = useState(false)
-  const [showSoftwareManager, setShowSoftwareManager] = useState(false)
   const [backupDialogMode, setBackupDialogMode] = useState<'backup' | 'restore' | null>(null)
 
   return (
@@ -131,7 +132,7 @@ export function UtilitiesTab({ activeTab, handleSelectPackageForOS, onSettings, 
               <Button
                 className="w-full"
                 variant="outline"
-                onClick={() => setShowSoftwareManager(true)}
+                onClick={() => onShowSoftwareManagerChange(true)}
                 disabled={connectionStatus !== 'connected'}
               >
                 Manage
@@ -150,7 +151,7 @@ export function UtilitiesTab({ activeTab, handleSelectPackageForOS, onSettings, 
 
       <SoftwareManagerDialog
         open={showSoftwareManager}
-        onOpenChange={setShowSoftwareManager}
+        onOpenChange={onShowSoftwareManagerChange}
         isConnected={connectionStatus === 'connected'}
         vellumInstalled={vellumInstalled}
         onSelectPackageForOS={handleSelectPackageForOS}

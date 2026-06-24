@@ -665,6 +665,13 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			warnings["timezoneMismatch"] = timezoneStatus
 		}
 
+		channelStatus, _ := a.GetOSChannelStatus()
+		debug.Printf("[DEBUG] OS channel check: active=%s, latestPublic=%s, prerelease=%v\n",
+			channelStatus.ActiveVersion, channelStatus.LatestPublic, channelStatus.IsPrerelease)
+		if channelStatus.IsPrerelease {
+			warnings["prerelease"] = channelStatus
+		}
+
 		if vellumReady {
 			osState, err := vc.GetOSVersionState()
 			debug.Printf("[DEBUG] GetOSVersionState: stored=%q, current=%q, mismatch=%v, err=%v\n", osState.StoredVersion, osState.CurrentVersion, osState.Mismatch, err)

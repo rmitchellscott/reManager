@@ -23,6 +23,7 @@ export function useWarnings() {
   } | null>(null)
   const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
   const [hashtabMissing, setHashtabMissing] = useState(false)
+  const [prerelease, setPrerelease] = useState<{ activeVersion: string; latestPublic: string } | null>(null)
   const [timezoneMismatch, setTimezoneMismatch] = useState<TimezoneStatus | null>(null)
   const [deviceTimezone, setDeviceTimezone] = useState('')
   const [selectedTimezone, setSelectedTimezone] = useState('')
@@ -65,6 +66,7 @@ export function useWarnings() {
         timezoneMismatch?: TimezoneStatus
         xochitlNotRunning?: boolean
         xoviNotRunning?: boolean
+        prerelease?: { isPrerelease: boolean; activeVersion: string; latestPublic: string }
       }
       debugLog('Received connect:warnings:', w)
       setWarningsChecked(true)
@@ -111,6 +113,11 @@ export function useWarnings() {
       }
       setXochitlRunning(!w.xochitlNotRunning)
       setXoviActive(!w.xoviNotRunning)
+      if (w.prerelease) {
+        setPrerelease({ activeVersion: w.prerelease.activeVersion, latestPublic: w.prerelease.latestPublic })
+      } else {
+        setPrerelease(null)
+      }
 
     })
 
@@ -138,6 +145,7 @@ export function useWarnings() {
     compatibilityStatus, setCompatibilityStatus,
     hashtabMismatch, setHashtabMismatch,
     hashtabMissing, setHashtabMissing,
+    prerelease, setPrerelease,
     timezoneMismatch, setTimezoneMismatch,
     deviceTimezone, setDeviceTimezone,
     selectedTimezone, setSelectedTimezone,

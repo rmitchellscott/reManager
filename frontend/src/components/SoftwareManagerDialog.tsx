@@ -23,9 +23,6 @@ import { toast } from 'sonner'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 import { CheckOSDialog } from '@/components/CheckOSDialog'
 import { CompatibilityResult } from '@/lib/types'
-import { compareVersions, isRealVersion } from '@/lib/utils'
-
-const MIN_SWUPDATE_VERSION = '3.11.2.5'
 
 interface PartitionSlot {
   number: number
@@ -216,11 +213,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
   const bootSwitchPending = systemInfo ? !systemInfo.active.isNextBoot : false
   const needsReboot = bootSwitchPending || installNeedsReboot
 
-  const osTooOld = !!systemInfo && isRealVersion(systemInfo.active.version) &&
-    compareVersions(systemInfo.active.version, MIN_SWUPDATE_VERSION) < 0
-
   const isLegacy = installMode === 'legacy'
-  const installBlocked = osTooOld && !isLegacy
 
   const selectedVersionCompat = selectedVersion ? compatCache[selectedVersion] : null
   const selectedVersionHasIncompat = selectedVersionCompat ? selectedVersionCompat.incompatible.length > 0 : false
@@ -455,7 +448,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                     <div className="text-xs text-muted-foreground">Download and install to the standby partition.</div>
                   </div>
                   <div className="flex gap-2">
-                    <Select value={selectedVersion} onValueChange={setSelectedVersion} disabled={installBlocked || needsReboot || versionsFailed || versionsLoading}>
+                    <Select value={selectedVersion} onValueChange={setSelectedVersion} disabled={needsReboot || versionsFailed || versionsLoading}>
                       <SelectTrigger className="flex-1 h-9">
                         {versionsLoading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-2 shrink-0 text-muted-foreground" />}
                         <SelectValue placeholder={needsReboot ? "Reboot to install a version" : versionsLoading ? "Loading versions..." : versionsFailed ? "Could not load versions" : "Choose a version..."}>{selectedVersion || undefined}</SelectValue>
@@ -476,7 +469,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                     <Button
                       size="sm"
                       className="h-9"
-                      disabled={installBlocked || !selectedVersion || needsReboot || versionsFailed || versionsLoading}
+                      disabled={!selectedVersion || needsReboot || versionsFailed || versionsLoading}
                       onClick={handleInstallClick}
                     >
                       Install
@@ -488,13 +481,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                       <span>Newer versions need 3.11.2.5 first. Install it, then reboot.</span>
                     </div>
                   )}
-                  {installBlocked && (
-                    <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
-                      <AlertCircle className="h-3.5 w-3.5 mt-px shrink-0" />
-                      <span>Installing OS versions requires reMarkable firmware {MIN_SWUPDATE_VERSION} or later. Your reMarkable is on {systemInfo?.active.version}.</span>
-                    </div>
-                  )}
-                  {!installBlocked && versionsFailed && (
+                  {versionsFailed && (
                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                       <AlertCircle className="h-3.5 w-3.5" />
                       Check your internet connection and reopen.

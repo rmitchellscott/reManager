@@ -249,6 +249,35 @@ func (a *App) GetAvailableOSVersions() ([]swupdate.OSVersionInfo, error) {
 	return swupdate.ListVersions(string(deviceType), nil)
 }
 
+type OSChannelStatus struct {
+	IsPrerelease  bool   `json:"isPrerelease"`
+	ActiveVersion string `json:"activeVersion"`
+	LatestPublic  string `json:"latestPublic"`
+}
+
+func (a *App) GetOSChannelStatus() (OSChannelStatus, error) {
+	a.mu.Lock()
+	deviceType := a.connectedDeviceType
+	a.mu.Unlock()
+
+	active := a.activeOSVersion()
+	status := OSChannelStatus{ActiveVersion: active}
+
+	if deviceType == "" || active == "" || a.isLegacyOS() {
+		return status, nil
+	}
+
+	versions, err := swupdate.ListVersions(string(deviceType), nil)
+	if err != nil || len(versions) == 0 {
+		return status, nil
+	}
+
+	latest := versions[0].Version
+	status.LatestPublic = latest
+	status.IsPrerelease = rmversion.Compare(active, latest) > 0
+	return status, nil
+}
+
 func (a *App) CancelOSInstall() {
 	a.mu.Lock()
 	ch := a.osInstallCancelCh
