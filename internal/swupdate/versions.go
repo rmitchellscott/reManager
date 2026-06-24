@@ -14,12 +14,18 @@ import (
 
 const bucketURL = "https://remarkable-software.s3.us-east-2.amazonaws.com/"
 
+const DownloadBaseURL = "https://dlqathbgqp3nv.cloudfront.net/"
+
+func ImageURL(filename string) string {
+	return DownloadBaseURL + filename
+}
+
 var imagePattern = regexp.MustCompile(`^remarkable-production-image-(.+)-(.+)-public\.swu$`)
 
 var deviceFileNames = map[string]string{
-	"rm1":  "rm1",
-	"rm2":  "rm2",
-	"rmpp": "ferrari",
+	"rm1":      "rm1",
+	"rm2":      "rm2",
+	"rmpp":     "ferrari",
 	"rmppmove": "chiappa",
 	"rmppure":  "tatsu",
 }

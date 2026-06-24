@@ -59,6 +59,28 @@ interface ModsTabProps {
   selectPackageForOSRef?: React.MutableRefObject<SelectPackageForOSFn | null>
 }
 
+function installedOnlyPackage(name: string, version: string): PackageInfo {
+  return {
+    name,
+    version,
+    description: '',
+    upstreamAuthor: '',
+    categories: [],
+    url: '',
+    license: '',
+    devices: [],
+    depends: [],
+    conflicts: [],
+    osMin: null,
+    osMax: null,
+    osConstraints: null,
+    compatible: true,
+    status: '',
+    donateUrl: null,
+    readmeUrl: null,
+  }
+}
+
 export function ModsTab({
   warningsChecked,
   osMismatchDetected,
@@ -146,10 +168,18 @@ export function ModsTab({
       })
   }, [packages, search, categoryFilter, developerFilter])
 
-  const installedFiltered = useMemo(() =>
-    filteredPackages.filter(pkg => installedPackages.has(pkg.name)),
-    [filteredPackages, installedPackages]
-  )
+  const installedFiltered = useMemo(() => {
+    const inCatalog = filteredPackages.filter(pkg => installedPackages.has(pkg.name))
+    const catalogNames = new Set(packages.map(p => p.name))
+    const synthetic = categoryFilter === 'all' && developerFilter === 'all'
+      ? Array.from(installedPackages.entries())
+          .filter(([name]) => !catalogNames.has(name))
+          .filter(([name]) => !search || name.toLowerCase().includes(search.toLowerCase()))
+          .map(([name, version]) => installedOnlyPackage(name, version))
+      : []
+    return [...inCatalog, ...synthetic].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  }, [filteredPackages, packages, installedPackages, search, categoryFilter, developerFilter])
 
   const availableFiltered = useMemo(() => {
     const available = filteredPackages.filter(pkg => !installedPackages.has(pkg.name))
@@ -700,7 +730,9 @@ export function ModsTab({
 
             {filteredPackages.length === 0 && (
               <p className="text-center text-muted-foreground py-8">
-                {packages.length === 0 ? 'No mods available' : 'No mods match your filters'}
+                {packages.length === 0
+                  ? 'Mod catalog unavailable. An internet connection is required to browse and install mods.'
+                  : 'No mods match your filters'}
               </p>
             )}
 
@@ -982,6 +1014,7 @@ export function ModsTab({
             <PackageDetailPanel
               pkg={selectedPackage}
               isInstalled={installedPackages.has(selectedPackage.name)}
+              detailsUnavailable={!packages.some(p => p.name === selectedPackage.name)}
               installedPackages={installedPackages}
               installedVersion={installedPackages.get(selectedPackage.name)}
               onInstall={() => {

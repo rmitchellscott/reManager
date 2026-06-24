@@ -543,6 +543,21 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		a.logger.LogConnection("connected", host)
 	}
 
+	if a.shellEmitsNoise(client) {
+		debug.Println("[DEBUG] Device login shell emits output on non-interactive sessions")
+		a.mu.Lock()
+		a.client = nil
+		a.vellumClient = nil
+		a.mu.Unlock()
+		client.Close()
+		return ConnectionResult{
+			Success:   false,
+			Message:   "reMarkable shell prints output on non-interactive SSH, which corrupts file transfers.",
+			Code:      apperrors.ErrShellRCNoisy,
+			Retryable: false,
+		}
+	}
+
 	debug.Println("[DEBUG] Detecting device...")
 	deviceType, deviceArch, firmware, err := a.detectDevice()
 	debug.Printf("[DEBUG] Device detected: %s (%s), err: %v\n", deviceType, deviceArch, err)
@@ -785,11 +800,29 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	a.connectedFirmware = firmware
 	a.mu.Unlock()
 
+	go a.maybeRecoverLegacyConf()
+
 	return ConnectionResult{
 		Success: true,
 		Message: "Connected successfully",
 		Device:  string(deviceType),
 	}
+}
+
+const shellProbeToken = "__REMANAGER_SHELL_OK__"
+
+func (a *App) shellEmitsNoise(client *ssh.Client) bool {
+	session, err := client.NewSession()
+	if err != nil {
+		return false
+	}
+	defer session.Close()
+
+	out, err := session.Output("printf '%s' " + shellProbeToken)
+	if err != nil && len(out) == 0 {
+		return false
+	}
+	return string(out) != shellProbeToken
 }
 
 func (a *App) detectDevice() (rmdevice.Type, rmdevice.Architecture, string, error) {
@@ -810,7 +843,7 @@ func (a *App) detectDevice() (rmdevice.Type, rmdevice.Architecture, string, erro
 		return rmdevice.Unknown, "", "", fmt.Errorf("failed to detect device: %w", err)
 	}
 
-	exec := rmexecutor.NewSSH(client)
+	exec := rmexecutor.NewSSH(client, rmexecutor.WithLogger(debug.SlogLogger()))
 	arch, err := rmdevice.DetectArchitecture(exec)
 	if err != nil {
 		return deviceType, "", "", fmt.Errorf("failed to detect architecture: %w", err)

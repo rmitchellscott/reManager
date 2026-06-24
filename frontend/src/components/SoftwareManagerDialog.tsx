@@ -23,6 +23,9 @@ import { toast } from 'sonner'
 import { TerminalWithCopy } from '@/components/TerminalWithCopy'
 import { CheckOSDialog } from '@/components/CheckOSDialog'
 import { CompatibilityResult } from '@/lib/types'
+import { compareVersions, isRealVersion } from '@/lib/utils'
+
+const MIN_SWUPDATE_VERSION = '3.11.2.5'
 
 interface PartitionSlot {
   number: number
@@ -62,11 +65,14 @@ interface SoftwareManagerDialogProps {
 
 export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumInstalled, onSelectPackageForOS }: SoftwareManagerDialogProps) {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
+  const [partitionError, setPartitionError] = useState<string | null>(null)
   const [versions, setVersions] = useState<OSVersionInfo[]>([])
   const [versionsFailed, setVersionsFailed] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [versionsLoading, setVersionsLoading] = useState(false)
   const [selectedVersion, setSelectedVersion] = useState('')
   const [installNeedsReboot, setInstallNeedsReboot] = useState(false)
+  const [installMode, setInstallMode] = useState<'swupdate' | 'legacy'>('swupdate')
 
   const [showSwitchConfirm, setShowSwitchConfirm] = useState(false)
   const [showInstallConfirm, setShowInstallConfirm] = useState(false)
@@ -102,24 +108,40 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     if (!isConnected) return
     setLoading(true)
     setVersionsFailed(false)
-    try {
-      const info = await window.go.main.App.GetPartitionInfo()
-      setSystemInfo(info)
+    setPartitionError(null)
 
-      try {
-        const availableVersions = await window.go.main.App.GetAvailableOSVersions()
-        const installed = new Set([info.active.version, info.fallback.version])
-        setVersions((availableVersions || []).map(v => ({
-          ...v,
-          isInstalled: installed.has(v.version),
-        })))
-      } catch {
-        setVersionsFailed(true)
-      }
-    } catch {
-      toast.error('Failed to load partition info')
+    let info: SystemInfo
+    try {
+      info = await window.go.main.App.GetPartitionInfo()
+      setSystemInfo(info)
+    } catch (err: any) {
+      const message = err?.message || String(err)
+      setPartitionError(message)
+      toast.error(`Failed to load partition info: ${message}`)
+      return
     } finally {
       setLoading(false)
+    }
+
+    try {
+      const mode = await window.go.main.App.GetOSInstallMode()
+      setInstallMode(mode === 'legacy' ? 'legacy' : 'swupdate')
+    } catch {
+      setInstallMode('swupdate')
+    }
+
+    setVersionsLoading(true)
+    try {
+      const availableVersions = await window.go.main.App.GetAvailableOSVersions()
+      const installed = new Set([info.active.version, info.fallback.version])
+      setVersions((availableVersions || []).map(v => ({
+        ...v,
+        isInstalled: installed.has(v.version),
+      })))
+    } catch {
+      setVersionsFailed(true)
+    } finally {
+      setVersionsLoading(false)
     }
   }, [isConnected])
 
@@ -136,7 +158,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     if (!open || !systemInfo || !vellumInstalled) return
 
     const versions = [systemInfo.active.version, systemInfo.fallback.version]
-    const unchecked = versions.filter(v => !compatCache[v])
+    const unchecked = versions.filter(v => v !== 'unknown' && !compatCache[v])
     if (unchecked.length === 0) return
 
     setPartitionCompatLoading(true)
@@ -193,6 +215,12 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
   const standbySlot = systemInfo ? systemInfo.fallback : null
   const bootSwitchPending = systemInfo ? !systemInfo.active.isNextBoot : false
   const needsReboot = bootSwitchPending || installNeedsReboot
+
+  const osTooOld = !!systemInfo && isRealVersion(systemInfo.active.version) &&
+    compareVersions(systemInfo.active.version, MIN_SWUPDATE_VERSION) < 0
+
+  const isLegacy = installMode === 'legacy'
+  const installBlocked = osTooOld && !isLegacy
 
   const selectedVersionCompat = selectedVersion ? compatCache[selectedVersion] : null
   const selectedVersionHasIncompat = selectedVersionCompat ? selectedVersionCompat.incompatible.length > 0 : false
@@ -269,6 +297,9 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
   }
 
   const renderCompatIcon = (version: string) => {
+    if (version === 'unknown') {
+      return <span className="text-muted-foreground">—</span>
+    }
     const result = compatCache[version]
     if (!result) {
       if (partitionCompatLoading) {
@@ -398,6 +429,15 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
+          ) : partitionError ? (
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <AlertCircle className="h-6 w-6 text-destructive" />
+              <div>
+                <div className="text-sm font-medium">Couldn't read partition info</div>
+                <div className="mt-1 text-xs text-muted-foreground break-words max-w-md">{partitionError}</div>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => loadData()}>Retry</Button>
+            </div>
           ) : systemInfo ? (
             <>
               <div className="grid grid-cols-2 gap-3">
@@ -415,9 +455,10 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                     <div className="text-xs text-muted-foreground">Download and install to the standby partition.</div>
                   </div>
                   <div className="flex gap-2">
-                    <Select value={selectedVersion} onValueChange={setSelectedVersion} disabled={needsReboot || versionsFailed}>
+                    <Select value={selectedVersion} onValueChange={setSelectedVersion} disabled={installBlocked || needsReboot || versionsFailed || versionsLoading}>
                       <SelectTrigger className="flex-1 h-9">
-                        <SelectValue placeholder={needsReboot ? "Reboot to install a version" : versionsFailed ? "Could not load versions" : "Choose a version..."}>{selectedVersion || undefined}</SelectValue>
+                        {versionsLoading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-2 shrink-0 text-muted-foreground" />}
+                        <SelectValue placeholder={needsReboot ? "Reboot to install a version" : versionsLoading ? "Loading versions..." : versionsFailed ? "Could not load versions" : "Choose a version..."}>{selectedVersion || undefined}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {versions.map((v) => (
@@ -435,12 +476,30 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                     <Button
                       size="sm"
                       className="h-9"
-                      disabled={!selectedVersion || needsReboot || versionsFailed}
+                      disabled={installBlocked || !selectedVersion || needsReboot || versionsFailed || versionsLoading}
                       onClick={handleInstallClick}
                     >
                       Install
                     </Button>
                   </div>
+                  {isLegacy && (
+                    <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                      <AlertCircle className="h-3.5 w-3.5 mt-px shrink-0" />
+                      <span>Newer versions need 3.11.2.5 first. Install it, then reboot.</span>
+                    </div>
+                  )}
+                  {installBlocked && (
+                    <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                      <AlertCircle className="h-3.5 w-3.5 mt-px shrink-0" />
+                      <span>Installing OS versions requires reMarkable firmware {MIN_SWUPDATE_VERSION} or later. Your reMarkable is on {systemInfo?.active.version}.</span>
+                    </div>
+                  )}
+                  {!installBlocked && versionsFailed && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <AlertCircle className="h-3.5 w-3.5" />
+                      Check your internet connection and reopen.
+                    </div>
+                  )}
                   {vellumInstalled && <div className="h-5">{renderVersionCompatStatus()}</div>}
                 </div>
               </div>

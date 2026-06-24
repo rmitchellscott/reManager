@@ -19,12 +19,15 @@ import (
 	"reManager/internal/logger"
 	"reManager/internal/swupdate"
 
+	rmdevice "github.com/rmitchellscott/remarkable-go/device"
 	rmexecutor "github.com/rmitchellscott/remarkable-go/executor"
 	rmfilesystem "github.com/rmitchellscott/remarkable-go/filesystem"
-	rmdevice "github.com/rmitchellscott/remarkable-go/device"
 	"github.com/rmitchellscott/remarkable-go/partition"
 	rmupdate "github.com/rmitchellscott/remarkable-go/update"
+	rmversion "github.com/rmitchellscott/remarkable-go/version"
 )
+
+const minSwupdateVersion = "3.11.2.5"
 
 func isSystemPath(path string) bool {
 	cleanPath := filepath.Clean(path)
@@ -158,7 +161,7 @@ func (a *App) RebootDevice() error {
 	}
 	defer session.Close()
 
-	session.Run("nohup sh -c 'sleep 1 && reboot' &>/dev/null &")
+	session.Run("nohup sh -c 'sleep 1 && systemctl reboot' >/dev/null 2>&1 &")
 	return nil
 }
 
@@ -172,7 +175,7 @@ func (a *App) getPartitionManager() (partition.Manager, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	exec := rmexecutor.NewSSH(client)
+	exec := rmexecutor.NewSSH(client, rmexecutor.WithLogger(debug.SlogLogger()))
 	fs, err := rmfilesystem.NewSSH(client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create filesystem client: %w", err)
@@ -197,6 +200,29 @@ func (a *App) SwitchBootPartition(partitionNumber int) (*partition.SwitchResult,
 	return mgr.SwitchBoot(context.Background(), partitionNumber)
 }
 
+func (a *App) activeOSVersion() string {
+	if info, err := a.GetPartitionInfo(); err == nil && info != nil {
+		if v := info.Active.Version; v != "" && v != "unknown" {
+			return v
+		}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.connectedFirmware
+}
+
+func (a *App) isLegacyOS() bool {
+	v := a.activeOSVersion()
+	return v != "" && rmversion.Compare(v, minSwupdateVersion) < 0
+}
+
+func (a *App) GetOSInstallMode() string {
+	if a.isLegacyOS() {
+		return "legacy"
+	}
+	return "swupdate"
+}
+
 func (a *App) GetAvailableOSVersions() ([]swupdate.OSVersionInfo, error) {
 	a.mu.Lock()
 	deviceType := a.connectedDeviceType
@@ -204,6 +230,20 @@ func (a *App) GetAvailableOSVersions() ([]swupdate.OSVersionInfo, error) {
 
 	if deviceType == "" {
 		return nil, fmt.Errorf("not connected")
+	}
+
+	if a.isLegacyOS() {
+		versions, err := swupdate.ListLegacyVersions(string(deviceType))
+		if err != nil {
+			return nil, err
+		}
+		filtered := make([]swupdate.OSVersionInfo, 0, len(versions))
+		for _, v := range versions {
+			if rmversion.Compare(v.Version, minSwupdateVersion) <= 0 {
+				filtered = append(filtered, v)
+			}
+		}
+		return filtered, nil
 	}
 
 	return swupdate.ListVersions(string(deviceType), nil)
@@ -233,6 +273,14 @@ func (a *App) InstallOSVersion(version string) {
 			return
 		}
 
+		if info, infoErr := a.GetPartitionInfo(); infoErr == nil && info != nil {
+			active := info.Active.Version
+			if active != "" && active != "unknown" && rmversion.Compare(active, minSwupdateVersion) < 0 {
+				a.installLegacyOSVersion(version, cancelCh)
+				return
+			}
+		}
+
 		versions, err := swupdate.ListVersions(string(deviceType), nil)
 		if err != nil {
 			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": err.Error()})
@@ -251,7 +299,7 @@ func (a *App) InstallOSVersion(version string) {
 			return
 		}
 
-		url := "https://remarkable-software.s3.us-east-2.amazonaws.com/" + filename
+		url := swupdate.ImageURL(filename)
 
 		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "downloading", "percent": 0.0, "message": "Downloading..."})
 
@@ -377,7 +425,7 @@ func (a *App) InstallOSVersion(version string) {
 
 		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "installing", "percent": 100.0, "message": "Installing..."})
 
-		exec := rmexecutor.NewSSH(client)
+		exec := rmexecutor.NewSSH(client, rmexecutor.WithLogger(debug.SlogLogger()))
 		updater := rmupdate.NewManager(exec)
 
 		var outputBuf bytes.Buffer

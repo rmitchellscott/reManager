@@ -630,10 +630,10 @@ func (a *App) GetMaintenanceCommands(pkgName string) []MaintenanceCommandInfo {
 
 func (a *App) GetAllMaintenanceCommands() map[string][]MaintenanceCommandInfo {
 	result := make(map[string][]MaintenanceCommandInfo)
-	for _, pkg := range a.metadata.GetAllPackages() {
-		cmds := a.GetMaintenanceCommands(pkg.Name)
+	for name := range a.metadata.AllMaintenanceCommands() {
+		cmds := a.GetMaintenanceCommands(name)
 		if len(cmds) > 0 {
-			result[pkg.Name] = cmds
+			result[name] = cmds
 		}
 	}
 	return result

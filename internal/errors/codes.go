@@ -8,6 +8,7 @@ const (
 	ErrNetworkUnreachable = "ERR_NETWORK_UNREACHABLE"
 	ErrHostDown           = "ERR_HOST_DOWN"
 	ErrDNSFailed          = "ERR_DNS_FAILED"
+	ErrShellRCNoisy       = "ERR_SHELL_RC_NOISY"
 
 	// SSH key errors
 	ErrKeyNotFound    = "ERR_KEY_NOT_FOUND"

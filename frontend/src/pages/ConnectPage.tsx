@@ -10,6 +10,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Loader2, Eye, EyeOff } from 'lucide-react'
+import { ShellRcNoisyDialog } from '@/components/ShellRcNoisyDialog'
 import type { Step, SSHKey, SavedDevice } from '@/lib/types'
 
 export interface ConnectPageProps {
@@ -49,6 +50,8 @@ export function ConnectPage({
   const [sshAgentAvailable, setSSHAgentAvailable] = useState(initialAgentAvailable)
   const [connecting, setConnecting] = useState(false)
   const connectAttemptRef = useRef(0)
+  const [showShellRcNoisy, setShowShellRcNoisy] = useState(false)
+  const retryConnectRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     setAvailableKeys(initialKeys)
@@ -112,6 +115,7 @@ export function ConnectPage({
   }
 
   const handleConnect = async (saveAfterConnect: boolean) => {
+    retryConnectRef.current = () => handleConnect(saveAfterConnect)
     const thisAttempt = ++connectAttemptRef.current
     setConnecting(true)
 
@@ -143,6 +147,8 @@ export function ConnectPage({
           setStep('select')
         }
         setShowAddForm(false)
+      } else if (result.code === 'ERR_SHELL_RC_NOISY') {
+        setShowShellRcNoisy(true)
       } else {
         toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
       }
@@ -159,6 +165,7 @@ export function ConnectPage({
   }
 
   const handleConnectToSavedDevice = async (id: string) => {
+    retryConnectRef.current = () => handleConnectToSavedDevice(id)
     const thisAttempt = ++connectAttemptRef.current
     setConnecting(true)
     setConnectingDeviceId(id)
@@ -174,6 +181,8 @@ export function ConnectPage({
         setDevice(deviceType)
         await onConnected(deviceType)
         setStep('select')
+      } else if (result.code === 'ERR_SHELL_RC_NOISY') {
+        setShowShellRcNoisy(true)
       } else {
         toast.error(result.code ? getUserFriendlyMessage(result) : handleError(result.message, 'Connection'))
       }
@@ -270,7 +279,7 @@ export function ConnectPage({
     }
   }
 
-  if (step !== 'connect' && !showSaveDeviceDialog) return null
+  if (step !== 'connect' && !showSaveDeviceDialog && !showShellRcNoisy) return null
 
   return (
     <>
@@ -601,6 +610,13 @@ export function ConnectPage({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ShellRcNoisyDialog
+        open={showShellRcNoisy}
+        isRetrying={connecting}
+        onClose={() => setShowShellRcNoisy(false)}
+        onRetry={() => { setShowShellRcNoisy(false); retryConnectRef.current() }}
+      />
     </>
   )
 }

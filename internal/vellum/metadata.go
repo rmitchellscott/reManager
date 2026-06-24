@@ -139,7 +139,11 @@ type MetadataStore struct {
 }
 
 func NewMetadataStore() *MetadataStore {
-	return &MetadataStore{}
+	m := &MetadataStore{}
+	if err := json.Unmarshal(fallbackRemanagerJSON, &m.remanager); err != nil {
+		debug.Printf("[DEBUG] Failed to parse embedded fallback remanager metadata: %v\n", err)
+	}
+	return m
 }
 
 func (m *MetadataStore) Load() error {
@@ -362,6 +366,19 @@ func (m *MetadataStore) GetMaintenanceCommands(name string) []MaintenanceCommand
 		return rmInfo.MaintenanceCommands
 	}
 	return nil
+}
+
+func (m *MetadataStore) AllMaintenanceCommands() map[string][]MaintenanceCommand {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[string][]MaintenanceCommand, len(m.remanager.Packages))
+	for name, info := range m.remanager.Packages {
+		if len(info.MaintenanceCommands) > 0 {
+			result[name] = info.MaintenanceCommands
+		}
+	}
+	return result
 }
 
 func (m *MetadataStore) GetHooks(name string) *PackageHooks {

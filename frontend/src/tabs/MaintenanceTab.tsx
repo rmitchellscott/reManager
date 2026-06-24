@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { TabsContent } from '@/components/ui/tabs'
@@ -69,6 +69,13 @@ export function MaintenanceTab({
   bootstrapping,
 }: MaintenanceTabProps) {
   const { installedPackages, packages, commandRunning, connectionStatus, writeableRootBusy, vellumInstalled, startMaintenanceOperation } = useAppContext()
+
+  const maintenancePackages = useMemo<{ name: string; description?: string }[]>(() => {
+    return Array.from(installedPackages.keys())
+      .filter(name => maintenanceCommands[name]?.length > 0)
+      .map(name => ({ name, description: packages.find(p => p.name === name)?.description }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [installedPackages, packages, maintenanceCommands])
 
   const [showNoUpgradesDialog, setShowNoUpgradesDialog] = useState(false)
   const [pendingPackageUpgrade, setPendingPackageUpgrade] = useState<string[] | null>(null)
@@ -249,14 +256,14 @@ export function MaintenanceTab({
                 </div>
 
                 {/* Separator if there are package commands */}
-                {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length > 0 && (
+                {maintenancePackages.length > 0 && (
                   <div className="border-t" />
                 )}
 
                 {/* Package-specific Commands */}
-                {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]?.length > 0).length > 0 && (
+                {maintenancePackages.length > 0 && (
                   <div className="space-y-4">
-                    {packages.filter(p => installedPackages.has(p.name) && maintenanceCommands[p.name]).sort((a, b) => a.name.localeCompare(b.name)).map((pkg) => (
+                    {maintenancePackages.map((pkg) => (
                       <div key={pkg.name}>
                         <h4 className="font-medium">{pkg.name}</h4>
                         {pkg.description && <p className="text-sm text-muted-foreground mb-2">{pkg.description}</p>}

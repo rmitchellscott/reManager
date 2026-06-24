@@ -8,6 +8,7 @@ import { PackageInfo } from '@/lib/types'
 interface PackageDetailPanelProps {
   pkg: PackageInfo
   isInstalled: boolean
+  detailsUnavailable?: boolean
   installedPackages: Map<string, string>
   installedVersion?: string
   onInstall: () => void
@@ -37,6 +38,7 @@ const deviceLabels: Record<string, string> = {
 export function PackageDetailPanel({
   pkg,
   isInstalled,
+  detailsUnavailable = false,
   installedPackages,
   installedVersion,
   onInstall,
@@ -288,6 +290,12 @@ export function PackageDetailPanel({
             </dd>
           )}
         </dl>
+
+        {detailsUnavailable && (
+          <p className="text-sm text-muted-foreground mt-4 border-t pt-3">
+            Detailed package information requires an internet connection.
+          </p>
+        )}
       </div>
 
       {(!viewOnly || (showIncompatible && isInstalled)) && (

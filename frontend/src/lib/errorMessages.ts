@@ -16,6 +16,8 @@ const errorMessages: Record<string, string> = {
     "reMarkable appears to be offline or connection was interrupted.",
   ERR_DNS_FAILED:
     "Could not resolve hostname. Check the address or try using an IP address.",
+  ERR_SHELL_RC_NOISY:
+    "Your reMarkable's shell prints output on SSH, which breaks file transfers. Guard ~/.bashrc so it stays silent in non-interactive sessions.",
 
   // SSH key errors
   ERR_KEY_NOT_FOUND: "SSH key file not found. Please select a valid key file.",
