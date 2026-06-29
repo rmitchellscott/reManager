@@ -935,6 +935,9 @@ const (
 	keepaliveInterval    = 15 * time.Second
 	keepaliveTimeout     = 5 * time.Second
 	maxReconnectAttempts = 5
+
+	installKeepaliveTimeout = 20 * time.Second
+	installKeepaliveMaxMiss = 3
 )
 
 var reconnectBackoff = []time.Duration{
@@ -974,20 +977,32 @@ func (a *App) connectionMonitorLoop() {
 	stopCh := a.keepaliveStop
 	a.mu.Unlock()
 
+	misses := 0
 	for {
 		select {
 		case <-stopCh:
 			return
 		case <-ticker.C:
-			if err := a.checkConnection(); err != nil {
-				a.handleConnectionLost(err)
-				return
+			timeout := keepaliveTimeout
+			maxMiss := 1
+			if a.isInstallActive() {
+				timeout = installKeepaliveTimeout
+				maxMiss = installKeepaliveMaxMiss
+			}
+			if err := a.checkConnection(timeout); err != nil {
+				misses++
+				if misses >= maxMiss {
+					a.handleConnectionLost(err)
+					return
+				}
+			} else {
+				misses = 0
 			}
 		}
 	}
 }
 
-func (a *App) checkConnection() error {
+func (a *App) checkConnection(timeout time.Duration) error {
 	client := a.getClient()
 
 	if client == nil {
@@ -1003,7 +1018,7 @@ func (a *App) checkConnection() error {
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(keepaliveTimeout):
+	case <-time.After(timeout):
 		return fmt.Errorf("keepalive timeout")
 	}
 }
@@ -1013,6 +1028,12 @@ func (a *App) handleConnectionLost(err error) {
 		a.logger.LogConnection("connection-lost", err.Error())
 	}
 	a.mu.Lock()
+	// Must be set before the client.Close() below unblocks the install's command.
+	if a.installSession != nil {
+		a.installSession.mu.Lock()
+		a.installSession.connLost = true
+		a.installSession.mu.Unlock()
+	}
 	hadCommandSession := a.commandSession != nil
 	if a.commandSession != nil {
 		a.commandSession.Close()
@@ -1100,6 +1121,16 @@ func (a *App) attemptReconnect(deviceID string) {
 		if result.Success {
 			if a.logger != nil {
 				a.logger.LogConnection("reconnected", deviceID)
+			}
+			a.mu.Lock()
+			sess := a.installSession
+			newClient := a.client
+			a.mu.Unlock()
+			if sess != nil && newClient != nil {
+				select {
+				case sess.resume <- newClient:
+				default:
+				}
 			}
 			runtime.EventsEmit(a.ctx, "connection:restored", map[string]interface{}{
 				"deviceId": deviceID,

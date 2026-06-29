@@ -33,6 +33,11 @@ const (
 	ErrOperationCancelled = "ERR_OPERATION_CANCELLED"
 	ErrSFTPFailed         = "ERR_SFTP_FAILED"
 
+	// OS update / partition errors
+	ErrTargetSlotUnhealthy = "ERR_TARGET_SLOT_UNHEALTHY"
+	ErrSlotCheckUnavailable = "ERR_SLOT_CHECK_UNAVAILABLE"
+	ErrUpdateInProgress    = "ERR_UPDATE_IN_PROGRESS"
+
 	// Fallback
 	ErrUnknown = "ERR_UNKNOWN"
 )

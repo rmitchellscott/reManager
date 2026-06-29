@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"reManager/internal/debug"
+	apperrors "reManager/internal/errors"
 	"reManager/internal/httputil"
 	"reManager/internal/logger"
 	"reManager/internal/swupdate"
@@ -23,7 +25,6 @@ import (
 	rmexecutor "github.com/rmitchellscott/remarkable-go/executor"
 	rmfilesystem "github.com/rmitchellscott/remarkable-go/filesystem"
 	"github.com/rmitchellscott/remarkable-go/partition"
-	rmupdate "github.com/rmitchellscott/remarkable-go/update"
 	rmversion "github.com/rmitchellscott/remarkable-go/version"
 )
 
@@ -149,6 +150,11 @@ func (a *App) RetryRestoreFilesystem() error {
 }
 
 func (a *App) RebootDevice() error {
+	if a.isInstallActive() || a.updateWritingTargetSlot() {
+		return apperrors.New(apperrors.ErrUpdateInProgress,
+			"An OS update is still being written. Rebooting now can interrupt it and corrupt the partition — wait for it to finish.", nil, false)
+	}
+
 	client := a.getClient()
 
 	if client == nil {
@@ -165,39 +171,69 @@ func (a *App) RebootDevice() error {
 	return nil
 }
 
-func (a *App) getPartitionManager() (partition.Manager, error) {
+func (a *App) getPartitionManager() (partition.Manager, rmexecutor.Executor, error) {
 	a.mu.Lock()
 	client := a.client
 	deviceType := a.connectedDeviceType
 	a.mu.Unlock()
 
 	if client == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, nil, fmt.Errorf("not connected")
 	}
 
 	exec := rmexecutor.NewSSH(client, rmexecutor.WithLogger(debug.SlogLogger()))
 	fs, err := rmfilesystem.NewSSH(client)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create filesystem client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create filesystem client: %w", err)
 	}
 
-	return partition.NewManager(exec, fs, rmdevice.Type(deviceType)), nil
+	return partition.NewManager(exec, fs, rmdevice.Type(deviceType)), exec, nil
 }
 
 func (a *App) GetPartitionInfo() (*partition.SystemInfo, error) {
-	mgr, err := a.getPartitionManager()
+	mgr, _, err := a.getPartitionManager()
 	if err != nil {
 		return nil, err
 	}
 	return mgr.GetSystemInfo(context.Background())
 }
 
+func (a *App) updateWritingTargetSlot() bool {
+	mgr, _, err := a.getPartitionManager()
+	if err != nil {
+		return false
+	}
+	inProgress, err := mgr.IsUpdateInProgress(context.Background())
+	if err != nil {
+		return false
+	}
+	return inProgress
+}
+
 func (a *App) SwitchBootPartition(partitionNumber int) (*partition.SwitchResult, error) {
-	mgr, err := a.getPartitionManager()
+	if a.isInstallActive() || a.updateWritingTargetSlot() {
+		return nil, apperrors.New(apperrors.ErrUpdateInProgress,
+			"An OS update is still being written. Wait for it to finish before switching partitions.", nil, false)
+	}
+
+	mgr, _, err := a.getPartitionManager()
 	if err != nil {
 		return nil, err
 	}
-	return mgr.SwitchBoot(context.Background(), partitionNumber)
+
+	result, err := mgr.SwitchBoot(context.Background(), partitionNumber)
+	if err != nil {
+		switch {
+		case stderrors.Is(err, partition.ErrSlotUnhealthy):
+			return nil, apperrors.New(apperrors.ErrTargetSlotUnhealthy,
+				"The target partition failed an integrity check, so the switch was blocked. That slot likely holds a failed or incomplete OS install — reinstall the OS to it before switching.", err, false)
+		case stderrors.Is(err, partition.ErrSlotCheckUnavailable):
+			return nil, apperrors.New(apperrors.ErrSlotCheckUnavailable,
+				"Could not verify the target partition's health, so the switch was blocked as a precaution.", err, false)
+		}
+		return nil, err
+	}
+	return result, nil
 }
 
 func (a *App) activeOSVersion() string {
@@ -289,6 +325,12 @@ func (a *App) CancelOSInstall() {
 
 func (a *App) InstallOSVersion(version string) {
 	go func() {
+		if !a.beginInstall() {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "An OS update is already in progress."})
+			return
+		}
+		defer a.endInstall()
+
 		a.mu.Lock()
 		client := a.client
 		deviceType := a.connectedDeviceType
@@ -299,6 +341,11 @@ func (a *App) InstallOSVersion(version string) {
 
 		if client == nil {
 			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "not connected"})
+			return
+		}
+
+		if a.updateWritingTargetSlot() {
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "An OS update is already in progress on the device. Wait for it to finish."})
 			return
 		}
 
@@ -454,9 +501,6 @@ func (a *App) InstallOSVersion(version string) {
 
 		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "installing", "percent": 100.0, "message": "Installing..."})
 
-		exec := rmexecutor.NewSSH(client, rmexecutor.WithLogger(debug.SlogLogger()))
-		updater := rmupdate.NewManager(exec)
-
 		var outputBuf bytes.Buffer
 		var outputWriter io.Writer = &outputBuf
 		var cmdLog *logger.CommandLog
@@ -468,14 +512,29 @@ func (a *App) InstallOSVersion(version string) {
 			outputWriter = io.MultiWriter(&outputBuf, &cmdLogWriter{cmdLog: cmdLog})
 		}
 
-		result, err := updater.Install(context.Background(), remotePath, outputWriter)
-		if err != nil {
+		if cmdLog != nil {
+			cmdLog.Write(fmt.Sprintf("[install] mode=swupdate target_version=%s image=%s\n", version, filename))
+			if info, e := a.GetPartitionInfo(); e == nil && info != nil {
+				cmdLog.Write(fmt.Sprintf("[install] active_slot=%d target_slot=%d active_version=%s\n", info.Active.Number, info.Fallback.Number, info.Active.Version))
+			}
+		}
+		if a.logger != nil {
+			a.logger.LogInstall("swupdate", version, "start")
+		}
+
+		if err := a.runSwupdateDetached(context.Background(), remotePath, outputWriter, cancelled); err != nil {
+			if cancelled() {
+				runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "cancelled"})
+				return
+			}
+			if a.logger != nil {
+				a.logger.LogInstall("swupdate", version, "failed: "+err.Error())
+			}
 			runtime.EventsEmit(a.ctx, "software:install-error", map[string]interface{}{"error": "install failed: " + err.Error(), "output": outputBuf.String()})
 			return
 		}
-		if !result.Success {
-			runtime.EventsEmit(a.ctx, "software:install-error", map[string]interface{}{"error": "install failed: " + result.Message, "output": outputBuf.String()})
-			return
+		if a.logger != nil {
+			a.logger.LogInstall("swupdate", version, "success: standby slot written")
 		}
 
 		runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "finalizing", "percent": 100.0, "message": "Finalizing..."})

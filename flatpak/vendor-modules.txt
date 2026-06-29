@@ -364,7 +364,7 @@ github.com/pterm/pterm/internal
 # github.com/rivo/uniseg v0.4.7
 ## explicit; go 1.18
 github.com/rivo/uniseg
-# github.com/rmitchellscott/remarkable-go v0.4.0
+# github.com/rmitchellscott/remarkable-go v0.4.1
 ## explicit; go 1.25.4
 github.com/rmitchellscott/remarkable-go/catalog
 github.com/rmitchellscott/remarkable-go/device
@@ -372,7 +372,6 @@ github.com/rmitchellscott/remarkable-go/executor
 github.com/rmitchellscott/remarkable-go/filesystem
 github.com/rmitchellscott/remarkable-go/omaha
 github.com/rmitchellscott/remarkable-go/partition
-github.com/rmitchellscott/remarkable-go/update
 github.com/rmitchellscott/remarkable-go/updateconf
 github.com/rmitchellscott/remarkable-go/version
 # github.com/rymdport/portal v0.4.3-0.20260225172009-01112360d2cb

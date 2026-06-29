@@ -167,6 +167,8 @@ type App struct {
 	fastDialMode           bool
 	installCancelCh        chan struct{}
 	osInstallCancelCh      chan struct{}
+	installActive          bool
+	installSession         *installSession
 	backupCancelCh         chan struct{}
 	backupMu               sync.Mutex
 	folderTransferCancelCh chan struct{}
