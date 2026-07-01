@@ -28,15 +28,6 @@ const (
 	ProxyTimeout      = 60 * time.Second
 )
 
-var localOnlyPackages = map[string]bool{
-	"remarkable-os": true,
-	"rm1":           true,
-	"rm2":           true,
-	"rmpp":          true,
-	"rmppmove":      true,
-	"rmppure":       true,
-}
-
 type Proxy struct {
 	client    *Client
 	sshClient *ssh.Client
@@ -131,7 +122,7 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 
 	var pkgs []proxyPackage
 	for _, pkg := range toInstall {
-		if localOnlyPackages[pkg.Name] {
+		if IsVirtualPackage(pkg.Name) {
 			continue
 		}
 		pkgs = append(pkgs, proxyPackage{
@@ -331,7 +322,7 @@ func (p *Proxy) ProxyUpgradeDownload(onProgress func(ProxyProgress)) error {
 
 	var pinnedPkgs []proxyPackage
 	for _, pkg := range toUpgrade {
-		if localOnlyPackages[pkg.Name] {
+		if IsVirtualPackage(pkg.Name) {
 			continue
 		}
 		pinnedPkgs = append(pinnedPkgs, proxyPackage{

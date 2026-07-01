@@ -16,6 +16,19 @@ const (
 
 var CorePackages = []string{"vellum", "remarkable-os"}
 
+var VirtualPackages = map[string]bool{
+	"remarkable-os": true,
+	"rm1":           true,
+	"rm2":           true,
+	"rmpp":          true,
+	"rmppmove":      true,
+	"rmppure":       true,
+}
+
+func IsVirtualPackage(name string) bool {
+	return VirtualPackages[name]
+}
+
 type Client struct {
 	executor executor.CommandExecutor
 }
