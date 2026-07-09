@@ -5,12 +5,14 @@ import { handleError, getUserFriendlyMessage } from '@/lib/errorMessages'
 interface UseConnectionEventsParams {
   onConnectionRestored: (deviceType: string) => Promise<void>
   onConnectionLost: () => void
+  onUnsavedConnectionFailed: () => void
   deviceRef: React.RefObject<string>
 }
 
 export function useConnectionEvents({
   onConnectionRestored,
   onConnectionLost,
+  onUnsavedConnectionFailed,
   deviceRef,
 }: UseConnectionEventsParams) {
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'lost' | 'reconnecting' | 'failed'>('connected')
@@ -26,6 +28,9 @@ export function useConnectionEvents({
 
   const onConnectionLostRef = useRef(onConnectionLost)
   onConnectionLostRef.current = onConnectionLost
+
+  const onUnsavedConnectionFailedRef = useRef(onUnsavedConnectionFailed)
+  onUnsavedConnectionFailedRef.current = onUnsavedConnectionFailed
 
   useEffect(() => {
     if (typeof window.runtime === 'undefined') return
@@ -65,6 +70,9 @@ export function useConnectionEvents({
       debugLog('Received connection:failed:', data)
       setConnectionStatus('failed')
       setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
+      if (!data.deviceId) {
+        onUnsavedConnectionFailedRef.current()
+      }
     })
 
     const unsubscribeFilesystemRestoreError = window.runtime.EventsOn('filesystem:restore-error', (...args: unknown[]) => {

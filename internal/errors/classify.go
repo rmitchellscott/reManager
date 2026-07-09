@@ -43,7 +43,8 @@ func Classify(err error) *UserError {
 	}
 
 	// Connection refused
-	if strings.Contains(errStr, "connection refused") {
+	if strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "actively refused") {
 		return New(ErrConnectionRefused, "Could not connect to device. Make sure it's powered on and SSH is enabled.", err, true)
 	}
 
@@ -51,7 +52,10 @@ func Classify(err error) *UserError {
 	if strings.Contains(errStr, "timeout") ||
 		strings.Contains(errStr, "i/o timeout") ||
 		strings.Contains(errStr, "deadline exceeded") ||
-		strings.Contains(errStr, "timed out") {
+		strings.Contains(errStr, "timed out") ||
+		strings.Contains(errStr, "did not properly respond") ||
+		strings.Contains(errStr, "wsarecv") ||
+		strings.Contains(errStr, "wsasend") {
 		return New(ErrTimeout, "Connection timed out. The device may be busy or unreachable.", err, true)
 	}
 

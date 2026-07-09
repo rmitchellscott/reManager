@@ -30,6 +30,9 @@ func (a *App) runCommand(cmd string) (string, error) {
 	session, err := a.client.NewSession()
 	if err != nil {
 		debug.Printf("[DEBUG] runCommand session error: %v\n", err)
+		if isConnectionDeadError(err) {
+			go a.triggerConnectionCheck()
+		}
 		return "", err
 	}
 	defer session.Close()
@@ -70,6 +73,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 		if err != nil {
 			a.mu.Unlock()
 			debug.Println("[DEBUG] Session error:", err)
+			if isConnectionDeadError(err) {
+				go a.triggerConnectionCheck()
+			}
 			runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
 			runtime.EventsEmit(a.ctx, "command:done", false)
 			return

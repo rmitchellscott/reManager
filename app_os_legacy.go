@@ -134,6 +134,14 @@ func (a *App) installLegacyOSVersion(version string, cancelCh chan struct{}) {
 		return
 	}
 
+	sess := &installSession{
+		deviceID: deviceID,
+		version:  version,
+		mode:     "legacy",
+		resume:   make(chan *ssh.Client, 1),
+	}
+	a.setInstallSession(sess)
+
 	ctx, cancel := context.WithCancel(a.ctx)
 	defer cancel()
 	go func() {
@@ -191,6 +199,31 @@ func (a *App) installLegacyOSVersion(version string, cancelCh chan struct{}) {
 		cmdLog = a.logger.StartCommandLog(deviceID, "legacy-update")
 		defer cmdLog.Close()
 	}
+
+	a.mu.Lock()
+	firmware := a.connectedFirmware
+	a.mu.Unlock()
+	activeSlot, targetSlot, activeVer := 0, 0, ""
+	if info, e := a.GetPartitionInfo(); e == nil && info != nil {
+		activeSlot, targetSlot, activeVer = info.Active.Number, info.Fallback.Number, info.Active.Version
+		sess.targetPartition = targetSlot
+	}
+	logResult := func(status, detail string) {
+		if cmdLog != nil {
+			cmdLog.Write(fmt.Sprintf("[result] %s %s\n", status, detail))
+		}
+		if a.logger != nil {
+			a.logger.LogInstall("legacy", version, status+": "+detail)
+		}
+	}
+	if cmdLog != nil {
+		cmdLog.Write(fmt.Sprintf("[install] mode=legacy target_version=%s image=%s size=%d sha256=%s\n", version, filepath.Base(entry.Key), entry.Size, entry.SHA256))
+		cmdLog.Write(fmt.Sprintf("[install] device=%s firmware=%s active_slot=%d target_slot=%d active_version=%s\n", deviceType, firmware, activeSlot, targetSlot, activeVer))
+	}
+	if a.logger != nil {
+		a.logger.LogInstall("legacy", version, fmt.Sprintf("start: device=%s firmware=%s active_slot=%d target_slot=%d", deviceType, firmware, activeSlot, targetSlot))
+	}
+
 	logEvent := func(ev omaha.Event) {
 		if cmdLog != nil {
 			cmdLog.Write(fmt.Sprintf("[omaha event] type=%d result=%d errorcode=%s\n", ev.Type, ev.Result, ev.ErrorCode))
@@ -253,6 +286,7 @@ func (a *App) installLegacyOSVersion(version string, cancelCh chan struct{}) {
 
 	failAfterRewrite := func(msg string) {
 		restore()
+		logResult("failed", msg)
 		emitErr(msg)
 	}
 
@@ -283,6 +317,13 @@ func (a *App) installLegacyOSVersion(version string, cancelCh chan struct{}) {
 			failAfterRewrite("cancelled")
 			return
 		}
+		sess.mu.Lock()
+		lost := sess.connLost
+		sess.mu.Unlock()
+		if lost {
+			a.reconcileLegacyInstall(sess, restore, version, emitProg, logResult)
+			return
+		}
 		failAfterRewrite("update failed: " + updateErr.Error())
 		return
 	}
@@ -292,8 +333,88 @@ func (a *App) installLegacyOSVersion(version string, cancelCh chan struct{}) {
 	emitProg("installing", 100, "Installing...")
 	restore()
 
+	logResult("success", "standby slot written, awaiting reboot")
 	runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "complete", "percent": 100.0, "message": "Complete"})
 	runtime.EventsEmit(a.ctx, "software:install-complete", map[string]interface{}{"version": version, "partition": "standby"})
+}
+
+func (a *App) reconcileLegacyInstall(sess *installSession, restore func(), version string, emitProg func(string, float64, string), logResult func(string, string)) {
+	emitProg("installing", 95, "Connection lost during install — reconnecting and verifying on device...")
+
+	var client *ssh.Client
+	select {
+	case client = <-sess.resume:
+	case <-a.ctx.Done():
+		return
+	case <-time.After(3 * time.Minute):
+		logResult("unknown", "lost contact during install; never reconnected")
+		runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{
+			"error": "Lost contact with the device during the install. Reconnect and check the device before switching partitions — the standby slot may be incomplete.",
+		})
+		return
+	}
+
+	exec := rmexecutor.NewSSH(client, rmexecutor.WithLogger(debug.SlogLogger()))
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	overall := time.After(10 * time.Minute)
+	idleSeen := 0
+
+	failIncomplete := func() {
+		restore()
+		logResult("failed", "update did not complete after reconnect (standby slot incomplete)")
+		runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{
+			"error": "The update did not complete. The standby slot may be incomplete — reinstall before switching to it.",
+		})
+	}
+
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-overall:
+			logResult("unknown", "timed out verifying update after reconnect")
+			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{
+				"error": "Timed out verifying the update after reconnect. Check the device before switching partitions.",
+			})
+			return
+		case <-ticker.C:
+		}
+
+		res, err := exec.Run(a.ctx, "update_engine_client", "-status")
+		if err != nil || res == nil {
+			// Dropped again — pick up the current client and keep trying.
+			if c := a.getClient(); c != nil {
+				exec = rmexecutor.NewSSH(c, rmexecutor.WithLogger(debug.SlogLogger()))
+			}
+			continue
+		}
+
+		op, prog := parseUpdateStatus(res.Stdout)
+		phase, pct, msg := legacyPhase(op, prog)
+		emitProg(phase, pct, msg)
+
+		switch op {
+		case "UPDATE_STATUS_UPDATED_NEED_REBOOT":
+			restore()
+			logResult("success", "update completed after reconnect, awaiting reboot")
+			runtime.EventsEmit(a.ctx, "software:install-progress", map[string]interface{}{"phase": "complete", "percent": 100.0, "message": "Complete"})
+			runtime.EventsEmit(a.ctx, "software:install-complete", map[string]interface{}{"version": version, "partition": "standby"})
+			return
+		case "UPDATE_STATUS_REPORTING_ERROR_EVENT":
+			failIncomplete()
+			return
+		case "UPDATE_STATUS_IDLE":
+			// IDLE here means aborted; require two reads to avoid a reconnect race.
+			idleSeen++
+			if idleSeen >= 2 {
+				failIncomplete()
+				return
+			}
+		default:
+			idleSeen = 0
+		}
+	}
 }
 
 func downloadLegacyImage(ctx context.Context, url string, w io.Writer, totalSize int64, cancelled func() bool, onProgress func(float64)) error {

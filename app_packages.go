@@ -126,6 +126,10 @@ var hiddenPackages = map[string]bool{
 	"/bin/sh":                true,
 }
 
+func isHiddenPackage(name string) bool {
+	return hiddenPackages[name] || vellum.IsVirtualPackage(name)
+}
+
 func containsString(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {
@@ -197,7 +201,7 @@ func (a *App) GetInstalledPackages() []string {
 
 	var result []string
 	for _, pkg := range packages {
-		if !hiddenPackages[pkg] {
+		if !isHiddenPackage(pkg) {
 			result = append(result, pkg)
 		}
 	}
@@ -217,7 +221,7 @@ func (a *App) GetInstalledPackagesWithOsCheck() InstalledPackagesResult {
 
 	var packages []string
 	for _, pkg := range listResult.Packages {
-		if !hiddenPackages[pkg] {
+		if !isHiddenPackage(pkg) {
 			packages = append(packages, pkg)
 		}
 	}
@@ -243,7 +247,7 @@ func (a *App) GetInstalledPackagesWithVersions() map[string]string {
 
 	result := make(map[string]string)
 	for pkg, version := range versions {
-		if !hiddenPackages[pkg] {
+		if !isHiddenPackage(pkg) {
 			result[pkg] = version
 		}
 	}
@@ -466,7 +470,7 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 
 	var filteredInstalled []string
 	for _, pkg := range installed {
-		if !hiddenPackages[pkg] {
+		if !isHiddenPackage(pkg) {
 			filteredInstalled = append(filteredInstalled, pkg)
 		}
 	}

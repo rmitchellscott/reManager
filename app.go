@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -157,6 +158,7 @@ type App struct {
 	supportBundleID string
 
 	keepaliveStop          chan struct{}
+	keepaliveTrigger       chan struct{}
 	connectedDeviceID      string
 	connectedDeviceType    rmdevice.Type
 	connectedDeviceArch    rmdevice.Architecture
@@ -165,8 +167,12 @@ type App struct {
 	reconnecting           bool
 	reconnectMu            sync.Mutex
 	fastDialMode           bool
+	connGen                atomic.Uint64
+	currentConn            *connTarget
 	installCancelCh        chan struct{}
 	osInstallCancelCh      chan struct{}
+	installActive          bool
+	installSession         *installSession
 	backupCancelCh         chan struct{}
 	backupMu               sync.Mutex
 	folderTransferCancelCh chan struct{}
@@ -434,6 +440,9 @@ func (e *wailsExecutor) ExecuteStreaming(cmd string, onOutput func(line string))
 	session, err := e.app.client.NewSession()
 	if err != nil {
 		e.app.mu.Unlock()
+		if isConnectionDeadError(err) {
+			go e.app.triggerConnectionCheck()
+		}
 		return err
 	}
 	e.app.mu.Unlock()
