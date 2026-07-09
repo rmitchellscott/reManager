@@ -8,8 +8,8 @@ import (
 	"reManager/internal/support"
 	"reManager/internal/vellum"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 	rmdevice "github.com/rmitchellscott/remarkable-go/device"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"reManager/internal/commands"
 	"reManager/internal/component"
@@ -31,10 +31,6 @@ type TimezoneStatus struct {
 	DeviceTimezone string `json:"deviceTimezone"`
 	SavedTimezone  string `json:"savedTimezone"`
 	NeedsUpdate    bool   `json:"needsUpdate"`
-}
-
-type ReenableStatusResult struct {
-	Status string `json:"status"`
 }
 
 func (a *App) GetDeviceInfo() map[string]string {
@@ -284,19 +280,6 @@ func (a *App) SetDeviceTimezone(timezone string, deviceType string) {
 
 		runtime.EventsEmit(a.ctx, "timezone:complete", timezone)
 	}()
-}
-
-func (a *App) GetReenableStatus() ReenableStatusResult {
-	if a.vellumClient == nil {
-		return ReenableStatusResult{}
-	}
-	status, err := a.vellumClient.ReenableStatus()
-	if err != nil {
-		debug.Printf("[DEBUG] GetReenableStatus error: %v\n", err)
-		return ReenableStatusResult{}
-	}
-	debug.Printf("[DEBUG] GetReenableStatus: %s\n", status)
-	return ReenableStatusResult{Status: status}
 }
 
 func (a *App) GetDeviceDisplayName(machine string) string {

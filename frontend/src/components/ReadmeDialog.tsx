@@ -91,7 +91,7 @@ export function ReadmeDialog({ open, onOpenChange, url, packageName }: ReadmeDia
     setRawContent(null)
     setLoading(true)
     setError(null)
-    ;(window as any).go.main.App.GetReadmeContent(fetchUrl)
+    window.go.main.App.GetReadmeContent(fetchUrl)
       .then((text: string) => {
         setRawContent(text)
         setCachedUrl(fetchUrl)

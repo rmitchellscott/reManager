@@ -45,15 +45,3 @@ func (a *App) setInstallSession(s *installSession) {
 	a.installSession = s
 	a.mu.Unlock()
 }
-
-func (a *App) currentInstallSession() *installSession {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.installSession
-}
-
-func (a *App) clearInstallSession() {
-	a.mu.Lock()
-	a.installSession = nil
-	a.mu.Unlock()
-}

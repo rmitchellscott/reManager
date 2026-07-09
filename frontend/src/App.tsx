@@ -48,6 +48,7 @@ declare global {
           Disconnect(): Promise<void>
           IsConnected(): Promise<boolean>
           RunCommand(cmd: string): Promise<string>
+          GetReadmeContent(url: string): Promise<string>
           RunCommandWithOutput(cmd: string, requiresPTY: boolean): Promise<void>
           StopCommand(): Promise<void>
           StartShell(rows: number, cols: number): Promise<void>

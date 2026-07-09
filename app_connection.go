@@ -259,15 +259,15 @@ func (a *App) CheckPackageInstalled(pkgName string) bool {
 }
 
 func (a *App) Connect(host, password string) ConnectionResult {
-	return a.ConnectWithAuth(host, "password", password, "")
+	return a.establishConnection(host, "password", password, "", "", a.beginUserConnect())
 }
 
 func (a *App) ConnectWithKey(host, keyPath, passphrase string) ConnectionResult {
-	return a.ConnectWithAuth(host, "key", passphrase, keyPath)
+	return a.establishConnection(host, "key", passphrase, keyPath, "", a.beginUserConnect())
 }
 
 func (a *App) ConnectWithAgent(host string) ConnectionResult {
-	return a.ConnectWithAuth(host, "agent", "", "")
+	return a.establishConnection(host, "agent", "", "", "", a.beginUserConnect())
 }
 
 func (a *App) IsSSHAgentAvailable() bool {
@@ -446,10 +446,6 @@ func (a *App) beginUserConnect() uint64 {
 	a.reconnecting = false
 	a.reconnectMu.Unlock()
 	return a.connGen.Add(1)
-}
-
-func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) ConnectionResult {
-	return a.establishConnection(host, authType, secret, keyPath, "", a.beginUserConnect())
 }
 
 func (a *App) establishConnection(host, authType, secret, keyPath, deviceID string, gen uint64) ConnectionResult {
@@ -966,12 +962,6 @@ func (a *App) releaseWriteableRoot(deviceType rmdevice.Type) {
 	defer a.mu.Unlock()
 	a.writeableRootBusy = false
 	runtime.EventsEmit(a.ctx, "writeable-root:busy", false)
-}
-
-func (a *App) IsWriteableRootBusy() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.writeableRootBusy
 }
 
 const (

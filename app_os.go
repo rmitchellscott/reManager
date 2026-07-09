@@ -717,11 +717,3 @@ func (a *App) StopPreventSleep() error {
 	runtime.EventsEmit(a.ctx, "prevent-sleep-changed", false)
 	return nil
 }
-
-func (a *App) IsPreventingSleep() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	running := a.preventSleepStop != nil
-	debug.Printf("[DEBUG] IsPreventingSleep: %v\n", running)
-	return running
-}
