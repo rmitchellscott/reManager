@@ -362,6 +362,7 @@ export default function App() {
   } = useConnectionEvents({
     onConnectionRestored: handleConnectionRestored,
     onConnectionLost: handleConnectionLost,
+    onUnsavedConnectionFailed: () => handleDisconnect(),
     deviceRef,
   })
 

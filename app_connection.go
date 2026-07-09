@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -171,12 +172,14 @@ func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
 		}
 	}
 
+	gen := a.beginUserConnect()
+
 	var result ConnectionResult
 	if device.AuthType == "agent" {
-		result = a.ConnectWithAuth(device.Host, "agent", "", "")
+		result = a.establishConnection(device.Host, "agent", "", "", id, gen)
 	} else if device.AuthType == "key" {
 		passphrase, _ := a.deviceStore.GetKeyPassphrase(id)
-		result = a.ConnectWithAuth(device.Host, "key", passphrase, device.KeyPath)
+		result = a.establishConnection(device.Host, "key", passphrase, device.KeyPath, id, gen)
 	} else {
 		password, err := a.deviceStore.GetPassword(id)
 		if err != nil {
@@ -187,24 +190,11 @@ func (a *App) ConnectToSavedDevice(id string) ConnectionResult {
 				Retryable: false,
 			}
 		}
-		result = a.ConnectWithAuth(device.Host, "password", password, "")
+		result = a.establishConnection(device.Host, "password", password, "", id, gen)
 	}
 
 	if result.Success {
 		a.deviceStore.UpdateLastConnected(id, time.Now().Unix())
-
-		a.mu.Lock()
-		a.connectedDeviceID = id
-		a.mu.Unlock()
-
-		a.startConnectionMonitor()
-
-		if settings, err := a.settingsStore.Load(); err == nil && settings.PreventSleep {
-			debug.Println("[DEBUG] ConnectToSavedDevice: auto-starting prevent sleep")
-			if err := a.StartPreventSleep(); err != nil {
-				debug.Printf("[DEBUG] ConnectToSavedDevice: StartPreventSleep failed: %v\n", err)
-			}
-		}
 	}
 
 	return result
@@ -329,6 +319,30 @@ func isRetryableError(err error) bool {
 
 	errStr := strings.ToLower(err.Error())
 
+	// Transport-level failures are retryable even when the message also contains
+	// "ssh: handshake failed", check these first.
+	retryableKeywords := []string{
+		"no route to host",
+		"connection refused",
+		"i/o timeout",
+		"connection reset by peer",
+		"network is unreachable",
+		"host is down",
+		"connection timed out",
+		"broken pipe",
+		"did not properly respond",
+		"wsarecv",
+		"wsasend",
+		"actively refused",
+		"unexpected packet in response to channel open",
+	}
+
+	for _, keyword := range retryableKeywords {
+		if strings.Contains(errStr, keyword) {
+			return true
+		}
+	}
+
 	nonRetryableKeywords := []string{
 		"passphrase",
 		"permission denied",
@@ -341,23 +355,6 @@ func isRetryableError(err error) bool {
 	for _, keyword := range nonRetryableKeywords {
 		if strings.Contains(errStr, keyword) {
 			return false
-		}
-	}
-
-	retryableKeywords := []string{
-		"no route to host",
-		"connection refused",
-		"i/o timeout",
-		"connection reset by peer",
-		"network is unreachable",
-		"host is down",
-		"connection timed out",
-		"broken pipe",
-	}
-
-	for _, keyword := range retryableKeywords {
-		if strings.Contains(errStr, keyword) {
-			return true
 		}
 	}
 
@@ -433,7 +430,29 @@ func (a *App) dialWithContextWithRetry(ctx context.Context, addr string, config 
 	return nil, lastErr
 }
 
+// secret is held in memory only so reconnect can redial.
+type connTarget struct {
+	host     string
+	authType string
+	secret   string
+	keyPath  string
+	deviceID string // "" for a manual/unsaved connection
+	gen      uint64
+}
+
+// Bumps the generation so a reconnect that completes later can't overwrite this newer connection.
+func (a *App) beginUserConnect() uint64 {
+	a.reconnectMu.Lock()
+	a.reconnecting = false
+	a.reconnectMu.Unlock()
+	return a.connGen.Add(1)
+}
+
 func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) ConnectionResult {
+	return a.establishConnection(host, authType, secret, keyPath, "", a.beginUserConnect())
+}
+
+func (a *App) establishConnection(host, authType, secret, keyPath, deviceID string, gen uint64) ConnectionResult {
 	a.stopConnectionMonitor()
 
 	a.mu.Lock()
@@ -533,8 +552,20 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 	}
 
 	a.mu.Lock()
+	if a.connGen.Load() != gen {
+		a.mu.Unlock()
+		client.Close()
+		return ConnectionResult{
+			Success:   false,
+			Message:   "Connection superseded.",
+			Code:      apperrors.ErrOperationCancelled,
+			Retryable: false,
+		}
+	}
 	a.client = client
 	a.connectCancel = nil
+	a.connectedDeviceID = deviceID
+	a.currentConn = &connTarget{host, authType, secret, keyPath, deviceID, gen}
 	debug.Println("[DEBUG] SSH connected, creating vellum client")
 	a.vellumClient = vellum.NewClient(&wailsExecutor{app: a})
 	a.mu.Unlock()
@@ -548,6 +579,7 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 		a.mu.Lock()
 		a.client = nil
 		a.vellumClient = nil
+		a.currentConn = nil
 		a.mu.Unlock()
 		client.Close()
 		return ConnectionResult{
@@ -555,6 +587,15 @@ func (a *App) ConnectWithAuth(host, authType, secret, keyPath string) Connection
 			Message:   "reMarkable shell prints output on non-interactive SSH, which corrupts file transfers.",
 			Code:      apperrors.ErrShellRCNoisy,
 			Retryable: false,
+		}
+	}
+
+	a.startConnectionMonitor()
+	if a.settingsStore != nil {
+		if s, err := a.settingsStore.Load(); err == nil && s.PreventSleep {
+			if err := a.StartPreventSleep(); err != nil {
+				debug.Printf("[DEBUG] establishConnection: StartPreventSleep failed: %v\n", err)
+			}
 		}
 	}
 
@@ -871,6 +912,7 @@ func (a *App) Disconnect() {
 	a.reconnectMu.Lock()
 	a.reconnecting = false
 	a.reconnectMu.Unlock()
+	a.connGen.Add(1)
 
 	a.StopPreventSleep()
 	a.StopShell()
@@ -878,6 +920,7 @@ func (a *App) Disconnect() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	a.currentConn = nil
 	a.connectedDeviceID = ""
 	a.connectedDeviceType = ""
 	a.connectedDeviceArch = ""
@@ -955,6 +998,7 @@ func (a *App) startConnectionMonitor() {
 		return
 	}
 	a.keepaliveStop = make(chan struct{})
+	a.keepaliveTrigger = make(chan struct{}, 1)
 	a.mu.Unlock()
 
 	go a.connectionMonitorLoop()
@@ -966,7 +1010,27 @@ func (a *App) stopConnectionMonitor() {
 		close(a.keepaliveStop)
 		a.keepaliveStop = nil
 	}
+	a.keepaliveTrigger = nil
 	a.mu.Unlock()
+}
+
+// Must invoke via a goroutine.
+func (a *App) triggerConnectionCheck() {
+	a.mu.Lock()
+	// During an install the ticker deliberately tolerates dropouts
+	if a.installActive {
+		a.mu.Unlock()
+		return
+	}
+	ch := a.keepaliveTrigger
+	a.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 }
 
 func (a *App) connectionMonitorLoop() {
@@ -975,6 +1039,7 @@ func (a *App) connectionMonitorLoop() {
 
 	a.mu.Lock()
 	stopCh := a.keepaliveStop
+	triggerCh := a.keepaliveTrigger
 	a.mu.Unlock()
 
 	misses := 0
@@ -982,6 +1047,12 @@ func (a *App) connectionMonitorLoop() {
 		select {
 		case <-stopCh:
 			return
+		case <-triggerCh:
+			if err := a.checkConnection(keepaliveTimeout); err != nil {
+				a.handleConnectionLost(err)
+				return
+			}
+			misses = 0
 		case <-ticker.C:
 			timeout := keepaliveTimeout
 			maxMiss := 1
@@ -1000,6 +1071,31 @@ func (a *App) connectionMonitorLoop() {
 			}
 		}
 	}
+}
+
+func isConnectionDeadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, s := range []string{
+		"use of closed network connection",
+		"connection reset by peer",
+		"broken pipe",
+		"unexpected packet in response to channel open",
+		"did not properly respond",
+		"wsarecv",
+		"wsasend",
+		"actively refused",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) checkConnection(timeout time.Duration) error {
@@ -1050,8 +1146,14 @@ func (a *App) handleConnectionLost(err error) {
 	}
 	a.vellumClient = nil
 	a.writeableRootBusy = false
-	deviceID := a.connectedDeviceID
+	var target *connTarget
+	if a.currentConn != nil {
+		t := *a.currentConn
+		target = &t
+		a.currentConn = nil
+	}
 	a.keepaliveStop = nil
+	a.keepaliveTrigger = nil
 	a.mu.Unlock()
 
 	if hadCommandSession {
@@ -1059,14 +1161,18 @@ func (a *App) handleConnectionLost(err error) {
 	}
 
 	ue := apperrors.Classify(err)
+	deviceID := ""
+	if target != nil {
+		deviceID = target.deviceID
+	}
 	runtime.EventsEmit(a.ctx, "connection:lost", map[string]interface{}{
 		"reason":   ue.Message,
 		"code":     ue.Code,
 		"deviceId": deviceID,
 	})
 
-	if deviceID != "" {
-		go a.attemptReconnect(deviceID)
+	if target != nil {
+		go a.attemptReconnect(*target)
 	} else {
 		runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
 			"reason":   "Connection lost. Manual reconnection required.",
@@ -1076,8 +1182,8 @@ func (a *App) handleConnectionLost(err error) {
 	}
 }
 
-func (a *App) attemptReconnect(deviceID string) {
-	debug.Printf("[%s] attemptReconnect started for device %s\n", time.Now().Format("15:04:05.000"), deviceID)
+func (a *App) attemptReconnect(target connTarget) {
+	debug.Printf("[%s] attemptReconnect started for device %q (gen %d)\n", time.Now().Format("15:04:05.000"), target.deviceID, target.gen)
 
 	a.reconnectMu.Lock()
 	if a.reconnecting {
@@ -1102,8 +1208,8 @@ func (a *App) attemptReconnect(deviceID string) {
 		stillReconnecting := a.reconnecting
 		a.reconnectMu.Unlock()
 
-		if !stillReconnecting {
-			debug.Printf("[%s] Reconnect cancelled\n", time.Now().Format("15:04:05.000"))
+		if !stillReconnecting || a.connGen.Load() != target.gen {
+			debug.Printf("[%s] Reconnect cancelled/superseded\n", time.Now().Format("15:04:05.000"))
 			return
 		}
 
@@ -1112,15 +1218,21 @@ func (a *App) attemptReconnect(deviceID string) {
 		runtime.EventsEmit(a.ctx, "connection:reconnecting", map[string]interface{}{
 			"attempt":     attempt + 1,
 			"maxAttempts": maxReconnectAttempts,
-			"deviceId":    deviceID,
+			"deviceId":    target.deviceID,
 		})
 
-		result := a.ConnectToSavedDevice(deviceID)
+		result := a.establishConnection(target.host, target.authType, target.secret, target.keyPath, target.deviceID, target.gen)
 		debug.Printf("[%s] Reconnect attempt %d/%d result: success=%v, message=%s\n", time.Now().Format("15:04:05.000"), attempt+1, maxReconnectAttempts, result.Success, result.Message)
 
 		if result.Success {
+			if a.connGen.Load() != target.gen {
+				return
+			}
+			if target.deviceID != "" && a.deviceStore != nil {
+				a.deviceStore.UpdateLastConnected(target.deviceID, time.Now().Unix())
+			}
 			if a.logger != nil {
-				a.logger.LogConnection("reconnected", deviceID)
+				a.logger.LogConnection("reconnected", target.deviceID)
 			}
 			a.mu.Lock()
 			sess := a.installSession
@@ -1133,7 +1245,7 @@ func (a *App) attemptReconnect(deviceID string) {
 				}
 			}
 			runtime.EventsEmit(a.ctx, "connection:restored", map[string]interface{}{
-				"deviceId": deviceID,
+				"deviceId": target.deviceID,
 				"device":   result.Device,
 			})
 			return
@@ -1143,7 +1255,7 @@ func (a *App) attemptReconnect(deviceID string) {
 			runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
 				"reason":   result.Message,
 				"code":     result.Code,
-				"deviceId": deviceID,
+				"deviceId": target.deviceID,
 			})
 			return
 		}
@@ -1163,6 +1275,6 @@ func (a *App) attemptReconnect(deviceID string) {
 	runtime.EventsEmit(a.ctx, "connection:failed", map[string]interface{}{
 		"reason":   "Could not reconnect after multiple attempts. Please check your connection and try again.",
 		"code":     apperrors.ErrTimeout,
-		"deviceId": deviceID,
+		"deviceId": target.deviceID,
 	})
 }
