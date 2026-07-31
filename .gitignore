@@ -14,6 +14,10 @@ build-dir/
 repo/
 *.flatpak
 
+# Nix Build
+result
+result-*
+
 # Dependencies
 frontend/node_modules/
 vendor/
