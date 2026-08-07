@@ -63,6 +63,7 @@ interface SoftwareManagerDialogProps {
 export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumInstalled, onSelectPackageForOS }: SoftwareManagerDialogProps) {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
   const [partitionError, setPartitionError] = useState<string | null>(null)
+  const [lockDirError, setLockDirError] = useState<string | null>(null)
   const [versions, setVersions] = useState<OSVersionInfo[]>([])
   const [versionsFailed, setVersionsFailed] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -106,6 +107,16 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     setLoading(true)
     setVersionsFailed(false)
     setPartitionError(null)
+    setLockDirError(null)
+
+    try {
+      const readiness = await window.go.main.App.CheckOSManagerReady()
+      if (!readiness.ready && readiness.code === 'ERR_LOCK_DIR_MISSING') {
+        setLockDirError(readiness.message || 'reMarkable is not ready for OS updates right now.')
+        setLoading(false)
+        return
+      }
+    } catch {}
 
     let info: SystemInfo
     try {
@@ -422,6 +433,19 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
+          ) : lockDirError ? (
+            <>
+              <div className="flex flex-col items-center text-center py-6">
+                <AlertCircle className="h-6 w-6 text-destructive" />
+                <div className="mt-3 text-sm font-medium">Cannot install or switch OS versions right now</div>
+                <div className="mt-1.5 text-xs text-muted-foreground break-words max-w-md">{lockDirError}</div>
+              </div>
+              <div className="border-t pt-4 mt-2">
+                <Button className="w-full" onClick={() => setShowRebootConfirm(true)}>
+                  Reboot
+                </Button>
+              </div>
+            </>
           ) : partitionError ? (
             <div className="flex flex-col items-center gap-3 py-8 text-center">
               <AlertCircle className="h-6 w-6 text-destructive" />

@@ -34,6 +34,7 @@ type PackageInfo struct {
 	Devices        []string              `json:"devices"`
 	Depends        []string              `json:"depends"`
 	Conflicts      []string              `json:"conflicts"`
+	Provides       []string              `json:"provides"`
 	OSMin          *string               `json:"osMin"`
 	OSMax          *string               `json:"osMax"`
 	OSConstraints  []vellum.OSConstraint `json:"osConstraints"`
@@ -107,8 +108,10 @@ type InstallResult struct {
 }
 
 type InstallSimulationResult struct {
-	Packages  []string `json:"packages"`
-	Requested []string `json:"requested"`
+	Packages  []string                    `json:"packages"`
+	Requested []string                    `json:"requested"`
+	Error     string                      `json:"error,omitempty"`
+	Conflicts []vellum.QueueConflictEntry `json:"conflicts,omitempty"`
 }
 
 type UninstallSimulationResult struct {
@@ -173,6 +176,7 @@ func (a *App) GetPackages(deviceType, firmware, arch string) []PackageInfo {
 			Devices:        pkg.Devices,
 			Depends:        visibleDepends,
 			Conflicts:      pkg.Conflicts,
+			Provides:       pkg.Provides,
 			OSMin:          pkg.OSMin,
 			OSMax:          pkg.OSMax,
 			OSConstraints:  pkg.OSConstraints,
@@ -275,9 +279,11 @@ func (a *App) GetPackageForOS(name, targetOS, deviceType, arch string) *PackageI
 		Devices:        pkg.Devices,
 		Depends:        pkg.Depends,
 		Conflicts:      pkg.Conflicts,
+		Provides:       pkg.Provides,
 		OSMin:          pkg.OSMin,
 		OSMax:          pkg.OSMax,
 		OSConstraints:  pkg.OSConstraints,
+		Compatible:     true,
 		Status:         pkg.Status,
 		DonateURL:      pkg.DonateURL,
 		ReadmeURL:      pkg.ReadmeURL,
@@ -665,7 +671,22 @@ func (a *App) SimulateInstall(packageNames []string, deviceType string) (*Instal
 	allPackages, err := a.vellumClient.SimulateAdd(packageNames...)
 	if err != nil {
 		debug.Printf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
-		return &InstallSimulationResult{Packages: packageNames, Requested: packageNames}, nil
+		failure := vellum.ResolutionFailure(err)
+		result := &InstallSimulationResult{
+			Packages:  packageNames,
+			Requested: packageNames,
+			Error:     failure,
+		}
+		if failure != "" && a.metadata != nil && a.metadata.Ready() {
+			firmware := ""
+			if osState, osErr := a.vellumClient.GetOSVersionState(); osErr == nil {
+				firmware = osState.CurrentVersion
+			}
+			arch := commands.GetDownloadArch(a.connectedDeviceArch)
+			result.Conflicts = a.metadata.AttributeConflictsToQueue(
+				vellum.ParseResolutionConflicts(failure), packageNames, deviceType, firmware, arch)
+		}
+		return result, nil
 	}
 
 	if len(allPackages) == 0 {
@@ -673,6 +694,44 @@ func (a *App) SimulateInstall(packageNames []string, deviceType string) (*Instal
 	}
 
 	return &InstallSimulationResult{Packages: allPackages, Requested: packageNames}, nil
+}
+
+func (a *App) GetInstallChoices(packageNames []string, deviceType string) []vellum.VirtualChoice {
+	if a.metadata == nil || !a.metadata.Ready() || a.vellumClient == nil {
+		return []vellum.VirtualChoice{}
+	}
+
+	firmware := ""
+	if osState, err := a.vellumClient.GetOSVersionState(); err == nil {
+		firmware = osState.CurrentVersion
+	} else {
+		debug.Printf("[DEBUG] GetInstallChoices: GetOSVersionState error: %v\n", err)
+	}
+
+	installed, err := a.vellumClient.List()
+	if err != nil {
+		debug.Printf("[DEBUG] GetInstallChoices: List error: %v\n", err)
+		return []vellum.VirtualChoice{}
+	}
+
+	arch := commands.GetDownloadArch(a.connectedDeviceArch)
+	choices := a.metadata.ResolveVirtualChoices(packageNames, installed, deviceType, firmware, arch)
+	debug.Printf("[DEBUG] GetInstallChoices: %d choice(s) for %v\n", len(choices), packageNames)
+	if choices == nil {
+		return []vellum.VirtualChoice{}
+	}
+	return choices
+}
+
+func (a *App) GetPackageConflicts(installed map[string]string, queue []string, deviceType, firmware string) map[string]vellum.PackageConflict {
+	if a.metadata == nil || !a.metadata.Ready() {
+		return map[string]vellum.PackageConflict{}
+	}
+
+	arch := commands.GetDownloadArch(a.connectedDeviceArch)
+	conflicts := a.metadata.FindConflicts(installed, queue, deviceType, firmware, arch)
+	debug.Printf("[DEBUG] GetPackageConflicts: %d conflict(s) for queue %v\n", len(conflicts), queue)
+	return conflicts
 }
 
 func (a *App) SimulateUninstall(packageNames []string) (*UninstallSimulationResult, error) {
@@ -806,16 +865,22 @@ func (a *App) resolveWorldDeps(targets []string) (worldToRemove []string, allAff
 	return worldToRemove, allAffected, nil
 }
 
-func (a *App) InstallPackages(packageNames []string, deviceType string) {
+func (a *App) InstallPackages(requested []string, resolved []string, deviceType string) {
+	if len(resolved) == 0 {
+		resolved = requested
+	}
+	packageNames := requested
 	if a.logger != nil {
 		a.logger.LogInstall("install", strings.Join(packageNames, ", "), "started")
 	}
 	go func() {
 		a.mu.Lock()
 		vc := a.vellumClient
+		a.mu.Unlock()
+		a.cancelMu.Lock()
 		a.installCancelCh = make(chan struct{})
 		cancelCh := a.installCancelCh
-		a.mu.Unlock()
+		a.cancelMu.Unlock()
 		if vc == nil {
 			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
 				Success: false,
@@ -825,11 +890,11 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 		}
 
 		defer func() {
-			a.mu.Lock()
+			a.cancelMu.Lock()
 			if a.installCancelCh == cancelCh {
 				a.installCancelCh = nil
 			}
-			a.mu.Unlock()
+			a.cancelMu.Unlock()
 		}()
 
 		isCancelled := func() bool {
@@ -890,7 +955,7 @@ func (a *App) InstallPackages(packageNames []string, deviceType string) {
 				return
 			}
 		} else {
-			allPackages = packageNames
+			allPackages = resolved
 		}
 
 		if isCancelled() {
@@ -974,9 +1039,11 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 	go func() {
 		a.mu.Lock()
 		vc := a.vellumClient
+		a.mu.Unlock()
+		a.cancelMu.Lock()
 		a.installCancelCh = make(chan struct{})
 		cancelCh := a.installCancelCh
-		a.mu.Unlock()
+		a.cancelMu.Unlock()
 		if vc == nil {
 			runtime.EventsEmit(a.ctx, "install:complete", InstallResult{
 				Success: false,
@@ -986,11 +1053,11 @@ func (a *App) UninstallPackages(packageNames []string, deviceType string) {
 		}
 
 		defer func() {
-			a.mu.Lock()
+			a.cancelMu.Lock()
 			if a.installCancelCh == cancelCh {
 				a.installCancelCh = nil
 			}
-			a.mu.Unlock()
+			a.cancelMu.Unlock()
 		}()
 
 		isCancelled := func() bool {
@@ -1151,6 +1218,7 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 				ctx := component.CommandContext{
 					Arch:   a.connectedDeviceArch,
 					Device: dev,
+					Exec:   &wailsExecutor{app: a},
 				}
 
 				hookResult, err := hookFunc(ctx)
@@ -1182,6 +1250,18 @@ func (a *App) RunMaintenanceCommand(pkgName, commandID, deviceType string) {
 					})
 
 					exec := &wailsExecutor{app: a}
+
+					for _, action := range hookResult.DialogConfig.Actions {
+						if action.Id == response && action.Type == "run_command" {
+							runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", action.Value))
+							if err := exec.Execute([]component.CommandResult{{Script: action.Value}}); err != nil {
+								runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Error: %v\n", err))
+								runtime.EventsEmit(a.ctx, "command:done", false)
+								return
+							}
+							break
+						}
+					}
 
 					if hookResult.Command != nil {
 						runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("$ %s\n", hookResult.Command.Script))

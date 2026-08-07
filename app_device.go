@@ -16,8 +16,10 @@ import (
 )
 
 type XochitlStatus struct {
-	Running    bool `json:"running"`
-	XoviActive bool `json:"xoviActive"`
+	Running         bool   `json:"running"`
+	XoviActive      bool   `json:"xoviActive"`
+	ActiveLauncher  string `json:"activeLauncher"`
+	CurrentLauncher string `json:"currentLauncher"`
 }
 
 type HashtabVersionStatus struct {
@@ -92,6 +94,14 @@ func (a *App) GetUpdateServiceStatus() support.UpdateServiceStatus {
 }
 
 func (a *App) GetXochitlStatus() XochitlStatus {
+	return a.xochitlStatus(true)
+}
+
+func (a *App) GetXochitlStatusQuick() XochitlStatus {
+	return a.xochitlStatus(false)
+}
+
+func (a *App) xochitlStatus(includeLauncher bool) XochitlStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -99,16 +109,38 @@ func (a *App) GetXochitlStatus() XochitlStatus {
 		return XochitlStatus{}
 	}
 
-	output, err := a.runCommand("systemctl is-active xochitl")
-	running := err == nil && strings.TrimSpace(output) == "active"
+	probe := "systemctl is-active xochitl"
+	if includeLauncher {
+		probe = fmt.Sprintf("%s; echo %[2]s; [ -x %[3]s ] && %[3]s active-launcher 2>/dev/null; echo %[2]s; [ -x %[3]s ] && %[3]s current-launcher 2>/dev/null",
+			probe, vellum.LauncherProbeMarker, vellum.LauncherctlBin)
+	}
+	output, _ := a.runCommand(probe)
+
+	sections := strings.Split(output, vellum.LauncherProbeMarker)
+	running := strings.TrimSpace(sections[0]) == "active"
+
+	activeLauncher := ""
+	if len(sections) > 1 {
+		activeLauncher = vellum.ParseLauncherName(sections[1])
+	}
+
+	currentLauncher := ""
+	if len(sections) > 2 {
+		currentLauncher = vellum.ParseLauncherName(sections[2])
+	}
 
 	xoviActive := false
 	if running {
-		_, err = a.runCommand(`tr '\0' '\n' < /proc/$(pidof xochitl)/environ | grep -q LD_PRELOAD.*xovi`)
+		_, err := a.runCommand(`tr '\0' '\n' < /proc/$(pidof xochitl)/environ | grep -q LD_PRELOAD.*xovi`)
 		xoviActive = err == nil
 	}
 
-	return XochitlStatus{Running: running, XoviActive: xoviActive}
+	return XochitlStatus{
+		Running:         running,
+		XoviActive:      xoviActive,
+		ActiveLauncher:  activeLauncher,
+		CurrentLauncher: currentLauncher,
+	}
 }
 
 func (a *App) CheckHashtabVersion() HashtabVersionStatus {

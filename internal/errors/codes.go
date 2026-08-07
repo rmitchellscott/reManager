@@ -37,6 +37,7 @@ const (
 	ErrTargetSlotUnhealthy = "ERR_TARGET_SLOT_UNHEALTHY"
 	ErrSlotCheckUnavailable = "ERR_SLOT_CHECK_UNAVAILABLE"
 	ErrUpdateInProgress    = "ERR_UPDATE_IN_PROGRESS"
+	ErrLockDirMissing      = "ERR_LOCK_DIR_MISSING"
 
 	// Fallback
 	ErrUnknown = "ERR_UNKNOWN"

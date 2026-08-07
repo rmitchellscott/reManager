@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"reManager/internal/debug"
 	"reManager/internal/executor"
@@ -31,6 +33,21 @@ func IsVirtualPackage(name string) bool {
 
 type Client struct {
 	executor executor.CommandExecutor
+
+	cacheMu      sync.Mutex
+	listResult   *ListResult
+	listAt       time.Time
+	withVersions map[string]string
+	versionsAt   time.Time
+}
+
+const installedCacheTTL = 5 * time.Second
+
+func (c *Client) InvalidateInstalledCache() {
+	c.cacheMu.Lock()
+	c.listResult = nil
+	c.withVersions = nil
+	c.cacheMu.Unlock()
 }
 
 func NewClient(exec executor.CommandExecutor) *Client {
@@ -69,6 +86,7 @@ func (c *Client) ValidateInstall() (valid bool, missing []string, err error) {
 }
 
 func (c *Client) AddStreaming(onOutput func(line string), packages ...string) error {
+	defer c.InvalidateInstalledCache()
 	if len(packages) == 0 {
 		return nil
 	}
@@ -80,6 +98,7 @@ func (c *Client) AddStreaming(onOutput func(line string), packages ...string) er
 }
 
 func (c *Client) DelStreaming(onOutput func(line string), packages ...string) error {
+	defer c.InvalidateInstalledCache()
 	if len(packages) == 0 {
 		return nil
 	}
@@ -119,6 +138,14 @@ var osUpgradeRegex = regexp.MustCompile(`OS updated \(([^\s]+) → ([^\s]+)\)`)
 var installedPkgRegex = regexp.MustCompile(`^(.+)-(\d+(?:\.\d+)*(?:_\w+)?(?:-r\d+)?)\s+\S+\s+\{`)
 
 func (c *Client) ListInstalledWithVersions() (map[string]string, error) {
+	c.cacheMu.Lock()
+	if c.withVersions != nil && time.Since(c.versionsAt) < installedCacheTTL {
+		cached := c.withVersions
+		c.cacheMu.Unlock()
+		return cached, nil
+	}
+	c.cacheMu.Unlock()
+
 	cmd := fmt.Sprintf("%s list -I", VellumBin)
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
@@ -133,10 +160,24 @@ func (c *Client) ListInstalledWithVersions() (map[string]string, error) {
 			result[pkgName] = version
 		}
 	}
+
+	c.cacheMu.Lock()
+	c.withVersions = result
+	c.versionsAt = time.Now()
+	c.cacheMu.Unlock()
+
 	return result, nil
 }
 
 func (c *Client) ListWithOsCheck() (*ListResult, error) {
+	c.cacheMu.Lock()
+	if c.listResult != nil && time.Since(c.listAt) < installedCacheTTL {
+		cached := c.listResult
+		c.cacheMu.Unlock()
+		return cached, nil
+	}
+	c.cacheMu.Unlock()
+
 	cmd := fmt.Sprintf("%s info -q", VellumBin)
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
@@ -158,6 +199,12 @@ func (c *Client) ListWithOsCheck() (*ListResult, error) {
 			result.Packages = append(result.Packages, pkg)
 		}
 	}
+
+	c.cacheMu.Lock()
+	c.listResult = result
+	c.listAt = time.Now()
+	c.cacheMu.Unlock()
+
 	return result, nil
 }
 
@@ -179,6 +226,7 @@ func (c *Client) ReenableStatus() (string, error) {
 }
 
 func (c *Client) ReenableStreaming(onOutput func(line string)) error {
+	defer c.InvalidateInstalledCache()
 	cmd := fmt.Sprintf("%s reenable", VellumBin)
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
@@ -259,6 +307,7 @@ func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, er
 }
 
 func (c *Client) UpgradeStreaming(onOutput func(line string)) error {
+	defer c.InvalidateInstalledCache()
 	cmd := fmt.Sprintf("%s upgrade -y", VellumBin)
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
@@ -388,6 +437,63 @@ func (c *Client) SimulateAdd(packages ...string) ([]string, error) {
 	return parseSimulationOutput(output), nil
 }
 
+var conflictSubjectRegex = regexp.MustCompile(`^\s{2}(\S+?)-[^-\s]+-r\d+:\s*$`)
+var conflictBreaksRegex = regexp.MustCompile(`breaks:\s+(\S+?)-[^-\s\[]+-r\d+`)
+
+type ResolutionConflict struct {
+	Package string
+	Breaks  string
+}
+
+func ParseResolutionConflicts(message string) []ResolutionConflict {
+	var conflicts []ResolutionConflict
+	seen := make(map[string]bool)
+	subject := ""
+
+	for _, line := range strings.Split(message, "\n") {
+		if match := conflictSubjectRegex.FindStringSubmatch(line); match != nil {
+			subject = match[1]
+			continue
+		}
+		match := conflictBreaksRegex.FindStringSubmatch(line)
+		if match == nil || subject == "" {
+			continue
+		}
+
+		key := subject + "\x00" + match[1]
+		if subject > match[1] {
+			key = match[1] + "\x00" + subject
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		conflicts = append(conflicts, ResolutionConflict{Package: subject, Breaks: match[1]})
+	}
+	return conflicts
+}
+
+func ResolutionFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	message := err.Error()
+	if !strings.Contains(message, "unable to select packages") &&
+		!strings.Contains(message, "unable to satisfy") {
+		return ""
+	}
+
+	var lines []string
+	for _, line := range strings.Split(message, "\n") {
+		if strings.Contains(line, "satisfies: world[") {
+			continue
+		}
+		lines = append(lines, strings.TrimPrefix(line, "ERROR: "))
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 // SimulateDelResult contains the result of simulating a package deletion
 type SimulateDelResult struct {
 	Packages []string            // packages that would be removed
@@ -430,6 +536,7 @@ func (c *Client) SimulateDelRecursive(packages ...string) ([]string, error) {
 
 // DelRecursiveStreaming removes packages and their dependents with streaming output
 func (c *Client) DelRecursiveStreaming(onOutput func(line string), packages ...string) error {
+	defer c.InvalidateInstalledCache()
 	if len(packages) == 0 {
 		return nil
 	}

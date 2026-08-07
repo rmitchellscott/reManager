@@ -88,6 +88,14 @@ func (a *App) buildGenerator(deviceID string, isConnectedDevice bool, deviceName
 			NeedsRebuild:   hashtab.NeedsRebuild,
 		}
 
+		xochitlStatus := a.GetXochitlStatus()
+		_, launcherctlInstalled := gen.InstalledPackages["launcherctl"]
+		gen.Launcher = &support.LauncherInfo{
+			Installed: launcherctlInstalled,
+			Current:   xochitlStatus.CurrentLauncher,
+			Active:    xochitlStatus.ActiveLauncher,
+		}
+
 		if partInfo, err := a.GetPartitionInfo(); err == nil {
 			gen.PartitionInfo = partInfo
 		}
@@ -111,6 +119,11 @@ func (a *App) buildGenerator(deviceID string, isConnectedDevice bool, deviceName
 				Installed:      cached.HashtabInstalled,
 				HashtabVersion: cached.HashtabVersion,
 				NeedsRebuild:   cached.HashtabNeedsRebuild,
+			}
+			gen.Launcher = &support.LauncherInfo{
+				Installed: cached.LauncherctlInstalled,
+				Current:   cached.CurrentLauncher,
+				Active:    cached.ActiveLauncher,
 			}
 			gen.PartitionInfo = cached.PartitionInfo
 			gen.Timezone = cached.Timezone

@@ -18,6 +18,9 @@ type CachedDeviceInfo struct {
 	HashtabInstalled     bool              `json:"hashtabInstalled"`
 	HashtabVersion       string            `json:"hashtabVersion,omitempty"`
 	HashtabNeedsRebuild  bool              `json:"hashtabNeedsRebuild"`
+	LauncherctlInstalled bool              `json:"launcherctlInstalled"`
+	CurrentLauncher      string            `json:"currentLauncher,omitempty"`
+	ActiveLauncher       string            `json:"activeLauncher,omitempty"`
 	PartitionInfo        any               `json:"partitionInfo,omitempty"`
 	Timezone             string            `json:"timezone,omitempty"`
 	CachedAt             int64             `json:"cachedAt"`

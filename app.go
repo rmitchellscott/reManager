@@ -137,46 +137,55 @@ func sanitizeFilename(name string) string {
 }
 
 type App struct {
-	ctx            context.Context
-	client         *ssh.Client
-	session        *ssh.Session
-	mu             sync.Mutex
-	connectCancel  context.CancelFunc
-	commandCancel  context.CancelFunc
-	commandSession *ssh.Session
-	commandStdin   io.WriteCloser
-	dialogResponse chan string
-	deviceStore    *storage.DeviceStore
-	settingsStore  *storage.SettingsStore
-	bundleStore      *storage.BundleStore
-	deviceInfoCache  *storage.DeviceInfoCacheStore
-	vellumClient   *vellum.Client
-	metadata       *vellum.MetadataStore
+	ctx             context.Context
+	client          *ssh.Client
+	session         *ssh.Session
+	mu              sync.Mutex
+	connectCancel   context.CancelFunc
+	commandCancel   context.CancelFunc
+	commandSession  *ssh.Session
+	commandStdin    io.WriteCloser
+	dialogResponse  chan string
+	deviceStore     *storage.DeviceStore
+	settingsStore   *storage.SettingsStore
+	bundleStore     *storage.BundleStore
+	deviceInfoCache *storage.DeviceInfoCacheStore
+	vellumClient    *vellum.Client
+	metadata        *vellum.MetadataStore
 
 	logger          *logger.Logger
 	operationLog    *logger.CommandLog
 	supportBundleID string
 
-	keepaliveStop          chan struct{}
-	keepaliveTrigger       chan struct{}
-	connectedDeviceID      string
-	connectedDeviceType    rmdevice.Type
-	connectedDeviceArch    rmdevice.Architecture
-	connectedFirmware      string
-	writeableRootBusy      bool
-	reconnecting           bool
-	reconnectMu            sync.Mutex
-	fastDialMode           bool
-	connGen                atomic.Uint64
-	currentConn            *connTarget
-	installCancelCh        chan struct{}
-	osInstallCancelCh      chan struct{}
-	installActive          bool
-	installSession         *installSession
-	backupCancelCh         chan struct{}
-	backupMu               sync.Mutex
-	folderTransferCancelCh chan struct{}
-	folderTransferMu       sync.Mutex
+	keepaliveStop       chan struct{}
+	keepaliveTrigger    chan struct{}
+	connectedDeviceID   string
+	connectedDeviceType rmdevice.Type
+	connectedDeviceArch rmdevice.Architecture
+	connectedFirmware   string
+	writeableRootBusy   bool
+	reconnecting        bool
+	reconnectMu         sync.Mutex
+	fastDialMode        bool
+	connGen             atomic.Uint64
+	currentConn         *connTarget
+	installCancelCh     chan struct{}
+	cancelMu            sync.Mutex
+	sessionMu           sync.Mutex
+	osInstallCancelCh   chan struct{}
+	installActive       bool
+	installSession      *installSession
+	backupCancelCh      chan struct{}
+	backupMu            sync.Mutex
+
+	transfers    *transferManager
+	transferOnce sync.Once
+	roundTrip    time.Duration
+	roundTripGen uint64
+	roundTripMu  sync.Mutex
+
+	writableRootCount int
+	writableRootMu    sync.Mutex
 
 	agentConn net.Conn
 
@@ -290,25 +299,6 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 }
 
-type TransferProgress struct {
-	Filename   string  `json:"filename"`
-	BytesSent  int64   `json:"bytesSent"`
-	TotalBytes int64   `json:"totalBytes"`
-	Percentage float64 `json:"percentage"`
-	Status     string  `json:"status"`
-}
-
-type FolderTransferProgress struct {
-	CurrentFile    string  `json:"currentFile"`
-	FilesDone      int     `json:"filesDone"`
-	FilesTotal     int     `json:"filesTotal"`
-	BytesDone      int64   `json:"bytesDone"`
-	BytesTotal     int64   `json:"bytesTotal"`
-	Percentage     float64 `json:"percentage"`
-	Status         string  `json:"status"`
-	ContainsFolder bool    `json:"containsFolder"`
-}
-
 type DialogActionRequest struct {
 	Id    string `json:"id"`
 	Label string `json:"label"`
@@ -326,6 +316,8 @@ type DialogRequest struct {
 	InProgressMessage string                `json:"inProgressMessage"`
 	InfoOnly          bool                  `json:"infoOnly"`
 	InstallFlow       bool                  `json:"installFlow"`
+	Success           bool                  `json:"success"`
+	PrimaryAction     string                `json:"primaryAction"`
 	Actions           []DialogActionRequest `json:"actions"`
 }
 
@@ -349,6 +341,8 @@ func dialogRequestFromConfig(cfg *component.DialogConfig) DialogRequest {
 		InProgressMessage: cfg.InProgressMessage,
 		InfoOnly:          cfg.InfoOnly,
 		InstallFlow:       cfg.InstallFlow,
+		Success:           cfg.Success,
+		PrimaryAction:     cfg.PrimaryAction,
 		Actions:           actions,
 	}
 }
@@ -360,8 +354,8 @@ func (a *App) RespondToDialog(response string) {
 }
 
 func (a *App) CancelInstallation() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.cancelMu.Lock()
+	defer a.cancelMu.Unlock()
 	if a.installCancelCh != nil {
 		close(a.installCancelCh)
 		a.installCancelCh = nil
@@ -633,8 +627,8 @@ func (a *App) GetSettings() SettingsInfo {
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
 
-				PreventSleep:               true,
-				CheckForUpdates:            true,
+				PreventSleep:    true,
+				CheckForUpdates: true,
 			},
 			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			Theme:         "system",
@@ -650,8 +644,8 @@ func (a *App) GetSettings() SettingsInfo {
 				ProxyMode:                  true,
 				SuppressSystemFileWarnings: false,
 
-				PreventSleep:               true,
-				CheckForUpdates:            true,
+				PreventSleep:    true,
+				CheckForUpdates: true,
 			},
 			TabVisibility: map[string]bool{"mods": true, "maintenance": true, "utilities": true},
 			Theme:         "system",

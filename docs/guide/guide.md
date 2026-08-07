@@ -154,6 +154,12 @@ If a package is not compatible with your reMarkable's OS or conflicts with an in
 
 ![Installing packages](images/installing-package.png)
 
+### Choosing Between Packages
+
+Some packages require a kind of dependency rather than one specific package. A launcher is one example. When you install one of these, reManager asks which package to use before the install starts.
+
+Each option shows a short description. If there's a default, it carries a **Recommended** badge, and **More info** opens the package details. reManager greys out any option that does not work with your reMarkable model or OS version. The reason appears with it. When an install needs more than one choice, the dialog steps through them in order.
+
 ## Upgrading Packages
 
 Use the Vellum **Upgrade** command in the Maintenance tab to check for and install package updates.
@@ -178,7 +184,7 @@ When reManager detects issues that need attention, an amber **Action Required** 
 - **Timezone mismatch** — the device timezone differs from your saved preference.
 - **Auto-updates enabled** — automatic OS updates may interfere with mods. Disable them from the Maintenance tab.
 - **Reenable needed** — packages that modify the system partition need to be reenabled.
-- **Mods not running** — mods are installed but the mod framework isn't active. Run **Start UI with Mods** from the Maintenance tab.
+- **Mods not running** — mods are installed but the mod framework isn't active. Run **Start UI with Mods** from the Maintenance tab. This warning does not appear when a launcher is selected.
 
 Click **Go to Maintenance** in the banner to jump directly to the Maintenance tab.
 
@@ -195,7 +201,7 @@ The **Maintenance** tab provides system-level tools and package-specific command
 A grid of system task buttons is available at the top of the tab:
 
 - **Enable Auto-Updates** / **Disable Auto-Updates** — control automatic reMarkable OS updates. Disabling updates is highly recommended if you install mods. The toggle to disable auto-updates in the reMarkable UI has a known issue on the Paper Pro and Paper Pro Move that makes it revert to enabled after every restart. reManager works around this bug and it will stay disabled if disabled from reManager. 
-- **Restart reMarkable UI** — restart the reMarkable's user interface without rebooting the device.
+- **Restart reMarkable UI** — restart the reMarkable's user interface without rebooting the device. reManager disables this button while a launcher is selected. Use the launcherctl **Switch** command to change launchers or return to the stock interface.
 
 The tab also shows the current auto-update status (enabled or disabled, running or stopped).
 
@@ -213,10 +219,11 @@ When you run a command, a progress view shows its output in real time. Some comm
 
 ### Vellum Commands
 
-When Vellum is installed, three commands are available:
+When Vellum is installed, these commands are available:
 
 - **Reenable** — reenable packages that modify the system partition (required after an OS update)
 - **Upgrade** — check for and install package updates
+- **Repair** — reinstall Vellum with the latest version
 - **Check OS** — check package compatibility with a target OS version
 
 # Utilities
@@ -402,14 +409,24 @@ When connected and Vellum is installed, you can uninstall it from your reMarkabl
 - The mod framework needs to be started manually after every reboot
    - Install the tripletap package and triple-press the power button after booting
    - In the Maintenance tab, run the Start UI with Mods button
+   - reManager disables Start UI with Mods while a launcher is selected. Run the launcherctl Start command instead
 - The hashtable needs to be built for every OS version
    - Run Rebuild Hashtable in the Maintenance tab
 - Mod is crashing
    - Run Debug in the Maintenance tab to capture the error
    - Upload a Support Bundle and submit an issue or use the community chat for support
+- Your launcher is not running
+   - In the Maintenance tab, run the launcherctl Start command
+   - Run the launcherctl Status command to see which launcher is selected
 - reMarkable OS updated
    - Disable auto-updates via the Maintenance tab
    - After an OS update, use the **Reenable** command in the Maintenance tab to reenable packages that modify the system partition
+
+**I installed a launcher but my screen never changes!**
+
+- A launcher that takes over the screen needs launcherctl to start it
+   - If you declined launcherctl during the install, install the launcherctl configuration for your launcher from the Mods tab
+   - Run the launcherctl Switch command in the Maintenance tab and choose your launcher
 
 **When will x be added or updated?**
 

@@ -9,6 +9,8 @@ interface UseInstallEventsParams {
   setInstallQueue: (v: Set<string>) => void
   setXochitlRunning: (v: boolean) => void
   setXoviActive: (v: boolean) => void
+  setActiveLauncher: (v: string) => void
+  setCurrentLauncher: (v: string) => void
   setHashtabMismatch: (v: HashtabVersionStatus | null) => void
   setHashtabMissing: (v: boolean) => void
   setCompatibilityStatus: (v: any) => void
@@ -25,6 +27,8 @@ export function useInstallEvents({
   setInstallQueue,
   setXochitlRunning,
   setXoviActive,
+  setActiveLauncher,
+  setCurrentLauncher,
   setHashtabMismatch,
   setHashtabMissing,
   setCompatibilityStatus,
@@ -60,12 +64,18 @@ export function useInstallEvents({
 
   const setInstallQueueRef = useRef(setInstallQueue)
   useEffect(() => { setInstallQueueRef.current = setInstallQueue }, [setInstallQueue])
+  const lastOperationTypeRef = useRef(lastOperationType)
+  useEffect(() => { lastOperationTypeRef.current = lastOperationType }, [lastOperationType])
 
   const setXochitlRunningRef = useRef(setXochitlRunning)
   useEffect(() => { setXochitlRunningRef.current = setXochitlRunning }, [setXochitlRunning])
 
   const setXoviActiveRef = useRef(setXoviActive)
   useEffect(() => { setXoviActiveRef.current = setXoviActive }, [setXoviActive])
+  const setActiveLauncherRef = useRef(setActiveLauncher)
+  useEffect(() => { setActiveLauncherRef.current = setActiveLauncher }, [setActiveLauncher])
+  const setCurrentLauncherRef = useRef(setCurrentLauncher)
+  useEffect(() => { setCurrentLauncherRef.current = setCurrentLauncher }, [setCurrentLauncher])
 
   const setHashtabMismatchRef = useRef(setHashtabMismatch)
   useEffect(() => { setHashtabMismatchRef.current = setHashtabMismatch }, [setHashtabMismatch])
@@ -143,6 +153,8 @@ export function useInstallEvents({
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
       setXochitlRunningRef.current(xochitlStatus.running)
       setXoviActiveRef.current(xochitlStatus.xoviActive)
+        setActiveLauncherRef.current(xochitlStatus.activeLauncher || '')
+        setCurrentLauncherRef.current(xochitlStatus.currentLauncher || '')
 
       setInstallingRef.current(false)
       setUninstallingRef.current(false)
@@ -151,7 +163,9 @@ export function useInstallEvents({
       setProgressStatus('')
       setDialogRequest(null)
       setRunningHookTitle(null)
-      setInstallQueueRef.current(new Set())
+      if (lastOperationTypeRef.current !== 'uninstall') {
+        setInstallQueueRef.current(new Set())
+      }
     })
 
     const unsubscribeDialog = window.runtime.EventsOn('hook:dialog', (...args: unknown[]) => {

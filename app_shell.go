@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/crypto/ssh"
@@ -21,13 +22,53 @@ func (a *App) RunCommand(cmd string) string {
 	return output
 }
 
+func (a *App) runCommandWithTimeout(cmd string, timeout time.Duration) (string, error) {
+	if a.client == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	debug.Printf("[DEBUG] runCommand creating session: %s\n", cmd[:min(50, len(cmd))])
+	a.sessionMu.Lock()
+	session, err := a.client.NewSession()
+	a.sessionMu.Unlock()
+	if err != nil {
+		debug.Printf("[DEBUG] runCommand session error: %v\n", err)
+		if isConnectionDeadError(err) {
+			go a.triggerConnectionCheck()
+		}
+		return "", err
+	}
+	defer session.Close()
+
+	type result struct {
+		output []byte
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		output, err := session.CombinedOutput(cmd)
+		done <- result{output, err}
+	}()
+
+	select {
+	case r := <-done:
+		return string(r.output), r.err
+	case <-time.After(timeout):
+		session.Close()
+		debug.Printf("[DEBUG] runCommand timed out after %s: %s\n", timeout, cmd[:min(50, len(cmd))])
+		return "", fmt.Errorf("command timed out after %s", timeout)
+	}
+}
+
 func (a *App) runCommand(cmd string) (string, error) {
 	if a.client == nil {
 		return "", fmt.Errorf("not connected")
 	}
 
 	debug.Printf("[DEBUG] runCommand creating session: %s\n", cmd[:min(50, len(cmd))])
+	a.sessionMu.Lock()
 	session, err := a.client.NewSession()
+	a.sessionMu.Unlock()
 	if err != nil {
 		debug.Printf("[DEBUG] runCommand session error: %v\n", err)
 		if isConnectionDeadError(err) {
@@ -69,7 +110,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			return
 		}
 
+		a.sessionMu.Lock()
 		session, err := a.client.NewSession()
+		a.sessionMu.Unlock()
 		if err != nil {
 			a.mu.Unlock()
 			debug.Println("[DEBUG] Session error:", err)
@@ -188,6 +231,9 @@ func (a *App) RunCommandWithOutput(cmd string, requiresPTY bool) {
 			cmdLog.WriteExitCode(err)
 		}
 		debug.Println("[DEBUG] Command done, success:", err == nil)
+		if a.vellumClient != nil {
+			a.vellumClient.InvalidateInstalledCache()
+		}
 		runtime.EventsEmit(a.ctx, "command:done", err == nil)
 	}()
 }
@@ -224,7 +270,9 @@ func (a *App) StartShell(rows, cols int) error {
 		return fmt.Errorf("not connected")
 	}
 
+	a.sessionMu.Lock()
 	session, err := a.client.NewSession()
+	a.sessionMu.Unlock()
 	if err != nil {
 		a.mu.Unlock()
 		return fmt.Errorf("failed to create session: %w", err)
@@ -342,4 +390,3 @@ func (a *App) IsShellActive() bool {
 	defer a.shellMu.Unlock()
 	return a.shellActive
 }
-

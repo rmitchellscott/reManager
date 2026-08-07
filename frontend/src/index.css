@@ -13,7 +13,7 @@ input::-ms-reveal {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);

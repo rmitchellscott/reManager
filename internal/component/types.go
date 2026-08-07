@@ -4,9 +4,14 @@ import (
 	rmdevice "github.com/rmitchellscott/remarkable-go/device"
 )
 
+type CommandRunner interface {
+	ExecuteWithOutput(command string) (string, error)
+}
+
 type CommandContext struct {
 	Arch   rmdevice.Architecture
 	Device rmdevice.Type
+	Exec   CommandRunner
 }
 
 type CommandResult struct {
@@ -32,6 +37,8 @@ type DialogConfig struct {
 	InProgressMessage string
 	InfoOnly          bool
 	InstallFlow       bool
+	Success           bool
+	PrimaryAction     string
 	Actions           []DialogAction
 	PostCommandDialog *DialogConfig
 }

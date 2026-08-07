@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +19,7 @@ import (
 
 const (
 	PackagesMetadataURL  = "https://packages.vellum.delivery/packages-metadata.json"
-	RemanagerMetadataURL = "https://packages.vellum.delivery/remanager-metadata.json"
+	RemanagerMetadataURL = "https://remanager.io/remanager-metadata.json"
 	MetadataTimeout      = 10 * time.Second
 )
 
@@ -42,6 +43,7 @@ type PackageVersion struct {
 	Devices        []string       `json:"devices"`
 	Depends        []string       `json:"depends"`
 	Conflicts      []string       `json:"conflicts"`
+	Provides       []string       `json:"provides"`
 	Arch           []string       `json:"arch"`
 	Status         string         `json:"status"`
 	DonateURL      *string        `json:"donateurl"`
@@ -74,8 +76,13 @@ type RemanagerPackageInfo struct {
 	Hooks               *PackageHooks        `json:"hooks,omitempty"`
 }
 
+type VirtualConfig struct {
+	Default string `json:"default,omitempty"`
+}
+
 type RemanagerMetadata struct {
 	Packages map[string]RemanagerPackageInfo `json:"packages"`
+	Virtuals map[string]VirtualConfig        `json:"virtuals,omitempty"`
 }
 
 type Package struct {
@@ -92,6 +99,7 @@ type Package struct {
 	Devices             []string
 	Depends             []string
 	Conflicts           []string
+	Provides            []string
 	Arch                []string
 	Status              string
 	DonateURL           *string
@@ -134,8 +142,33 @@ type MetadataStore struct {
 	mu        sync.RWMutex
 	packages  PackagesMetadata
 	remanager RemanagerMetadata
+	providers map[string][]string
 	loaded    bool
 	err       error
+}
+
+func buildProviderIndex(pm *PackagesMetadata) map[string][]string {
+	index := make(map[string][]string)
+	for name, versions := range pm.Packages {
+		seen := make(map[string]bool)
+		for _, info := range versions {
+			for _, provided := range info.Provides {
+				provided = stripDepVersion(provided)
+				if provided == "" || seen[provided] {
+					continue
+				}
+				if _, isReal := pm.Packages[provided]; isReal {
+					continue
+				}
+				seen[provided] = true
+				index[provided] = append(index[provided], name)
+			}
+		}
+	}
+	for _, names := range index {
+		sort.Strings(names)
+	}
+	return index
 }
 
 func NewMetadataStore() *MetadataStore {
@@ -152,6 +185,7 @@ func (m *MetadataStore) Load() error {
 		return m.err
 	}
 	normalizePackagesMetadata(&m.packages)
+	m.providers = buildProviderIndex(&m.packages)
 	debug.Printf("[DEBUG] Loaded %d packages from metadata\n", len(m.packages.Packages))
 
 	if err := m.loadRemanagerMetadata(); err != nil {
@@ -214,6 +248,7 @@ func (m *MetadataStore) Refresh() error {
 
 	m.mu.Lock()
 	m.packages = newPackages
+	m.providers = buildProviderIndex(&m.packages)
 	if len(newRemanager.Packages) > 0 {
 		m.remanager = newRemanager
 	}
@@ -295,6 +330,7 @@ func (m *MetadataStore) GetAllPackages() []Package {
 			Devices:        latestInfo.Devices,
 			Depends:        latestInfo.Depends,
 			Conflicts:      latestInfo.Conflicts,
+			Provides:       latestInfo.Provides,
 			Arch:           latestInfo.Arch,
 			Status:         latestInfo.Status,
 			DonateURL:      latestInfo.DonateURL,
@@ -344,6 +380,7 @@ func (m *MetadataStore) GetPackage(name string) *Package {
 		Devices:        latestInfo.Devices,
 		Depends:        latestInfo.Depends,
 		Conflicts:      latestInfo.Conflicts,
+		Provides:       latestInfo.Provides,
 		Arch:           latestInfo.Arch,
 		Status:         latestInfo.Status,
 		DonateURL:      latestInfo.DonateURL,
@@ -467,6 +504,7 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			Devices:            bestInfo.Devices,
 			Depends:            bestInfo.Depends,
 			Conflicts:          bestInfo.Conflicts,
+			Provides:           bestInfo.Provides,
 			Arch:               bestInfo.Arch,
 			Status:             bestInfo.Status,
 			DonateURL:          bestInfo.DonateURL,
@@ -526,6 +564,7 @@ func (m *MetadataStore) GetPackageForTargetOS(name, targetOS, deviceType, arch s
 		Devices:        bestInfo.Devices,
 		Depends:        bestInfo.Depends,
 		Conflicts:      bestInfo.Conflicts,
+		Provides:       bestInfo.Provides,
 		Arch:           bestInfo.Arch,
 		Status:         bestInfo.Status,
 		DonateURL:      bestInfo.DonateURL,
@@ -570,15 +609,200 @@ func (m *MetadataStore) depsInstallable(name, deviceType, firmware, arch string,
 	}
 
 	for _, dep := range bestInfo.Depends {
+		if strings.HasPrefix(dep, "!") {
+			continue
+		}
 		depName := stripDepVersion(dep)
 		if depName == "/bin/sh" {
 			continue
 		}
+
+		if _, isReal := m.packages.Packages[depName]; !isReal {
+			providers := m.providers[depName]
+			if len(providers) == 0 {
+				continue
+			}
+			satisfiable := false
+			for _, provider := range providers {
+				if m.depsInstallable(provider, deviceType, firmware, arch, visited) {
+					satisfiable = true
+					break
+				}
+			}
+			if !satisfiable {
+				return false
+			}
+			continue
+		}
+
 		if !m.depsInstallable(depName, deviceType, firmware, arch, visited) {
 			return false
 		}
 	}
 	return true
+}
+
+type ProviderOption struct {
+	Name               string         `json:"name"`
+	Version            string         `json:"version"`
+	Description        string         `json:"description"`
+	Compatible         bool           `json:"compatible"`
+	IncompatibleReason string         `json:"incompatibleReason,omitempty"`
+	OSMin              *string        `json:"osMin"`
+	OSMax              *string        `json:"osMax"`
+	OSConstraints      []OSConstraint `json:"osConstraints"`
+}
+
+type VirtualChoice struct {
+	Virtual    string           `json:"virtual"`
+	RequiredBy []string         `json:"requiredBy"`
+	Providers  []ProviderOption `json:"providers"`
+	Default    string           `json:"default,omitempty"`
+}
+
+func anyCompatible(providers []ProviderOption) bool {
+	for _, provider := range providers {
+		if provider.Compatible {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *MetadataStore) defaultProvider(virtual string, providers []ProviderOption) string {
+	name := m.remanager.Virtuals[virtual].Default
+	for _, provider := range providers {
+		if provider.Name == name {
+			return name
+		}
+	}
+	return ""
+}
+
+func (m *MetadataStore) providersOf(name, deviceType, firmware, arch string) []ProviderOption {
+	var options []ProviderOption
+	for _, provider := range m.providers[name] {
+		version, info := m.bestVersion(provider, deviceType, firmware, arch)
+		option := ProviderOption{Name: provider, Compatible: true}
+
+		if info == nil {
+			option.Compatible = false
+			option.IncompatibleReason = "os"
+			version, info = m.bestVersion(provider, deviceType, "", arch)
+			if info == nil {
+				option.IncompatibleReason = "device"
+				version, info = m.bestVersion(provider, "", "", "")
+			}
+			if info == nil {
+				continue
+			}
+		}
+
+		option.Version = version
+		option.Description = info.Pkgdesc
+		option.OSMin = info.OSMin
+		option.OSMax = info.OSMax
+		option.OSConstraints = info.OSConstraints
+		options = append(options, option)
+	}
+	return options
+}
+
+func (m *MetadataStore) bestVersion(name, deviceType, firmware, arch string) (string, *PackageVersion) {
+	versions, ok := m.packages.Packages[name]
+	if !ok {
+		return "", nil
+	}
+
+	var bestVersion string
+	var bestInfo *PackageVersion
+	for version, info := range versions {
+		if !isVersionCompatible(info, deviceType, firmware, arch) {
+			continue
+		}
+		if bestVersion == "" || versionpkg.Compare(version, bestVersion) > 0 {
+			bestVersion = version
+			v := info
+			bestInfo = &v
+		}
+	}
+	return bestVersion, bestInfo
+}
+
+func (m *MetadataStore) ResolveVirtualChoices(requested, installed []string, deviceType, firmware, arch string) []VirtualChoice {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	present := make(map[string]bool, len(installed)+len(requested))
+	for _, name := range installed {
+		present[name] = true
+	}
+	for _, name := range requested {
+		present[name] = true
+	}
+
+	satisfied := make(map[string]bool)
+	for virtual, providers := range m.providers {
+		for _, provider := range providers {
+			if present[provider] {
+				satisfied[virtual] = true
+				break
+			}
+		}
+	}
+
+	requiredBy := make(map[string][]string)
+	var order []string
+
+	visited := make(map[string]bool)
+	queue := append([]string{}, requested...)
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if visited[name] {
+			continue
+		}
+		visited[name] = true
+
+		_, info := m.bestVersion(name, deviceType, firmware, arch)
+		if info == nil {
+			continue
+		}
+
+		for _, dep := range info.Depends {
+			if strings.HasPrefix(dep, "!") {
+				continue
+			}
+			depName := stripDepVersion(dep)
+			if _, isReal := m.packages.Packages[depName]; isReal {
+				queue = append(queue, depName)
+				continue
+			}
+			if satisfied[depName] || len(m.providers[depName]) == 0 {
+				continue
+			}
+			if _, seen := requiredBy[depName]; !seen {
+				order = append(order, depName)
+			}
+			requiredBy[depName] = append(requiredBy[depName], name)
+		}
+	}
+
+	sort.Strings(order)
+	var choices []VirtualChoice
+	for _, virtual := range order {
+		providers := m.providersOf(virtual, deviceType, firmware, arch)
+		if !anyCompatible(providers) {
+			continue
+		}
+		choices = append(choices, VirtualChoice{
+			Virtual:    virtual,
+			RequiredBy: requiredBy[virtual],
+			Providers:  providers,
+			Default:    m.defaultProvider(virtual, providers),
+		})
+	}
+	return choices
 }
 
 func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string) bool {
@@ -653,12 +877,4 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 	return true
 }
 
-func stripDepVersion(dep string) string {
-	for _, op := range []string{">=", "<=", "=", ">", "<"} {
-		if i := strings.Index(dep, op); i > 0 {
-			return dep[:i]
-		}
-	}
-	return dep
-}
 

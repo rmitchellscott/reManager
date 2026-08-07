@@ -67,11 +67,26 @@ export interface DialogRequest {
   inProgressMessage: string
   infoOnly: boolean
   installFlow?: boolean
+  success?: boolean
+  primaryAction?: string
   actions: DialogActionRequest[]
+}
+
+export interface QueueConflictEntry {
+  queueEntry: string
+  package: string
+  blocks: string
 }
 
 export interface InstallSimulationResult {
   packages: string[]
+  requested: string[]
+  error?: string
+  conflicts?: QueueConflictEntry[]
+}
+
+export interface InstallSet {
+  resolved: string[]
   requested: string[]
 }
 
@@ -114,6 +129,7 @@ export interface PackageInfo {
   devices: string[]
   depends: string[]
   conflicts: string[]
+  provides: string[]
   osMin: string | null
   osMax: string | null
   osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
@@ -124,10 +140,58 @@ export interface PackageInfo {
   readmeUrl: string | null
 }
 
+export interface ProviderOption {
+  name: string
+  version: string
+  description: string
+  compatible: boolean
+  incompatibleReason?: string
+  osMin: string | null
+  osMax: string | null
+  osConstraints: { version: string; operator: '>=' | '<' | '>' | '<=' | '=' }[] | null
+}
+
+export interface PackageConflict {
+  conflictsWith: string
+  queued: boolean
+}
+
+export interface VirtualChoice {
+  virtual: string
+  requiredBy: string[]
+  providers: ProviderOption[]
+  default?: string
+}
+
 export interface CompatibilityResult {
   compatible: string[]
   incompatible: string[]
   noConstraint: string[]
   fetchFailed: boolean
   statusMap: Record<string, string>
+}
+
+export interface TransferView {
+  id: string
+  kind: 'upload' | 'download'
+  name: string
+  state: 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'canceled'
+  bytesDone: number
+  bytesTotal: number
+  filesDone: number
+  filesTotal: number
+  percentage: number
+  error?: string
+  failedFiles?: string[]
+  isDir: boolean
+}
+
+export interface TransferSnapshot {
+  transfers: TransferView[]
+  activeCount: number
+  bytesDone: number
+  bytesTotal: number
+  percentage: number
+  bytesPerSecond: number
+  secondsRemaining: number
 }

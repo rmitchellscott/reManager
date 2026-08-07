@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { handleError } from '@/lib/errorMessages'
-import { formatBytes, formatDate, formatDateFull } from '@/lib/format'
+import type { TransferSnapshot } from '@/lib/types'
+import { formatBytes, formatBytesPair, formatDuration, formatDate, formatDateFull } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
@@ -63,6 +64,8 @@ import {
   EyeOff,
   Terminal,
   X,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 
 interface FileInfo {
@@ -72,25 +75,6 @@ interface FileInfo {
   isDir: boolean
   modTime: number
   mode: string
-}
-
-interface TransferProgress {
-  filename: string
-  bytesSent: number
-  totalBytes: number
-  percentage: number
-  status: string
-}
-
-interface FolderTransferProgress {
-  currentFile: string
-  filesDone: number
-  filesTotal: number
-  bytesDone: number
-  bytesTotal: number
-  percentage: number
-  status: string
-  containsFolder: boolean
 }
 
 interface FileBrowserProps {
@@ -145,8 +129,8 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
   const [files, setFiles] = useState<FileInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [transferProgress, setTransferProgress] = useState<TransferProgress | null>(null)
-  const [folderTransferProgress, setFolderTransferProgress] = useState<FolderTransferProgress | null>(null)
+  const [transfers, setTransfers] = useState<TransferSnapshot | null>(null)
+  const [transfersExpanded, setTransfersExpanded] = useState(false)
 
   const [deleteDialog, setDeleteDialog] = useState<FileInfo | null>(null)
   const [renameDialog, setRenameDialog] = useState<FileInfo | null>(null)
@@ -206,47 +190,32 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
   }, [isConnected])
 
   useEffect(() => {
-    const handleProgress = (progress: unknown) => {
-      setTransferProgress(progress as TransferProgress)
+    const handleSnapshot = (snapshot: unknown) => {
+      setTransfers(snapshot as TransferSnapshot)
     }
 
-    const handleComplete = () => {
-      setTransferProgress(null)
-      loadDirectory(currentPath)
+    const handleFinished = (payload: unknown) => {
+      const finished = payload as { kind: string; state: string }
+      if (finished.kind === 'upload' && finished.state === 'done') {
+        loadDirectory(currentPath)
+      }
     }
 
     const handleFileBrowserError = (err: unknown) => {
       const errorObj = err as { message: string; code?: string }
       setError(errorObj.code ? handleError(errorObj, 'File transfer') : handleError(errorObj.message, 'File transfer'))
-      setTransferProgress(null)
-      setFolderTransferProgress(null)
     }
 
-    const handleFolderProgress = (progress: unknown) => {
-      setFolderTransferProgress(progress as FolderTransferProgress)
-    }
+    window.go.main.App.GetTransfers().then(setTransfers).catch(() => {})
 
-    const handleFolderComplete = () => {
-      setFolderTransferProgress(null)
-      loadDirectory(currentPath)
-    }
-
-    const unsubProgress = window.runtime.EventsOn('filebrowser:progress', handleProgress)
-    const unsubDownload = window.runtime.EventsOn('filebrowser:download-complete', handleComplete)
-    const unsubUpload = window.runtime.EventsOn('filebrowser:upload-complete', handleComplete)
+    const unsubSnapshot = window.runtime.EventsOn('transfers:snapshot', handleSnapshot)
+    const unsubFinished = window.runtime.EventsOn('transfers:finished', handleFinished)
     const unsubError = window.runtime.EventsOn('filebrowser:error', handleFileBrowserError)
-    const unsubFolderProgress = window.runtime.EventsOn('filebrowser:folder-progress', handleFolderProgress)
-    const unsubFolderDownload = window.runtime.EventsOn('filebrowser:folder-download-complete', handleFolderComplete)
-    const unsubFolderUpload = window.runtime.EventsOn('filebrowser:folder-upload-complete', handleFolderComplete)
 
     return () => {
-      unsubProgress()
-      unsubDownload()
-      unsubUpload()
+      unsubSnapshot()
+      unsubFinished()
       unsubError()
-      unsubFolderProgress()
-      unsubFolderDownload()
-      unsubFolderUpload()
     }
   }, [currentPath, loadDirectory])
 
@@ -399,9 +368,23 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
     })
   }
 
-  const handleCancelFolderTransfer = () => {
-    window.go.main.App.CancelFolderTransfer()
+  const handleCancelTransfer = (id: string) => {
+    window.go.main.App.CancelTransfer(id)
   }
+
+  const handleCancelAllTransfers = () => {
+    window.go.main.App.CancelAllTransfers()
+  }
+
+  const activeTransfers = useMemo(
+    () => (transfers?.transfers ?? []).filter(t => t.state === 'queued' || t.state === 'starting' || t.state === 'running'),
+    [transfers]
+  )
+
+  const finishedTransfers = useMemo(
+    () => (transfers?.transfers ?? []).filter(t => t.state === 'failed' || t.state === 'canceled'),
+    [transfers]
+  )
 
   const initiateDelete = (file: FileInfo) => {
     if (isSystemPath(file.path) && !suppressSystemFileWarnings) {
@@ -652,11 +635,11 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
               <Home className="h-4 w-4 mr-1" />
               Home
             </Button>
-            <Button variant="outline" size="sm" onClick={handleUpload} disabled={loading || !!folderTransferProgress}>
+            <Button variant="outline" size="sm" onClick={handleUpload} disabled={loading}>
               <Upload className="h-4 w-4 mr-1" />
               Upload File
             </Button>
-            <Button variant="outline" size="sm" onClick={handleUploadFolder} disabled={loading || !!folderTransferProgress}>
+            <Button variant="outline" size="sm" onClick={handleUploadFolder} disabled={loading}>
               <FolderUp className="h-4 w-4 mr-1" />
               Upload Folder
             </Button>
@@ -697,49 +680,95 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
           )}
 
           {/* Transfer progress */}
-          {transferProgress && (
+          {(activeTransfers.length > 0 || finishedTransfers.length > 0) && (
             <div className="bg-muted p-3 rounded space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>
-                  {transferProgress.status === 'uploading' ? 'Uploading' : 'Downloading'}: {transferProgress.filename}
-                </span>
-                <span>{transferProgress.percentage.toFixed(0)}%</span>
-              </div>
-              <Progress value={transferProgress.percentage} />
-              <div className="text-xs text-muted-foreground">
-                {formatBytes(transferProgress.bytesSent)} / {formatBytes(transferProgress.totalBytes)}
-              </div>
-            </div>
-          )}
+              {activeTransfers.length > 0 && transfers && (
+                <>
+                  <div className="flex justify-between items-center text-sm gap-2">
+                    {activeTransfers.length === 1 ? (
+                      <span className="truncate">
+                        {`${activeTransfers[0].kind === 'upload' ? 'Uploading' : 'Downloading'}: ${activeTransfers[0].name}`}
+                      </span>
+                    ) : (
+                      <button
+                        className="flex items-center gap-1 min-w-0 hover:underline"
+                        onClick={() => setTransfersExpanded(!transfersExpanded)}
+                      >
+                        {transfersExpanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                        <span className="truncate">{`${activeTransfers.length} transfers`}</span>
+                      </button>
+                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="tabular-nums text-right min-w-[3.5ch]">
+                        {activeTransfers.every(t => t.state !== 'running')
+                          ? 'Waiting…'
+                          : `${transfers.percentage.toFixed(0)}%`}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0"
+                        onClick={handleCancelAllTransfers}
+                        title="Cancel all transfers"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <Progress value={transfers.percentage} />
+                  <div className="text-xs text-muted-foreground tabular-nums">
+                    {formatBytesPair(transfers.bytesDone, transfers.bytesTotal)}
+                    {activeTransfers.length === 1 && activeTransfers[0].isDir &&
+                      ` · ${activeTransfers[0].filesDone} / ${activeTransfers[0].filesTotal} files`}
+                    {transfers.bytesPerSecond > 0 && ` · ${formatBytes(transfers.bytesPerSecond)}/s`}
+                    {transfers.secondsRemaining > 0 && ` · ${formatDuration(transfers.secondsRemaining)} left`}
+                  </div>
+                </>
+              )}
 
-          {/* Folder transfer progress */}
-          {folderTransferProgress && (
-            <div className="bg-muted p-3 rounded space-y-2">
-              <div className="flex justify-between items-center text-sm">
-                <span>
-                  {folderTransferProgress.status === 'uploading' ? 'Uploading' : 'Downloading'}
-                  {folderTransferProgress.containsFolder
-                    ? ' folder'
-                    : ` ${folderTransferProgress.filesTotal} file${folderTransferProgress.filesTotal === 1 ? '' : 's'}`}
-                </span>
-                <div className="flex items-center gap-2">
-                  <span>{folderTransferProgress.percentage.toFixed(0)}%</span>
+              {transfersExpanded && activeTransfers.length > 1 && activeTransfers.map(transfer => (
+                <div key={transfer.id} className="pl-5 space-y-1">
+                  <div className="flex justify-between items-center text-xs gap-2">
+                    <span className="truncate">{transfer.name}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="tabular-nums text-right min-w-[3.5ch]">
+                        {transfer.state === 'queued' ? 'Queued' : transfer.state === 'starting' ? 'Waiting…' : `${transfer.percentage.toFixed(0)}%`}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 w-5 p-0"
+                        onClick={() => handleCancelTransfer(transfer.id)}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                  <Progress value={transfer.percentage} className="h-1" />
+                  <div className="text-xs text-muted-foreground tabular-nums">
+                    {formatBytesPair(transfer.bytesDone, transfer.bytesTotal)}
+                    {transfer.isDir && ` · ${transfer.filesDone} / ${transfer.filesTotal} files`}
+                  </div>
+                </div>
+              ))}
+
+              {finishedTransfers.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  {finishedTransfers.map(transfer => (
+                    <div key={transfer.id} className="text-xs text-destructive">
+                      {transfer.name}: {transfer.state === 'canceled' ? 'canceled' : transfer.error || 'failed'}
+                    </div>
+                  ))}
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 w-6 p-0"
-                    onClick={handleCancelFolderTransfer}
+                    className="h-6"
+                    onClick={() => window.go.main.App.ClearCompletedTransfers()}
                   >
-                    <X className="h-4 w-4" />
+                    Dismiss
                   </Button>
                 </div>
-              </div>
-              <Progress value={folderTransferProgress.percentage} />
-              <div className="text-xs text-muted-foreground space-y-1">
-                <div>Current: {folderTransferProgress.currentFile}</div>
-                <div>Files: {folderTransferProgress.filesDone} / {folderTransferProgress.filesTotal}</div>
-                <div>{formatBytes(folderTransferProgress.bytesDone)} / {formatBytes(folderTransferProgress.bytesTotal)}</div>
-              </div>
+              )}
             </div>
           )}
 
@@ -820,7 +849,11 @@ export function FileBrowser({ isConnected, suppressSystemFileWarnings, isVisible
                             <MoreVertical className="h-4 w-4" />
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className={`${sleepScreenSupported && isPngFile(file) ? 'w-48' : 'w-40'} p-1`} align="end">
+                        <PopoverContent
+                          className={`${sleepScreenSupported && isPngFile(file) ? 'w-48' : 'w-40'} p-1`}
+                          align="end"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {file.isDir ? (
                             <PopoverClose asChild>
                               <Button

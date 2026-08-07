@@ -42,6 +42,12 @@ type HashtabInfo struct {
 	NeedsRebuild   bool   `json:"needsRebuild"`
 }
 
+type LauncherInfo struct {
+	Installed bool   `json:"installed"`
+	Current   string `json:"current,omitempty"`
+	Active    string `json:"active,omitempty"`
+}
+
 type Generator struct {
 	AppVersion        string
 	HostOS            string
@@ -54,6 +60,7 @@ type Generator struct {
 	Settings          any
 	UpdateService     *UpdateServiceStatus
 	Hashtab           *HashtabInfo
+	Launcher          *LauncherInfo
 	Timezone          string
 	PartitionInfo     any
 }
@@ -120,6 +127,15 @@ func (g *Generator) GenerateToBuffer(bundleID string) ([]byte, error) {
 	if g.Hashtab != nil {
 		data, _ := json.MarshalIndent(g.Hashtab, "", "  ")
 		if err := writeEntry(tw, "support-bundle/device/hashtab.json", data); err != nil {
+			tw.Close()
+			gzw.Close()
+			return nil, err
+		}
+	}
+
+	if g.Launcher != nil {
+		data, _ := json.MarshalIndent(g.Launcher, "", "  ")
+		if err := writeEntry(tw, "support-bundle/device/launcher.json", data); err != nil {
 			tw.Close()
 			gzw.Close()
 			return nil, err
@@ -273,6 +289,7 @@ func GetPreview() SupportBundlePreview {
 			"Device timezone",
 			"Auto-update service status",
 			"Hashtab version",
+			"Selected and running launcher",
 			"Installed package names and versions",
 			"reManager behavior settings",
 			"reManager application and command logs",

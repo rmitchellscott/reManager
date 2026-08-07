@@ -43,6 +43,46 @@
           "hook": "rebuild_hashtable_dialog"
         }
       ]
+    },
+    "launcherctl": {
+      "maintenanceCommands": [
+        {
+          "id": "start-launcher",
+          "label": "Start",
+          "description": "Start the current launcher",
+          "command": "/home/root/.vellum/bin/launcherctl start-launcher"
+        },
+        {
+          "id": "restart-launcher",
+          "label": "Restart",
+          "description": "Restart the current launcher",
+          "command": "/home/root/.vellum/bin/launcherctl restart-launcher"
+        },
+        {
+          "id": "stop-launcher",
+          "label": "Stop",
+          "description": "Stop the active launcher",
+          "command": "/home/root/.vellum/bin/launcherctl stop-launcher"
+        },
+        {
+          "id": "choose-launcher",
+          "label": "Switch",
+          "description": "Pick which launcher starts on your reMarkable",
+          "command": "",
+          "hook": "launcher_select"
+        },
+        {
+          "id": "launcher-status",
+          "label": "Status",
+          "description": "Show the current launcher and its running apps",
+          "command": "/home/root/.vellum/bin/launcherctl status"
+        }
+      ]
+    }
+  },
+  "virtuals": {
+    "launcher": {
+      "default": "appload"
     }
   }
 }

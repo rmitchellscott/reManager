@@ -35,6 +35,8 @@ export function useWarnings() {
   })
   const [xochitlRunning, setXochitlRunning] = useState(true)
   const [xoviActive, setXoviActive] = useState(false)
+  const [activeLauncher, setActiveLauncher] = useState('')
+  const [currentLauncher, setCurrentLauncher] = useState('')
   const [guideOffer, setGuideOffer] = useState<'install' | 'update' | null>(null)
   const [guideInstalling, setGuideInstalling] = useState(false)
   const [showGuideRestartDialog, setShowGuideRestartDialog] = useState(false)
@@ -66,6 +68,8 @@ export function useWarnings() {
         timezoneMismatch?: TimezoneStatus
         xochitlNotRunning?: boolean
         xoviNotRunning?: boolean
+        activeLauncher?: string
+        currentLauncher?: string
         prerelease?: { isPrerelease: boolean; activeVersion: string; latestPublic: string }
       }
       debugLog('Received connect:warnings:', w)
@@ -113,6 +117,8 @@ export function useWarnings() {
       }
       setXochitlRunning(!w.xochitlNotRunning)
       setXoviActive(!w.xoviNotRunning)
+      setActiveLauncher(w.activeLauncher || '')
+      setCurrentLauncher(w.currentLauncher || '')
       if (w.prerelease) {
         setPrerelease({ activeVersion: w.prerelease.activeVersion, latestPublic: w.prerelease.latestPublic })
       } else {
@@ -154,6 +160,8 @@ export function useWarnings() {
     updateServiceStatus, setUpdateServiceStatus,
     xochitlRunning, setXochitlRunning,
     xoviActive, setXoviActive,
+    activeLauncher, setActiveLauncher,
+    currentLauncher, setCurrentLauncher,
     guideOffer, setGuideOffer,
     guideInstalling, setGuideInstalling,
     showGuideRestartDialog, setShowGuideRestartDialog,

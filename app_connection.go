@@ -648,20 +648,12 @@ func (a *App) establishConnection(host, authType, secret, keyPath, deviceID stri
 		hashtabStatus := a.CheckHashtabVersion()
 		debug.Printf("[DEBUG] Hashtab check: installed=%v, hashtabVersion=%s, firmwareVersion=%s, needsRebuild=%v\n",
 			hashtabStatus.Installed, hashtabStatus.HashtabVersion, hashtabStatus.FirmwareVersion, hashtabStatus.NeedsRebuild)
-		if hashtabStatus.NeedsRebuild {
-			warnings["hashtabMismatch"] = hashtabStatus
-		}
 
 		var installedVersions map[string]string
 		if vellumReady {
 			installedVersions, _ = vc.ListInstalledWithVersions()
 		}
 
-		if !hashtabStatus.Installed && installedVersions != nil {
-			if _, hasQRB := installedVersions["qt-resource-rebuilder"]; hasQRB {
-				warnings["hashtabMissing"] = true
-			}
-		}
 
 		updateStatus := a.GetUpdateServiceStatus()
 		debug.Printf("[DEBUG] Auto-update check: enabled=%v, running=%v\n", updateStatus.Enabled, updateStatus.Running)
@@ -670,13 +662,31 @@ func (a *App) establishConnection(host, authType, secret, keyPath, deviceID stri
 		}
 
 		xochitlStatus := a.GetXochitlStatus()
-		debug.Printf("[DEBUG] Xochitl check: running=%v, xoviActive=%v\n", xochitlStatus.Running, xochitlStatus.XoviActive)
-		if !xochitlStatus.Running {
+		launcherActive := vellum.LauncherSelected(xochitlStatus.ActiveLauncher)
+		launcherConfigured := vellum.LauncherSelected(xochitlStatus.CurrentLauncher)
+		debug.Printf("[DEBUG] Xochitl check: running=%v, xoviActive=%v, activeLauncher=%q, currentLauncher=%q\n",
+			xochitlStatus.Running, xochitlStatus.XoviActive, xochitlStatus.ActiveLauncher, xochitlStatus.CurrentLauncher)
+		if !xochitlStatus.Running && !launcherActive {
 			warnings["xochitlNotRunning"] = true
 		}
-		if xochitlStatus.Running && !xochitlStatus.XoviActive && !hashtabStatus.NeedsRebuild && hashtabStatus.Installed && installedVersions != nil {
+		if !launcherConfigured && xochitlStatus.Running && !xochitlStatus.XoviActive && !hashtabStatus.NeedsRebuild && hashtabStatus.Installed && installedVersions != nil {
 			if _, hasXovi := installedVersions["xovi"]; hasXovi {
 				warnings["xoviNotRunning"] = true
+			}
+		}
+		if launcherActive {
+			warnings["activeLauncher"] = xochitlStatus.ActiveLauncher
+		}
+		if launcherConfigured {
+			warnings["currentLauncher"] = xochitlStatus.CurrentLauncher
+		}
+
+		if hashtabStatus.NeedsRebuild {
+			warnings["hashtabMismatch"] = hashtabStatus
+		}
+		if !hashtabStatus.Installed && installedVersions != nil {
+			if _, hasQRB := installedVersions["qt-resource-rebuilder"]; hasQRB {
+				warnings["hashtabMissing"] = true
 			}
 		}
 
@@ -788,6 +798,8 @@ func (a *App) establishConnection(host, authType, secret, keyPath, deviceID stri
 			}
 		}
 
+		_, hasLauncherctl := installedVersions["launcherctl"]
+
 		if a.deviceInfoCache != nil {
 			a.mu.Lock()
 			cacheDeviceID := a.connectedDeviceID
@@ -798,6 +810,9 @@ func (a *App) establishConnection(host, authType, secret, keyPath, deviceID stri
 					HashtabInstalled:     hashtabStatus.Installed,
 					HashtabVersion:       hashtabStatus.HashtabVersion,
 					HashtabNeedsRebuild:  hashtabStatus.NeedsRebuild,
+					LauncherctlInstalled: hasLauncherctl,
+					CurrentLauncher:      xochitlStatus.CurrentLauncher,
+					ActiveLauncher:       xochitlStatus.ActiveLauncher,
 					UpdateServiceEnabled: updateStatus.Enabled,
 					UpdateServiceRunning: updateStatus.Running,
 					OSVersion:            osVersionStored,

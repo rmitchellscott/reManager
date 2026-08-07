@@ -19,6 +19,8 @@ interface UseMaintenanceEventsParams {
   setUpdateServiceStatus: (v: UpdateServiceStatus) => void
   setXochitlRunning: (v: boolean) => void
   setXoviActive: (v: boolean) => void
+  setActiveLauncher: (v: string) => void
+  setCurrentLauncher: (v: string) => void
   setUpgradesAvailable: (v: boolean) => void
   setOsMismatchDetected: (v: boolean) => void
   osMismatchDetectedRef: React.MutableRefObject<boolean>
@@ -50,6 +52,8 @@ export function useMaintenanceEvents({
   setUpdateServiceStatus,
   setXochitlRunning,
   setXoviActive,
+  setActiveLauncher,
+  setCurrentLauncher,
   setUpgradesAvailable,
   setOsMismatchDetected,
   osMismatchDetectedRef,
@@ -126,6 +130,10 @@ export function useMaintenanceEvents({
 
   const setXoviActiveRef = useRef(setXoviActive)
   useEffect(() => { setXoviActiveRef.current = setXoviActive }, [setXoviActive])
+  const setActiveLauncherRef = useRef(setActiveLauncher)
+  useEffect(() => { setActiveLauncherRef.current = setActiveLauncher }, [setActiveLauncher])
+  const setCurrentLauncherRef = useRef(setCurrentLauncher)
+  useEffect(() => { setCurrentLauncherRef.current = setCurrentLauncher }, [setCurrentLauncher])
 
   const setUpgradesAvailableRef = useRef(setUpgradesAvailable)
   useEffect(() => { setUpgradesAvailableRef.current = setUpgradesAvailable }, [setUpgradesAvailable])
@@ -186,6 +194,8 @@ export function useMaintenanceEvents({
           const xochitlStatus = await window.go.main.App.GetXochitlStatus()
           setXochitlRunningRef.current(xochitlStatus.running)
           setXoviActiveRef.current(xochitlStatus.xoviActive)
+        setActiveLauncherRef.current(xochitlStatus.activeLauncher || '')
+        setCurrentLauncherRef.current(xochitlStatus.currentLauncher || '')
         }
         return
       }
@@ -224,6 +234,8 @@ export function useMaintenanceEvents({
         const xochitlStatus = await window.go.main.App.GetXochitlStatus()
         setXochitlRunningRef.current(xochitlStatus.running)
         setXoviActiveRef.current(xochitlStatus.xoviActive)
+        setActiveLauncherRef.current(xochitlStatus.activeLauncher || '')
+        setCurrentLauncherRef.current(xochitlStatus.currentLauncher || '')
         if (hashtabStatus.needsRebuild) {
           setHashtabMismatchRef.current(hashtabStatus)
         } else {
@@ -251,6 +263,8 @@ export function useMaintenanceEvents({
         const xochitlStatus = await window.go.main.App.GetXochitlStatus()
         setXochitlRunningRef.current(xochitlStatus.running)
         setXoviActiveRef.current(xochitlStatus.xoviActive)
+        setActiveLauncherRef.current(xochitlStatus.activeLauncher || '')
+        setCurrentLauncherRef.current(xochitlStatus.currentLauncher || '')
         setCommandRunningRef.current(false)
         setRunningSystemTask(null)
         setSettingTimezone(false)
@@ -345,6 +359,8 @@ export function useMaintenanceEvents({
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
       setXochitlRunningRef.current(xochitlStatus.running)
       setXoviActiveRef.current(xochitlStatus.xoviActive)
+        setActiveLauncherRef.current(xochitlStatus.activeLauncher || '')
+        setCurrentLauncherRef.current(xochitlStatus.currentLauncher || '')
       setCommandRunningRef.current(false)
       setCommandContext(null)
       await checkDnsProxyErrorRef.current(result.dnsError)
@@ -368,6 +384,8 @@ export function useMaintenanceEvents({
       const xochitlStatus = await window.go.main.App.GetXochitlStatus()
       setXochitlRunningRef.current(xochitlStatus.running)
       setXoviActiveRef.current(xochitlStatus.xoviActive)
+        setActiveLauncherRef.current(xochitlStatus.activeLauncher || '')
+        setCurrentLauncherRef.current(xochitlStatus.currentLauncher || '')
       if (hashtabStatus.needsRebuild) {
         setHashtabMismatchRef.current(hashtabStatus)
       } else {

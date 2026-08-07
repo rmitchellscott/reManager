@@ -16,6 +16,8 @@ interface MaintenanceTabProps {
   maintenanceCommands: Record<string, MaintenanceCommandInfo[]>
   updateServiceStatus: UpdateServiceStatus
   xochitlRunning: boolean
+  launcherConfigured: boolean
+  currentLauncher: string
   xoviActive: boolean
   hashtabMismatch: HashtabVersionStatus | null
   hashtabMissing: boolean
@@ -45,6 +47,8 @@ export function MaintenanceTab({
   maintenanceCommands,
   updateServiceStatus,
   xochitlRunning,
+  launcherConfigured,
+  currentLauncher,
   xoviActive,
   hashtabMismatch,
   hashtabMissing,
@@ -132,13 +136,14 @@ export function MaintenanceTab({
                   {systemTasks.map((task) => {
                     const isEnableDisabled = task.id === 'enable-updates' && updateServiceStatus.enabled && updateServiceStatus.running
                     const isDisableDisabled = task.id === 'disable-updates' && !updateServiceStatus.enabled && !updateServiceStatus.running
-                    const shouldHighlight = (task.id === 'disable-updates' && updateServiceStatus.enabled) || (task.id === 'restart-xochitl' && !xochitlRunning)
+                    const shouldHighlight = (task.id === 'disable-updates' && updateServiceStatus.enabled) || (task.id === 'restart-xochitl' && !xochitlRunning && !launcherConfigured)
+                    const isRestartBlockedByLauncher = task.id === 'restart-xochitl' && launcherConfigured
                     const isRunning = runningSystemTask === task.id
                     return (
                       <Button
                         key={task.id}
                         onClick={() => handleSystemTask(task.id)}
-                        disabled={commandRunning || isEnableDisabled || isDisableDisabled || connectionStatus !== 'connected' || (task.needsWriteableRoot && writeableRootBusy)}
+                        disabled={commandRunning || isEnableDisabled || isDisableDisabled || isRestartBlockedByLauncher || connectionStatus !== 'connected' || (task.needsWriteableRoot && writeableRootBusy)}
                         variant={shouldHighlight ? 'default' : 'outline'}
                       >
                         {isRunning ? (
@@ -273,9 +278,11 @@ export function MaintenanceTab({
                                              currentRunningCommand?.commandId === cmd.id
                             const isHashtabRebuild = pkg.name === 'qt-resource-rebuilder' && cmd.id === 'rebuild_hashtable'
                             const isXoviStart = pkg.name === 'xovi' && cmd.id === 'start'
-                            const xoviNeedsStart = isXoviStart && xochitlRunning && !xoviActive
+                            const isXoviUIStart = pkg.name === 'xovi' && (cmd.id === 'start' || cmd.id === 'stock')
+                            const xoviNeedsStart = isXoviStart && xochitlRunning && !xoviActive && !launcherConfigured
                             const shouldHighlight = (isHashtabRebuild && (hashtabMismatch || hashtabMissing)) || (xoviNeedsStart && !hashtabMismatch && !hashtabMissing)
                             const isDisabledByMismatch = isXoviStart && (!!hashtabMismatch || hashtabMissing)
+                            const isDisabledByLauncher = isXoviUIStart && launcherConfigured
 
                             return (
                               <div key={cmd.id} className="flex gap-2">
@@ -283,7 +290,7 @@ export function MaintenanceTab({
                                   <TooltipTrigger asChild>
                                     <Button
                                       onClick={() => handleComponentMaintenance(pkg.name, cmd.id)}
-                                      disabled={isDisabledByMismatch || (commandRunning && !isRunning) || connectionStatus !== 'connected' || writeableRootBusy}
+                                      disabled={isDisabledByMismatch || isDisabledByLauncher || (commandRunning && !isRunning) || connectionStatus !== 'connected' || writeableRootBusy}
                                       variant={shouldHighlight ? 'default' : 'outline'}
                                       size="sm"
                                       className="flex-1"
@@ -291,8 +298,12 @@ export function MaintenanceTab({
                                       {cmd.label}
                                     </Button>
                                   </TooltipTrigger>
-                                  {cmd.description && (
-                                    <TooltipContent>{cmd.description}</TooltipContent>
+                                  {(isDisabledByLauncher || cmd.description) && (
+                                    <TooltipContent>
+                                      {isDisabledByLauncher
+                                        ? `${currentLauncher} controls the screen — use launcherctl to switch launchers`
+                                        : cmd.description}
+                                    </TooltipContent>
                                   )}
                                 </Tooltip>
                               </div>
@@ -392,31 +403,45 @@ export function MaintenanceTab({
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2 pt-2">
-            <Button
-              className="w-full justify-center gap-2"
-              disabled={!!hashtabMismatch || hashtabMissing}
-              onClick={() => {
-                setShowStartUIDialog(false)
-                handleComponentMaintenance('xovi', 'start')
-              }}
-            >
-              Start UI with Mods
-            </Button>
-            {(hashtabMismatch || hashtabMissing) && (
-              <p className="text-xs text-muted-foreground text-center -mt-1">
-                {hashtabMissing ? 'Disabled — hashtable not built' : 'Disabled due to hashtable mismatch'}
-              </p>
+            {launcherConfigured ? (
+              <Button
+                className="w-full justify-center gap-2"
+                onClick={() => {
+                  setShowStartUIDialog(false)
+                  handleComponentMaintenance('launcherctl', 'start-launcher')
+                }}
+              >
+                Start {currentLauncher}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  className="w-full justify-center gap-2"
+                  disabled={!!hashtabMismatch || hashtabMissing}
+                  onClick={() => {
+                    setShowStartUIDialog(false)
+                    handleComponentMaintenance('xovi', 'start')
+                  }}
+                >
+                  Start UI with Mods
+                </Button>
+                {(hashtabMismatch || hashtabMissing) && (
+                  <p className="text-xs text-muted-foreground text-center -mt-1">
+                    {hashtabMissing ? 'Disabled — hashtable not built' : 'Disabled due to hashtable mismatch'}
+                  </p>
+                )}
+                <Button
+                  variant="outline"
+                  className="w-full justify-center gap-2"
+                  onClick={() => {
+                    setShowStartUIDialog(false)
+                    handleSystemTask('restart-xochitl')
+                  }}
+                >
+                  Start UI without Mods
+                </Button>
+              </>
             )}
-            <Button
-              variant="outline"
-              className="w-full justify-center gap-2"
-              onClick={() => {
-                setShowStartUIDialog(false)
-                handleSystemTask('restart-xochitl')
-              }}
-            >
-              Start UI without Mods
-            </Button>
           </div>
         </DialogContent>
       </Dialog>

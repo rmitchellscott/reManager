@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -17,7 +17,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import { Badge } from '@/components/ui/badge'
 import { Loader2, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, RefreshCw } from 'lucide-react'
 import { useAppContext } from '@/contexts/AppContext'
-import { PackageInfo } from '@/lib/types'
+import { PackageInfo, VirtualChoice, PackageConflict, QueueConflictEntry } from '@/lib/types'
 
 export type SelectPackageForOSFn = (name: string, targetOS: string, isCompatible?: boolean) => Promise<void>
 
@@ -51,7 +51,8 @@ interface ModsTabProps {
   refreshingPackages: boolean
   setRefreshingPackages: (v: boolean) => void
 
-  setPendingInstallConfirm: (v: { packages: string[]; requested: string[] } | null) => void
+  setPendingProviderChoice: (v: { choices: VirtualChoice[]; index: number; selected: string[]; requested: string[] } | null) => void
+  runInstallSimulation: (packages: string[]) => Promise<void>
   setPendingUninstallConfirm: (v: any) => void
 
   setActiveTab: (v: 'mods' | 'maintenance' | 'utilities') => void
@@ -71,6 +72,7 @@ function installedOnlyPackage(name: string, version: string): PackageInfo {
     devices: [],
     depends: [],
     conflicts: [],
+    provides: [],
     osMin: null,
     osMax: null,
     osConstraints: null,
@@ -79,6 +81,68 @@ function installedOnlyPackage(name: string, version: string): PackageInfo {
     donateUrl: null,
     readmeUrl: null,
   }
+}
+
+function TruncatedName({ name, className }: { name: string; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [truncated, setTruncated] = useState(false)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const measure = () => setTruncated(el.scrollWidth > el.clientWidth)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [name])
+
+  const label = <span ref={ref} className={`block truncate ${className ?? ''}`}>{name}</span>
+  if (!truncated) return label
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{label}</TooltipTrigger>
+      <TooltipContent>{name}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function ScrollableQueue({ className, children }: { className: string; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [moreBelow, setMoreBelow] = useState(false)
+
+  const measure = () => {
+    const el = ref.current
+    if (!el) return
+    setMoreBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 1)
+  }
+
+  useEffect(measure)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div className="relative mb-3">
+      <div ref={ref} onScroll={measure} className={className}>{children}</div>
+      {moreBelow && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 border-b" />
+      )}
+    </div>
+  )
+}
+
+function queueGridColumns(count: number): string {
+  if (count <= 1) return 'grid-cols-1'
+  if (count === 2) return 'grid-cols-1 sm:grid-cols-2'
+  if (count === 3) return 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3'
+  return 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4'
 }
 
 export function ModsTab({
@@ -101,7 +165,8 @@ export function ModsTab({
   setQueueError,
   refreshingPackages,
   setRefreshingPackages,
-  setPendingInstallConfirm,
+  setPendingProviderChoice,
+  runInstallSimulation,
   setPendingUninstallConfirm,
   setActiveTab,
   handleChecklistUpgrade,
@@ -202,22 +267,119 @@ export function ModsTab({
     localStorage.setItem('packageViewMode', viewMode)
   }, [viewMode])
 
+  const installedKey = useMemo(
+    () => [...installedPackages.entries()].map(([name, v]) => `${name}=${v}`).sort().join(','),
+    [installedPackages]
+  )
+
+  const [packageConflicts, setPackageConflicts] = useState<Record<string, PackageConflict>>({})
+
+  useEffect(() => {
+    if (connectionStatus !== 'connected') {
+      setPackageConflicts({})
+      return
+    }
+    let stale = false
+    const installed = Object.fromEntries(installedPackages)
+    window.go.main.App.GetPackageConflicts(installed, [...installQueue], device, deviceInfo.firmware || '')
+      .then(result => { if (!stale) setPackageConflicts(result || {}) })
+      .catch(err => console.error('GetPackageConflicts failed:', err))
+    return () => { stale = true }
+  }, [installQueue, installedKey, device, deviceInfo.firmware, connectionStatus])
+
+  const [queueConflict, setQueueConflict] = useState<{ entries: QueueConflictEntry[] } | null>(null)
+  const queueConflicts = queueConflict?.entries ?? []
+  const [impliedPackages, setImpliedPackages] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (connectionStatus !== 'connected' || installQueue.size === 0) {
+      setQueueConflict(null)
+      setImpliedPackages(new Set())
+      return
+    }
+    let stale = false
+    const timer = window.setTimeout(() => {
+      window.go.main.App.SimulateInstall([...installQueue], device)
+        .then(sim => {
+          if (stale) return
+          setQueueConflict(sim.error ? { entries: sim.conflicts || [] } : null)
+          setImpliedPackages(sim.error ? new Set() : new Set(
+            (sim.packages || []).filter(name => !installQueue.has(name) && !installedPackages.has(name))
+          ))
+          if (!sim.error) setQueueError(null)
+        })
+        .catch(err => console.error('queue conflict check failed:', err))
+    }, 400)
+    return () => { stale = true; window.clearTimeout(timer) }
+  }, [installQueue, installedKey, device, connectionStatus])
+
+  const availableMarks = useMemo(
+    () => availableFiltered.map(pkg =>
+      installQueue.has(pkg.name) ? 'queued' : impliedPackages.has(pkg.name) ? 'implied' : null
+    ),
+    [availableFiltered, installQueue, impliedPackages]
+  )
+
+  const queueBarRef = useRef<HTMLDivElement>(null)
+  const queueVisible = installQueue.size > 0 || uninstallQueue.size > 0
+
+  useEffect(() => {
+    const root = document.documentElement
+    const el = queueBarRef.current
+    if (!el) {
+      root.style.setProperty('--queue-bar-height', '0px')
+      return
+    }
+    const apply = () => root.style.setProperty('--queue-bar-height', `${el.offsetHeight}px`)
+    apply()
+    const observer = new ResizeObserver(apply)
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      root.style.setProperty('--queue-bar-height', '0px')
+    }
+  }, [queueVisible])
+
+  const [queueOpen, setQueueOpen] = useState('')
+
+  const conflictPairs = useMemo(() => {
+    const pairs: { a: string; b: string }[] = []
+    const seen = new Set<string>()
+    for (const entry of queueConflicts) {
+      const key = [entry.package, entry.blocks].sort().join('\u0000')
+      if (seen.has(key)) continue
+      seen.add(key)
+      pairs.push({ a: entry.package, b: entry.blocks })
+    }
+    return pairs
+  }, [queueConflicts])
+
+  const conflictByQueueEntry = useMemo(() => {
+    const map: Record<string, QueueConflictEntry> = {}
+    for (const entry of queueConflicts) map[entry.queueEntry] = entry
+    return map
+  }, [queueConflicts])
+
+  const sortedInstallQueue = useMemo(() => {
+    return Array.from(installQueue).sort((a, b) => {
+      const aConflicts = !!conflictByQueueEntry[a]
+      const bConflicts = !!conflictByQueueEntry[b]
+      if (aConflicts !== bConflicts) return aConflicts ? -1 : 1
+      return a.localeCompare(b, undefined, { sensitivity: 'base' })
+    })
+  }, [installQueue, conflictByQueueEntry])
+
+  const sortedUninstallQueue = useMemo(() => {
+    return Array.from(uninstallQueue).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' }))
+  }, [uninstallQueue])
+
   const getConflict = (pkg: PackageInfo): string | null => {
-    for (const conflict of pkg.conflicts) {
-      if (installedPackages.has(conflict)) {
-        return `Conflicts with installed: ${conflict}`
-      }
-      if (installQueue.has(conflict)) {
-        return `Conflicts with queued: ${conflict}`
-      }
-    }
-    for (const queuedName of installQueue) {
-      const queuedPkg = packages.find(p => p.name === queuedName)
-      if (queuedPkg?.conflicts.includes(pkg.name)) {
-        return `Conflicts with queued: ${queuedName}`
-      }
-    }
-    return null
+    const conflict = packageConflicts[pkg.name]
+    if (!conflict) return null
+    return conflict.queued
+      ? `Conflicts with queued: ${conflict.conflictsWith}`
+      : `Conflicts with installed: ${conflict.conflictsWith}`
   }
 
   const addToQueue = (name: string) => {
@@ -429,7 +591,7 @@ export function ModsTab({
             terminalTheme={resolvedTerminalTheme}
           />
         ) : osMismatchDetected ? (
-          <div className={uninstallQueue.size > 0 ? 'pb-48' : ''}>
+          <div>
             {compatibilityStatus ? (
               <UpgradeChecklist
                 storedOsVersion={compatibilityStatus.storedOsVersion || storedOsVersion}
@@ -467,7 +629,7 @@ export function ModsTab({
             )}
           </div>
         ) : (
-        <div className={`space-y-6 ${(installQueue.size > 0 || uninstallQueue.size > 0) ? 'pb-48' : ''}`}>
+        <div className="space-y-6">
             {/* Filters */}
             <div className="flex flex-wrap gap-2">
               <div className="flex gap-2 w-full md:contents">
@@ -633,12 +795,13 @@ export function ModsTab({
                     <AccordionContent>
                       <div className="divide-y px-6 pb-4">
                         {availableFiltered.map((pkg, index) => {
-                          const isQueued = installQueue.has(pkg.name)
-                          const prevQueued = index > 0 && installQueue.has(availableFiltered[index - 1].name)
-                          const nextQueued = index < availableFiltered.length - 1 && installQueue.has(availableFiltered[index + 1].name)
+                          const mark = availableMarks[index]
+                          const isQueued = mark === 'queued'
+                          const startsGroup = availableMarks[index - 1] !== mark
+                          const endsGroup = availableMarks[index + 1] !== mark
                           const conflict = getConflict(pkg)
                           return (
-                            <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${isQueued ? `border-l-4 border-primary pl-3 ${!prevQueued ? 'border-t' : ''} ${!nextQueued ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
+                            <div key={pkg.name} className={`py-3 flex items-center gap-4 ${!pkg.compatible ? 'opacity-50' : ''} ${mark ? `border-l-4 ${isQueued ? 'border-primary' : 'border-primary/40'} pl-3 ${startsGroup ? 'border-t' : ''} ${endsGroup ? 'border-b' : ''}` : index % 2 === 1 ? 'bg-muted/50 hover:bg-muted' : 'hover:bg-muted/70'}`}>
                             <div
                               className="flex-1 min-w-0 cursor-pointer"
                               onClick={() => { setSidebarViewOnly(false); setSidebarIncompatible(!pkg.compatible); setSelectedPackage(pkg) }}
@@ -748,37 +911,63 @@ export function ModsTab({
 
       {/* Queue Section - Fixed at bottom, visible on all tabs */}
       {(installQueue.size > 0 || uninstallQueue.size > 0) && (
-        <div className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4">
+        <div ref={queueBarRef} className="fixed bottom-0 left-0 right-0 py-4 px-6 bg-background border-t shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 space-y-4 max-h-[85vh] overflow-y-auto overscroll-y-contain">
           {/* Install Queue */}
           {installQueue.size > 0 && (
             <div>
-              <Accordion type="single" collapsible>
+              <Accordion type="single" collapsible value={queueOpen} onValueChange={setQueueOpen}>
                 <AccordionItem value="install-queue" className="border-none">
-                  <AccordionTrigger className="py-2 text-sm font-medium hover:no-underline">
+                  <AccordionTrigger expandsUpward className="pt-1 pb-4 text-sm font-medium hover:no-underline">
                     Install Queue ({installQueue.size})
                   </AccordionTrigger>
                   <AccordionContent>
-                    <div className="space-y-1 mb-3">
-                      {Array.from(installQueue).map((name) => {
+                    <ScrollableQueue className={`max-h-[35vh] overflow-y-auto overscroll-y-contain grid ${queueGridColumns(installQueue.size)} gap-x-10 gap-y-1`}>
+                      {sortedInstallQueue.map((name) => {
+                        const conflict = conflictByQueueEntry[name]
                         return (
                           <div
                             key={name}
-                            className="flex items-center justify-between text-sm py-1"
+                            className="flex items-center justify-between text-sm py-1 px-2 rounded-md hover:bg-muted transition-colors"
                           >
-                            <span>{name}</span>
+                            <div className="min-w-0">
+                              <TruncatedName
+                                name={name}
+                                className={conflict ? 'text-destructive font-medium' : ''}
+                              />
+                              {conflict && (
+                                <p className="text-xs text-destructive">
+                                  {conflict.package === name
+                                    ? `Can't be installed with ${conflict.blocks}`
+                                    : `Needs ${conflict.package}, which can't be installed with ${conflict.blocks}`}
+                                </p>
+                              )}
+                            </div>
                             <button
                               onClick={() => removeFromQueue(name)}
-                              className="text-muted-foreground hover:text-foreground"
+                              className="text-muted-foreground hover:text-foreground shrink-0"
                             >
                               <X className="h-4 w-4" />
                             </button>
                           </div>
                         )
                       })}
-                    </div>
+                    </ScrollableQueue>
                   </AccordionContent>
                 </AccordionItem>
               </Accordion>
+              {queueConflict && queueOpen !== 'install-queue' && (
+                <div className="mb-2 rounded-lg border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  {conflictPairs.length === 1 ? (
+                    <><strong className="font-semibold">{conflictPairs[0].a}</strong> and{' '}
+                    <strong className="font-semibold">{conflictPairs[0].b}</strong> can't be installed
+                    together. Expand the queue to fix.</>
+                  ) : conflictPairs.length > 1 ? (
+                    <>Some queued packages can't be installed together. Expand the queue to fix.</>
+                  ) : (
+                    <>Some queued packages can't be installed together.</>
+                  )}
+                </div>
+              )}
               <div className="flex gap-2">
                 <Button
                   variant="outline"
@@ -793,30 +982,23 @@ export function ModsTab({
                   onClick={async () => {
                     setSimulatingInstall(true)
                     try {
-                      const sim = await window.go.main.App.SimulateInstall([...installQueue], device)
-                      const filteredPackages = sim.packages.filter((name: string) => !installedPackages.has(name))
-                      if (filteredPackages.length === 0) {
-                        setQueueError('All packages are already installed')
-                        setTimeout(() => setQueueError(null), 4000)
-                        setInstallQueue(new Set())
-                      } else {
-                        setPendingInstallConfirm({ packages: filteredPackages, requested: sim.requested })
+                      const requested = [...installQueue]
+                      let choices: VirtualChoice[] = []
+                      try {
+                        choices = await window.go.main.App.GetInstallChoices(requested, device)
+                      } catch (err) {
+                        console.error('GetInstallChoices failed:', err)
                       }
-                    } catch (err) {
-                      console.error('SimulateInstall failed:', err)
-                      const pkgs = [...installQueue].filter((name) => !installedPackages.has(name))
-                      if (pkgs.length === 0) {
-                        setQueueError('All packages are already installed')
-                        setTimeout(() => setQueueError(null), 4000)
-                        setInstallQueue(new Set())
+                      if (choices.length > 0) {
+                        setPendingProviderChoice({ choices, index: 0, selected: [], requested })
                       } else {
-                        setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
+                        await runInstallSimulation(requested)
                       }
                     } finally {
                       setSimulatingInstall(false)
                     }
                   }}
-                  disabled={installing || uninstalling || simulatingInstall || connectionStatus !== 'connected'}
+                  disabled={installing || uninstalling || simulatingInstall || !!queueConflict || connectionStatus !== 'connected'}
                 >
                   {installing ? (
                     <>
@@ -841,28 +1023,28 @@ export function ModsTab({
             <div>
               <Accordion type="single" collapsible>
                 <AccordionItem value="uninstall-queue" className="border-none">
-                  <AccordionTrigger className="py-2 text-sm font-medium text-destructive hover:no-underline">
+                  <AccordionTrigger expandsUpward className="pt-1 pb-4 text-sm font-medium text-destructive hover:no-underline">
                     Uninstall Queue ({uninstallQueue.size})
                   </AccordionTrigger>
                   <AccordionContent>
-                    <div className="space-y-1 mb-3">
-                      {Array.from(uninstallQueue).map((name) => {
+                    <ScrollableQueue className={`max-h-[35vh] overflow-y-auto overscroll-y-contain grid ${queueGridColumns(uninstallQueue.size)} gap-x-10 gap-y-1`}>
+                      {sortedUninstallQueue.map((name) => {
                         return (
                           <div
                             key={name}
-                            className="flex items-center justify-between text-sm py-1"
+                            className="flex items-center justify-between text-sm py-1 px-2 rounded-md hover:bg-muted transition-colors"
                           >
-                            <span>{name}</span>
+                            <TruncatedName name={name} />
                             <button
                               onClick={() => removeFromUninstallQueue(name)}
-                              className="text-muted-foreground hover:text-foreground"
+                              className="text-muted-foreground hover:text-foreground shrink-0"
                             >
                               <X className="h-4 w-4" />
                             </button>
                           </div>
                         )
                       })}
-                    </div>
+                    </ScrollableQueue>
                   </AccordionContent>
                 </AccordionItem>
               </Accordion>

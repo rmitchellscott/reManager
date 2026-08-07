@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -14,10 +13,8 @@ import (
 	"github.com/pkg/sftp"
 	"github.com/skratchdot/open-golang/open"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"golang.org/x/crypto/ssh"
 
 	"reManager/internal/backup"
-	apperrors "reManager/internal/errors"
 	"reManager/internal/logger"
 	"reManager/internal/platform"
 
@@ -84,214 +81,6 @@ func (a *App) ListDirectory(dirPath string) ([]FileInfo, error) {
 	return files, nil
 }
 
-func (a *App) DownloadFile(remotePath string) {
-	go func() {
-		client := a.getClient()
-
-		if client == nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
-				"message": "Not connected.",
-				"code":    apperrors.ErrHostDown,
-			})
-			return
-		}
-
-		filename := path.Base(remotePath)
-		var lastDir string
-		if a.settingsStore != nil {
-			if settings, err := a.settingsStore.Load(); err == nil {
-				lastDir = settings.LastDownloadDir
-			}
-		}
-		localPath, err := saveFileDialog(a.ctx, "Save File", filename, lastDir)
-		if err != nil || localPath == "" {
-			return
-		}
-		if a.settingsStore != nil {
-			if settings, err := a.settingsStore.Load(); err == nil {
-				settings.LastDownloadDir = filepath.Dir(localPath)
-				_ = a.settingsStore.Save(settings)
-			}
-		}
-
-		sftpClient, err := sftp.NewClient(client)
-		if err != nil {
-			ue := apperrors.Classify(err)
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
-				"message": ue.Message,
-				"code":    ue.Code,
-			})
-			return
-		}
-		defer sftpClient.Close()
-
-		remoteFile, err := sftpClient.Open(remotePath)
-		if err != nil {
-			ue := apperrors.Classify(err)
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
-				"message": ue.Message,
-				"code":    ue.Code,
-			})
-			return
-		}
-		defer remoteFile.Close()
-
-		stat, err := remoteFile.Stat()
-		if err != nil {
-			ue := apperrors.Classify(err)
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
-				"message": ue.Message,
-				"code":    ue.Code,
-			})
-			return
-		}
-		totalBytes := stat.Size()
-
-		localFile, err := os.Create(localPath)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to create local file: %v", err),
-			})
-			return
-		}
-		defer localFile.Close()
-
-		buffer := make([]byte, 32*1024)
-		var transferred int64
-
-		for {
-			n, err := remoteFile.Read(buffer)
-			if n > 0 {
-				_, writeErr := localFile.Write(buffer[:n])
-				if writeErr != nil {
-					runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-						"message": fmt.Sprintf("Failed to write to local file: %v", writeErr),
-					})
-					return
-				}
-				transferred += int64(n)
-
-				var percentage float64
-				if totalBytes > 0 {
-					percentage = float64(transferred) / float64(totalBytes) * 100
-				}
-				runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
-					Filename:   filename,
-					BytesSent:  transferred,
-					TotalBytes: totalBytes,
-					Percentage: percentage,
-					Status:     "downloading",
-				})
-			}
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-					"message": fmt.Sprintf("Failed to read remote file: %v", err),
-				})
-				return
-			}
-		}
-
-		runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
-			Filename:   filename,
-			BytesSent:  totalBytes,
-			TotalBytes: totalBytes,
-			Percentage: 100,
-			Status:     "downloading",
-		})
-
-		runtime.EventsEmit(a.ctx, "filebrowser:download-complete", map[string]string{
-			"path": remotePath,
-		})
-	}()
-}
-
-func (a *App) DownloadFolder(remotePath string) {
-	go func() {
-		client := a.getClient()
-
-		if client == nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
-				"message": "Not connected.",
-				"code":    apperrors.ErrHostDown,
-			})
-			return
-		}
-
-		folderName := path.Base(remotePath)
-		var lastDir string
-		if a.settingsStore != nil {
-			if settings, err := a.settingsStore.Load(); err == nil {
-				lastDir = settings.LastDownloadDir
-			}
-		}
-		localDir, err := openDirectoryDialog(a.ctx, "Save Folder To", lastDir)
-		if err != nil || localDir == "" {
-			return
-		}
-		if a.settingsStore != nil {
-			if settings, err := a.settingsStore.Load(); err == nil {
-				settings.LastDownloadDir = localDir
-				_ = a.settingsStore.Save(settings)
-			}
-		}
-		localBasePath := filepath.Join(localDir, folderName)
-
-		a.folderTransferMu.Lock()
-		a.folderTransferCancelCh = make(chan struct{})
-		cancelCh := a.folderTransferCancelCh
-		a.folderTransferMu.Unlock()
-
-		sftpClient, err := sftp.NewClient(client)
-		if err != nil {
-			ue := apperrors.Classify(err)
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]interface{}{
-				"message": ue.Message,
-				"code":    ue.Code,
-			})
-			return
-		}
-		defer sftpClient.Close()
-
-		filesTotal, bytesTotal, err := a.countRemoteFolder(sftpClient, remotePath)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to scan folder: %v", err),
-			})
-			return
-		}
-
-		var filesDone int
-		var bytesDone int64
-		var failedFiles []string
-
-		err = a.downloadFolderRecursive(sftpClient, remotePath, localBasePath, &filesDone, &bytesDone, filesTotal, bytesTotal, &failedFiles, cancelCh)
-
-		select {
-		case <-cancelCh:
-			runtime.EventsEmit(a.ctx, "filebrowser:folder-download-complete", map[string]interface{}{
-				"cancelled": true,
-			})
-			return
-		default:
-		}
-
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Download failed: %v", err),
-			})
-			return
-		}
-
-		runtime.EventsEmit(a.ctx, "filebrowser:folder-download-complete", map[string]interface{}{
-			"path":        remotePath,
-			"failedFiles": failedFiles,
-		})
-	}()
-}
-
 func (a *App) countRemoteFolder(sftpClient *sftp.Client, remotePath string) (int, int64, error) {
 	var filesTotal int
 	var bytesTotal int64
@@ -311,115 +100,6 @@ func (a *App) countRemoteFolder(sftpClient *sftp.Client, remotePath string) (int
 	}
 
 	return filesTotal, bytesTotal, nil
-}
-
-func (a *App) downloadFolderRecursive(sftpClient *sftp.Client, remotePath, localPath string, filesDone *int, bytesDone *int64, filesTotal int, bytesTotal int64, failedFiles *[]string, cancelCh chan struct{}) error {
-	select {
-	case <-cancelCh:
-		return fmt.Errorf("cancelled")
-	default:
-	}
-
-	info, err := sftpClient.Lstat(remotePath)
-	if err != nil {
-		return err
-	}
-
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := sftpClient.ReadLink(remotePath)
-		if err != nil {
-			*failedFiles = append(*failedFiles, remotePath)
-			return nil
-		}
-		if err := os.Symlink(target, localPath); err != nil {
-			*failedFiles = append(*failedFiles, remotePath)
-		}
-		*filesDone++
-		a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading", true)
-		return nil
-	}
-
-	if info.IsDir() {
-		if err := os.MkdirAll(localPath, 0755); err != nil {
-			return err
-		}
-
-		entries, err := sftpClient.ReadDir(remotePath)
-		if err != nil {
-			return err
-		}
-
-		for _, entry := range entries {
-			remoteEntryPath := path.Join(remotePath, entry.Name())
-			localEntryPath := filepath.Join(localPath, entry.Name())
-
-			if err := a.downloadFolderRecursive(sftpClient, remoteEntryPath, localEntryPath, filesDone, bytesDone, filesTotal, bytesTotal, failedFiles, cancelCh); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	remoteFile, err := sftpClient.Open(remotePath)
-	if err != nil {
-		*failedFiles = append(*failedFiles, remotePath)
-		return nil
-	}
-	defer remoteFile.Close()
-
-	localFile, err := os.Create(localPath)
-	if err != nil {
-		*failedFiles = append(*failedFiles, remotePath)
-		return nil
-	}
-	defer localFile.Close()
-
-	buffer := make([]byte, 32*1024)
-	for {
-		select {
-		case <-cancelCh:
-			return fmt.Errorf("cancelled")
-		default:
-		}
-
-		n, err := remoteFile.Read(buffer)
-		if n > 0 {
-			if _, writeErr := localFile.Write(buffer[:n]); writeErr != nil {
-				*failedFiles = append(*failedFiles, remotePath)
-				return nil
-			}
-			*bytesDone += int64(n)
-			a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading", true)
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			*failedFiles = append(*failedFiles, remotePath)
-			return nil
-		}
-	}
-
-	*filesDone++
-	a.emitFolderProgress(path.Base(remotePath), *filesDone, filesTotal, *bytesDone, bytesTotal, "downloading", true)
-	return nil
-}
-
-func (a *App) emitFolderProgress(currentFile string, filesDone, filesTotal int, bytesDone, bytesTotal int64, status string, containsFolder bool) {
-	var percentage float64
-	if bytesTotal > 0 {
-		percentage = float64(bytesDone) / float64(bytesTotal) * 100
-	}
-	runtime.EventsEmit(a.ctx, "filebrowser:folder-progress", FolderTransferProgress{
-		CurrentFile:    currentFile,
-		FilesDone:      filesDone,
-		FilesTotal:     filesTotal,
-		BytesDone:      bytesDone,
-		BytesTotal:     bytesTotal,
-		Percentage:     percentage,
-		Status:         status,
-		ContainsFolder: containsFolder,
-	})
 }
 
 func (a *App) SelectFilesForUpload() []string {
@@ -443,90 +123,6 @@ func (a *App) SelectFilesForUpload() []string {
 	}
 
 	return files
-}
-
-func (a *App) UploadFolder(remotePath string) {
-	go func() {
-		client := a.getClient()
-
-		if client == nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": "Not connected",
-			})
-			return
-		}
-
-		localDir, err := openDirectoryDialog(a.ctx, "Select Folder to Upload", "")
-		if err != nil || localDir == "" {
-			return
-		}
-
-		a.folderTransferMu.Lock()
-		a.folderTransferCancelCh = make(chan struct{})
-		cancelCh := a.folderTransferCancelCh
-		a.folderTransferMu.Unlock()
-
-		folderName := filepath.Base(localDir)
-		destPath := remotePath
-		if strings.HasSuffix(remotePath, "/") || remotePath == "" {
-			destPath = path.Join(remotePath, folderName)
-		}
-
-		needsWritable := isSystemPath(destPath)
-		if needsWritable {
-			if err := a.makeFilesystemWritable(client); err != nil {
-				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-					"message": fmt.Sprintf("Failed to prepare filesystem: %v", err),
-				})
-				return
-			}
-			defer a.restoreFilesystemDeferred(client)
-		}
-
-		sftpClient, err := sftp.NewClient(client)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
-			})
-			return
-		}
-		defer sftpClient.Close()
-
-		filesTotal, bytesTotal, err := a.countLocalFolder(localDir)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to scan folder: %v", err),
-			})
-			return
-		}
-
-		var filesDone int
-		var bytesDone int64
-		var failedFiles []string
-
-		err = a.uploadFolderRecursive(sftpClient, localDir, destPath, &filesDone, &bytesDone, filesTotal, bytesTotal, &failedFiles, cancelCh)
-
-		select {
-		case <-cancelCh:
-			runtime.EventsEmit(a.ctx, "filebrowser:folder-upload-complete", map[string]interface{}{
-				"cancelled": true,
-			})
-			return
-		default:
-		}
-
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Upload failed: %v", err),
-			})
-			return
-		}
-
-		runtime.EventsEmit(a.ctx, "filebrowser:folder-upload-complete", map[string]interface{}{
-			"path":        destPath,
-			"failedFiles": failedFiles,
-		})
-	}()
 }
 
 func (a *App) countLocalFolder(localPath string) (int, int64, error) {
@@ -553,353 +149,108 @@ func (a *App) countLocalFolder(localPath string) (int, int64, error) {
 	return filesTotal, bytesTotal, err
 }
 
-func (a *App) uploadFolderRecursive(sftpClient *sftp.Client, localPath, remotePath string, filesDone *int, bytesDone *int64, filesTotal int, bytesTotal int64, failedFiles *[]string, cancelCh chan struct{}) error {
-	select {
-	case <-cancelCh:
-		return fmt.Errorf("cancelled")
-	default:
+const uploadTempSuffix = ".remanager-tmp"
+
+const maxRemoteFilenameLength = 255
+
+type remoteFileWriter struct {
+	sftpClient   *sftp.Client
+	file         *sftp.File
+	tempPath     string
+	destPath     string
+	replacedPerm *fs.FileMode
+}
+
+func remoteTempPath(destPath string) string {
+	dir, name := path.Split(destPath)
+	if len(name)+len(uploadTempSuffix) > maxRemoteFilenameLength {
+		name = name[:maxRemoteFilenameLength-len(uploadTempSuffix)]
+	}
+	return dir + name + uploadTempSuffix
+}
+
+func resolveSymlinkedPath(sftpClient *sftp.Client, remotePath string) (string, error) {
+	info, err := sftpClient.Lstat(remotePath)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return remotePath, nil
+	}
+	return sftpClient.RealPath(remotePath)
+}
+
+func openRemoteFileForReplace(sftpClient *sftp.Client, destPath string) (*remoteFileWriter, error) {
+	destPath, err := resolveSymlinkedPath(sftpClient, destPath)
+	if err != nil {
+		return nil, err
 	}
 
-	info, err := os.Lstat(localPath)
+	writer := &remoteFileWriter{sftpClient: sftpClient, destPath: destPath}
+
+	if info, err := sftpClient.Stat(destPath); err == nil && info.Mode().IsRegular() {
+		perm := info.Mode().Perm()
+		writer.replacedPerm = &perm
+	}
+
+	tempPath := remoteTempPath(destPath)
+	_ = sftpClient.Remove(tempPath)
+
+	file, err := sftpClient.Create(tempPath)
 	if err != nil {
+		return nil, err
+	}
+
+	writer.file = file
+	writer.tempPath = tempPath
+	return writer, nil
+}
+
+func (w *remoteFileWriter) Write(p []byte) (int, error) {
+	return w.file.Write(p)
+}
+
+func (w *remoteFileWriter) WriteAt(p []byte, off int64) (int, error) {
+	return w.file.WriteAt(p, off)
+}
+
+func (w *remoteFileWriter) TempPath() string {
+	return w.tempPath
+}
+
+// Commit verifies the uploaded size before renaming, so a short write is not published under the destination name.
+func (w *remoteFileWriter) Commit(expectedSize int64) error {
+	if err := w.file.Close(); err != nil {
+		_ = w.sftpClient.Remove(w.tempPath)
 		return err
 	}
 
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(localPath)
+	if expectedSize >= 0 {
+		info, err := w.sftpClient.Stat(w.tempPath)
 		if err != nil {
-			*failedFiles = append(*failedFiles, localPath)
-			return nil
+			_ = w.sftpClient.Remove(w.tempPath)
+			return fmt.Errorf("failed to verify uploaded file: %w", err)
 		}
-		if err := sftpClient.Symlink(target, remotePath); err != nil {
-			*failedFiles = append(*failedFiles, localPath)
+		if info.Size() != expectedSize {
+			_ = w.sftpClient.Remove(w.tempPath)
+			return fmt.Errorf("upload incomplete: wrote %d of %d bytes", info.Size(), expectedSize)
 		}
-		*filesDone++
-		a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading", true)
-		return nil
 	}
 
-	if info.IsDir() {
-		if err := sftpClient.MkdirAll(remotePath); err != nil {
+	if w.replacedPerm != nil {
+		if err := w.sftpClient.Chmod(w.tempPath, *w.replacedPerm); err != nil {
+			_ = w.sftpClient.Remove(w.tempPath)
 			return err
 		}
-
-		entries, err := os.ReadDir(localPath)
-		if err != nil {
-			return err
-		}
-
-		for _, entry := range entries {
-			localEntryPath := filepath.Join(localPath, entry.Name())
-			remoteEntryPath := path.Join(remotePath, entry.Name())
-
-			if err := a.uploadFolderRecursive(sftpClient, localEntryPath, remoteEntryPath, filesDone, bytesDone, filesTotal, bytesTotal, failedFiles, cancelCh); err != nil {
-				return err
-			}
-		}
-		return nil
 	}
 
-	localFile, err := os.Open(localPath)
-	if err != nil {
-		*failedFiles = append(*failedFiles, localPath)
-		return nil
+	if err := w.sftpClient.PosixRename(w.tempPath, w.destPath); err != nil {
+		_ = w.sftpClient.Remove(w.tempPath)
+		return err
 	}
-	defer localFile.Close()
-
-	remoteFile, err := sftpClient.Create(remotePath)
-	if err != nil {
-		*failedFiles = append(*failedFiles, localPath)
-		return nil
-	}
-	defer remoteFile.Close()
-
-	buffer := make([]byte, 32*1024)
-	for {
-		select {
-		case <-cancelCh:
-			return fmt.Errorf("cancelled")
-		default:
-		}
-
-		n, err := localFile.Read(buffer)
-		if n > 0 {
-			if _, writeErr := remoteFile.Write(buffer[:n]); writeErr != nil {
-				*failedFiles = append(*failedFiles, localPath)
-				return nil
-			}
-			*bytesDone += int64(n)
-			a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading", true)
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			*failedFiles = append(*failedFiles, localPath)
-			return nil
-		}
-	}
-
-	*filesDone++
-	a.emitFolderProgress(filepath.Base(localPath), *filesDone, filesTotal, *bytesDone, bytesTotal, "uploading", true)
 	return nil
 }
 
-func (a *App) CancelFolderTransfer() {
-	a.folderTransferMu.Lock()
-	defer a.folderTransferMu.Unlock()
-	if a.folderTransferCancelCh != nil {
-		close(a.folderTransferCancelCh)
-		a.folderTransferCancelCh = nil
-	}
-}
-
-func (a *App) UploadFilesFromPaths(localPaths []string, remotePath string) {
-	go func() {
-		client := a.getClient()
-
-		if client == nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": "Not connected",
-			})
-			return
-		}
-
-		if len(localPaths) == 0 {
-			return
-		}
-
-		var hasFolder bool
-		for _, localPath := range localPaths {
-			info, err := os.Stat(localPath)
-			if err == nil && info.IsDir() {
-				hasFolder = true
-				break
-			}
-		}
-
-		if hasFolder || len(localPaths) > 1 {
-			a.uploadMixedPaths(client, localPaths, remotePath, hasFolder)
-			return
-		}
-
-		sftpClient, err := sftp.NewClient(client)
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
-			})
-			return
-		}
-		defer sftpClient.Close()
-
-		for _, localPath := range localPaths {
-			if err := a.uploadSingleFile(client, sftpClient, localPath, remotePath); err != nil {
-				runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-					"message": err.Error(),
-				})
-			}
-		}
-
-		runtime.EventsEmit(a.ctx, "filebrowser:upload-complete", map[string]string{
-			"path": remotePath,
-		})
-	}()
-}
-
-func (a *App) uploadMixedPaths(client *ssh.Client, localPaths []string, remotePath string, containsFolder bool) {
-	a.folderTransferMu.Lock()
-	a.folderTransferCancelCh = make(chan struct{})
-	cancelCh := a.folderTransferCancelCh
-	a.folderTransferMu.Unlock()
-
-	needsWritable := isSystemPath(remotePath)
-	if needsWritable {
-		if err := a.makeFilesystemWritable(client); err != nil {
-			runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-				"message": fmt.Sprintf("Failed to prepare filesystem: %v", err),
-			})
-			return
-		}
-		defer a.restoreFilesystemDeferred(client)
-	}
-
-	sftpClient, err := sftp.NewClient(client)
-	if err != nil {
-		runtime.EventsEmit(a.ctx, "filebrowser:error", map[string]string{
-			"message": fmt.Sprintf("Failed to create SFTP client: %v", err),
-		})
-		return
-	}
-	defer sftpClient.Close()
-
-	var filesTotal int
-	var bytesTotal int64
-	for _, localPath := range localPaths {
-		info, err := os.Stat(localPath)
-		if err != nil {
-			continue
-		}
-		if info.IsDir() {
-			f, b, _ := a.countLocalFolder(localPath)
-			filesTotal += f
-			bytesTotal += b
-		} else {
-			filesTotal++
-			bytesTotal += info.Size()
-		}
-	}
-
-	var filesDone int
-	var bytesDone int64
-	var failedFiles []string
-
-	for _, localPath := range localPaths {
-		select {
-		case <-cancelCh:
-			runtime.EventsEmit(a.ctx, "filebrowser:folder-upload-complete", map[string]interface{}{
-				"cancelled": true,
-			})
-			return
-		default:
-		}
-
-		info, err := os.Stat(localPath)
-		if err != nil {
-			failedFiles = append(failedFiles, localPath)
-			continue
-		}
-
-		if info.IsDir() {
-			folderName := filepath.Base(localPath)
-			destPath := path.Join(remotePath, folderName)
-			if err := a.uploadFolderRecursive(sftpClient, localPath, destPath, &filesDone, &bytesDone, filesTotal, bytesTotal, &failedFiles, cancelCh); err != nil {
-				continue
-			}
-		} else {
-			destPath := path.Join(remotePath, info.Name())
-			localFile, err := os.Open(localPath)
-			if err != nil {
-				failedFiles = append(failedFiles, localPath)
-				continue
-			}
-
-			remoteFile, err := sftpClient.Create(destPath)
-			if err != nil {
-				localFile.Close()
-				failedFiles = append(failedFiles, localPath)
-				continue
-			}
-
-			buffer := make([]byte, 32*1024)
-			for {
-				n, err := localFile.Read(buffer)
-				if n > 0 {
-					if _, writeErr := remoteFile.Write(buffer[:n]); writeErr != nil {
-						failedFiles = append(failedFiles, localPath)
-						break
-					}
-					bytesDone += int64(n)
-					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading", containsFolder)
-				}
-				if err == io.EOF {
-					filesDone++
-					a.emitFolderProgress(info.Name(), filesDone, filesTotal, bytesDone, bytesTotal, "uploading", containsFolder)
-					break
-				}
-				if err != nil {
-					failedFiles = append(failedFiles, localPath)
-					break
-				}
-			}
-			localFile.Close()
-			remoteFile.Close()
-		}
-	}
-
-	runtime.EventsEmit(a.ctx, "filebrowser:folder-upload-complete", map[string]interface{}{
-		"path":        remotePath,
-		"failedFiles": failedFiles,
-	})
-}
-
-func (a *App) uploadSingleFile(client *ssh.Client, sftpClient *sftp.Client, localPath string, remotePath string) error {
-	localFile, err := os.Open(localPath)
-	if err != nil {
-		return fmt.Errorf("failed to open local file %s: %v", localPath, err)
-	}
-	defer localFile.Close()
-
-	stat, err := localFile.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to stat local file: %v", err)
-	}
-
-	if stat.IsDir() {
-		return nil
-	}
-
-	totalBytes := stat.Size()
-	filename := stat.Name()
-
-	destPath := remotePath
-	if strings.HasSuffix(remotePath, "/") || remotePath == "" {
-		destPath = path.Join(remotePath, filename)
-	}
-
-	if isSystemPath(destPath) {
-		if err := a.makeFilesystemWritable(client); err != nil {
-			return fmt.Errorf("failed to prepare filesystem: %v", err)
-		}
-		defer a.restoreFilesystemDeferred(client)
-	}
-
-	remoteFile, err := sftpClient.Create(destPath)
-	if err != nil {
-		return fmt.Errorf("failed to create remote file: %v", err)
-	}
-	defer remoteFile.Close()
-
-	buffer := make([]byte, 32*1024)
-	var transferred int64
-
-	for {
-		n, err := localFile.Read(buffer)
-		if n > 0 {
-			_, writeErr := remoteFile.Write(buffer[:n])
-			if writeErr != nil {
-				return fmt.Errorf("failed to write to remote file: %v", writeErr)
-			}
-			transferred += int64(n)
-
-			var percentage float64
-			if totalBytes > 0 {
-				percentage = float64(transferred) / float64(totalBytes) * 100
-			}
-			runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
-				Filename:   filename,
-				BytesSent:  transferred,
-				TotalBytes: totalBytes,
-				Percentage: percentage,
-				Status:     "uploading",
-			})
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("failed to read local file: %v", err)
-		}
-	}
-
-	runtime.EventsEmit(a.ctx, "filebrowser:progress", TransferProgress{
-		Filename:   filename,
-		BytesSent:  totalBytes,
-		TotalBytes: totalBytes,
-		Percentage: 100,
-		Status:     "uploading",
-	})
-
-	return nil
+func (w *remoteFileWriter) Abort() {
+	_ = w.file.Close()
+	_ = w.sftpClient.Remove(w.tempPath)
 }
 
 func (a *App) DeletePath(path string) error {
@@ -1215,4 +566,3 @@ func (a *App) RevealInFileManager(path string) {
 
 	open.Start(dir)
 }
-

@@ -69,12 +69,12 @@ func (i *Installer) Install(
 		})
 	}
 
-	var lastOutput string
+	var diagnostics vellumDiagnostics
 	var currentPkg string
 	var currentIdx int
 
 	err := i.vellum.AddStreaming(func(line string) {
-		lastOutput = line
+		diagnostics.observe(line)
 		debug.Printf("[DEBUG] vellum output: %s\n", line)
 
 		if strings.Contains(strings.ToLower(line), "dns:") {
@@ -105,7 +105,7 @@ func (i *Installer) Install(
 	}, packageNames...)
 
 	if err != nil {
-		errMsg := fmt.Sprintf("Installation failed: %v (output: %s)", err, lastOutput)
+		errMsg := fmt.Sprintf("Installation failed: %s", diagnostics.explain(err))
 		debug.Printf("[DEBUG] Install error: %s\n", errMsg)
 		errors = append(errors, errMsg)
 		if onProgress != nil {
@@ -216,7 +216,9 @@ func (i *Installer) Uninstall(
 			})
 		}
 
+		var diagnostics vellumDiagnostics
 		err := i.vellum.DelStreaming(func(line string) {
+			diagnostics.observe(line)
 			if onProgress != nil {
 				onProgress(executor.ProgressInfo{
 					CurrentComponent: label,
@@ -229,7 +231,7 @@ func (i *Installer) Uninstall(
 		}, packageNames...)
 
 		if err != nil {
-			errMsg := fmt.Sprintf("Uninstall failed: %v", err)
+			errMsg := fmt.Sprintf("Uninstall failed: %s", diagnostics.explain(err))
 			errors = append(errors, errMsg)
 			reportError(onProgress, label, 1, 0, errMsg)
 		} else if onProgress != nil {
@@ -243,11 +245,25 @@ func (i *Installer) Uninstall(
 		}
 	} else {
 		// Perform actual uninstall for requested packages one at a time
+		removed := map[string]bool{}
 		for idx, pkgName := range packageNames {
 			pkg := i.metadata.GetPackage(pkgName)
 			displayName := pkgName
 			if pkg != nil {
 				displayName = pkg.Name
+			}
+
+			if removed[pkgName] {
+				if onProgress != nil {
+					onProgress(executor.ProgressInfo{
+						CurrentComponent: displayName,
+						TotalComponents:  len(packageNames),
+						CurrentIndex:     idx,
+						Status:           executor.StatusCompleted,
+						Message:          fmt.Sprintf("%s was already removed", displayName),
+					})
+				}
+				continue
 			}
 
 			if onProgress != nil {
@@ -260,9 +276,14 @@ func (i *Installer) Uninstall(
 				})
 			}
 
+			var perPkgDiagnostics vellumDiagnostics
 			var err error
 			if useRecursive {
 				err = i.vellum.DelRecursiveStreaming(func(line string) {
+					perPkgDiagnostics.observe(line)
+					if name := parsePurgedPackage(line); name != "" {
+						removed[name] = true
+					}
 					if onProgress != nil {
 						onProgress(executor.ProgressInfo{
 							CurrentComponent: displayName,
@@ -275,6 +296,10 @@ func (i *Installer) Uninstall(
 				}, pkgName)
 			} else {
 				err = i.vellum.DelStreaming(func(line string) {
+					perPkgDiagnostics.observe(line)
+					if name := parsePurgedPackage(line); name != "" {
+						removed[name] = true
+					}
 					if onProgress != nil {
 						onProgress(executor.ProgressInfo{
 							CurrentComponent: displayName,
@@ -288,7 +313,7 @@ func (i *Installer) Uninstall(
 			}
 
 			if err != nil {
-				errMsg := fmt.Sprintf("Uninstall failed for %s: %v", displayName, err)
+				errMsg := fmt.Sprintf("Uninstall failed for %s: %s", displayName, perPkgDiagnostics.explain(err))
 				errors = append(errors, errMsg)
 				reportError(onProgress, displayName, len(packageNames), idx, errMsg)
 				continue
@@ -346,4 +371,44 @@ func reportError(onProgress executor.ProgressCallback, name string, total, idx i
 			Message:          msg,
 		})
 	}
+}
+
+const maxDiagnosticLines = 5
+
+var purgedLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Purging|Removing)\s+(\S+)`)
+
+func parsePurgedPackage(line string) string {
+	if m := purgedLineRegex.FindStringSubmatch(line); len(m) >= 2 {
+		return m[1]
+	}
+	return ""
+}
+
+type vellumDiagnostics struct {
+	lines    []string
+	lastLine string
+}
+
+func (d *vellumDiagnostics) observe(line string) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return
+	}
+	d.lastLine = trimmed
+	if strings.HasPrefix(trimmed, "ERROR:") || strings.HasPrefix(trimmed, "WARNING:") {
+		d.lines = append(d.lines, trimmed)
+		if len(d.lines) > maxDiagnosticLines {
+			d.lines = d.lines[len(d.lines)-maxDiagnosticLines:]
+		}
+	}
+}
+
+func (d *vellumDiagnostics) explain(err error) string {
+	if len(d.lines) > 0 {
+		return strings.Join(d.lines, "\n")
+	}
+	if d.lastLine != "" {
+		return fmt.Sprintf("%v (output: %s)", err, d.lastLine)
+	}
+	return fmt.Sprintf("%v", err)
 }
