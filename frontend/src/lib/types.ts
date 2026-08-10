@@ -83,6 +83,7 @@ export interface InstallSimulationResult {
   requested: string[]
   error?: string
   conflicts?: QueueConflictEntry[]
+  unresolvedVirtuals?: string[]
 }
 
 export interface InstallSet {

@@ -660,6 +660,20 @@ type VirtualChoice struct {
 	Default    string           `json:"default,omitempty"`
 }
 
+func (c VirtualChoice) PreferredProvider() string {
+	for _, provider := range c.Providers {
+		if provider.Compatible && provider.Name == c.Default {
+			return provider.Name
+		}
+	}
+	for _, provider := range c.Providers {
+		if provider.Compatible {
+			return provider.Name
+		}
+	}
+	return ""
+}
+
 func anyCompatible(providers []ProviderOption) bool {
 	for _, provider := range providers {
 		if provider.Compatible {

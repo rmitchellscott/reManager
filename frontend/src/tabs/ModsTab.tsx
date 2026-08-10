@@ -302,7 +302,8 @@ export function ModsTab({
       window.go.main.App.SimulateInstall([...installQueue], device)
         .then(sim => {
           if (stale) return
-          setQueueConflict(sim.error ? { entries: sim.conflicts || [] } : null)
+          const awaitingProviderChoice = (sim.unresolvedVirtuals?.length ?? 0) > 0
+          setQueueConflict(sim.error && !awaitingProviderChoice ? { entries: sim.conflicts || [] } : null)
           setImpliedPackages(sim.error ? new Set() : new Set(
             (sim.packages || []).filter(name => !installQueue.has(name) && !installedPackages.has(name))
           ))
