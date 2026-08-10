@@ -108,10 +108,11 @@ type InstallResult struct {
 }
 
 type InstallSimulationResult struct {
-	Packages  []string                    `json:"packages"`
-	Requested []string                    `json:"requested"`
-	Error     string                      `json:"error,omitempty"`
-	Conflicts []vellum.QueueConflictEntry `json:"conflicts,omitempty"`
+	Packages           []string                    `json:"packages"`
+	Requested          []string                    `json:"requested"`
+	Error              string                      `json:"error,omitempty"`
+	Conflicts          []vellum.QueueConflictEntry `json:"conflicts,omitempty"`
+	UnresolvedVirtuals []string                    `json:"unresolvedVirtuals,omitempty"`
 }
 
 type UninstallSimulationResult struct {
@@ -668,16 +669,24 @@ func (a *App) SimulateInstall(packageNames []string, deviceType string) (*Instal
 		return &InstallSimulationResult{Packages: packageNames, Requested: packageNames}, nil
 	}
 
-	allPackages, err := a.vellumClient.SimulateAdd(packageNames...)
+	toSimulate := packageNames
+	for _, choice := range a.GetInstallChoices(packageNames, deviceType) {
+		if provider := choice.PreferredProvider(); provider != "" {
+			toSimulate = append([]string{provider}, toSimulate...)
+		}
+	}
+
+	allPackages, err := a.vellumClient.SimulateAdd(toSimulate...)
 	if err != nil {
 		debug.Printf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
 		failure := vellum.ResolutionFailure(err)
 		result := &InstallSimulationResult{
-			Packages:  packageNames,
-			Requested: packageNames,
-			Error:     failure,
+			Packages:           packageNames,
+			Requested:          packageNames,
+			Error:              failure,
+			UnresolvedVirtuals: vellum.ParseUnselectedVirtuals(failure),
 		}
-		if failure != "" && a.metadata != nil && a.metadata.Ready() {
+		if failure != "" && len(result.UnresolvedVirtuals) == 0 && a.metadata != nil && a.metadata.Ready() {
 			firmware := ""
 			if osState, osErr := a.vellumClient.GetOSVersionState(); osErr == nil {
 				firmware = osState.CurrentVersion

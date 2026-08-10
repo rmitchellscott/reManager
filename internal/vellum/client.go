@@ -439,10 +439,26 @@ func (c *Client) SimulateAdd(packages ...string) ([]string, error) {
 
 var conflictSubjectRegex = regexp.MustCompile(`^\s{2}(\S+?)-[^-\s]+-r\d+:\s*$`)
 var conflictBreaksRegex = regexp.MustCompile(`breaks:\s+(\S+?)-[^-\s\[]+-r\d+`)
+var unselectedVirtualRegex = regexp.MustCompile(`^\s+(\S+) \(virtual\):\s*$`)
 
 type ResolutionConflict struct {
 	Package string
 	Breaks  string
+}
+
+func ParseUnselectedVirtuals(message string) []string {
+	var virtuals []string
+	seen := make(map[string]bool)
+
+	for _, line := range strings.Split(message, "\n") {
+		match := unselectedVirtualRegex.FindStringSubmatch(line)
+		if match == nil || seen[match[1]] {
+			continue
+		}
+		seen[match[1]] = true
+		virtuals = append(virtuals, match[1])
+	}
+	return virtuals
 }
 
 func ParseResolutionConflicts(message string) []ResolutionConflict {
