@@ -15,7 +15,7 @@ import { ReadmeDialog } from '@/components/ReadmeDialog'
 import { VellumInstallPrompt } from '@/components/VellumInstallPrompt'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, RefreshCw } from 'lucide-react'
+import { Loader2, Check, AlertTriangle, AlertCircle, Trash2, Plus, X, Search, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
 import { useAppContext } from '@/contexts/AppContext'
 import { PackageInfo, VirtualChoice, PackageConflict, QueueConflictEntry } from '@/lib/types'
 
@@ -287,13 +287,15 @@ export function ModsTab({
     return () => { stale = true }
   }, [installQueue, installedKey, device, deviceInfo.firmware, connectionStatus])
 
-  const [queueConflict, setQueueConflict] = useState<{ entries: QueueConflictEntry[] } | null>(null)
+  const [queueConflict, setQueueConflict] = useState<{ entries: QueueConflictEntry[]; detail: string } | null>(null)
+  const [conflictDetailOpen, setConflictDetailOpen] = useState(false)
   const queueConflicts = queueConflict?.entries ?? []
   const [impliedPackages, setImpliedPackages] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (connectionStatus !== 'connected' || installQueue.size === 0) {
       setQueueConflict(null)
+      setConflictDetailOpen(false)
       setImpliedPackages(new Set())
       return
     }
@@ -303,7 +305,10 @@ export function ModsTab({
         .then(sim => {
           if (stale) return
           const awaitingProviderChoice = (sim.unresolvedVirtuals?.length ?? 0) > 0
-          setQueueConflict(sim.error && !awaitingProviderChoice ? { entries: sim.conflicts || [] } : null)
+          setQueueConflict(sim.error && !awaitingProviderChoice
+            ? { entries: sim.conflicts || [], detail: sim.error }
+            : null)
+          setConflictDetailOpen(false)
           setImpliedPackages(sim.error ? new Set() : new Set(
             (sim.packages || []).filter(name => !installQueue.has(name) && !installedPackages.has(name))
           ))
@@ -900,12 +905,6 @@ export function ModsTab({
               </p>
             )}
 
-            {/* Queue Error */}
-            {queueError && (
-              <div className="bg-destructive/10 border border-destructive/20 text-destructive px-4 py-3 rounded-lg text-sm">
-                {queueError}
-              </div>
-            )}
           </div>
         )}
       </TabsContent>
@@ -956,16 +955,38 @@ export function ModsTab({
                   </AccordionContent>
                 </AccordionItem>
               </Accordion>
-              {queueConflict && queueOpen !== 'install-queue' && (
+              {queueError && (
                 <div className="mb-2 rounded-lg border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                  {conflictPairs.length === 1 ? (
-                    <><strong className="font-semibold">{conflictPairs[0].a}</strong> and{' '}
-                    <strong className="font-semibold">{conflictPairs[0].b}</strong> can't be installed
-                    together. Expand the queue to fix.</>
-                  ) : conflictPairs.length > 1 ? (
-                    <>Some queued packages can't be installed together. Expand the queue to fix.</>
-                  ) : (
-                    <>Some queued packages can't be installed together.</>
+                  {queueError}
+                </div>
+              )}
+              {queueConflict && (queueOpen !== 'install-queue' || conflictPairs.length === 0) && (
+                <div className="mb-2 rounded-lg border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  <button
+                    type="button"
+                    onClick={() => setConflictDetailOpen(open => !open)}
+                    className="flex w-full items-start gap-2 text-left"
+                    aria-expanded={conflictDetailOpen}
+                  >
+                    {conflictDetailOpen
+                      ? <ChevronDown className="h-4 w-4 shrink-0 mt-0.5" />
+                      : <ChevronRight className="h-4 w-4 shrink-0 mt-0.5" />}
+                    <span>
+                      {conflictPairs.length === 1 ? (
+                        <><strong className="font-semibold">{conflictPairs[0].a}</strong> and{' '}
+                        <strong className="font-semibold">{conflictPairs[0].b}</strong> can't be installed
+                        together. Expand the queue to fix.</>
+                      ) : conflictPairs.length > 1 ? (
+                        <>Some queued packages can't be installed together. Expand the queue to fix.</>
+                      ) : (
+                        <>The install queue couldn't be resolved. Show details.</>
+                      )}
+                    </span>
+                  </button>
+                  {conflictDetailOpen && (
+                    <pre className="mt-2 max-h-48 overflow-auto rounded bg-destructive/10 p-2 font-mono text-xs whitespace-pre-wrap">
+                      {queueConflict.detail}
+                    </pre>
                   )}
                 </div>
               )}
