@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -374,7 +375,7 @@ func (a *App) RunPackageUpgrade() {
 		if proxyEnabled && sshClient != nil {
 			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
-			err := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
+			err := proxy.ProxyUpgradeDownload(a.ctx, func(progress vellum.ProxyProgress) {
 				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
 			})
 			if err != nil {
@@ -578,7 +579,7 @@ func (a *App) RunUpgrade() {
 		if proxyEnabled && sshClient != nil {
 			proxy := vellum.NewProxy(vc, sshClient, string(arch))
 			runtime.EventsEmit(a.ctx, "command:output", "Downloading upgrade packages via reManager...\n")
-			proxyErr := proxy.ProxyUpgradeDownload(func(progress vellum.ProxyProgress) {
+			proxyErr := proxy.ProxyUpgradeDownload(a.ctx, func(progress vellum.ProxyProgress) {
 				runtime.EventsEmit(a.ctx, "command:output", progress.Message+"\n")
 			})
 			if proxyErr != nil {
@@ -915,6 +916,16 @@ func (a *App) InstallPackages(requested []string, resolved []string, deviceType 
 			}
 		}
 
+		downloadCtx, cancelDownload := context.WithCancel(a.ctx)
+		defer cancelDownload()
+		go func() {
+			select {
+			case <-cancelCh:
+				cancelDownload()
+			case <-downloadCtx.Done():
+			}
+		}()
+
 		a.dialogResponse = make(chan string, 1)
 		defer func() {
 			if a.dialogResponse != nil {
@@ -947,7 +958,7 @@ func (a *App) InstallPackages(requested []string, resolved []string, deviceType 
 			})
 
 			var err error
-			allPackages, err = proxy.ProxyDownloadWithProgress(packageNames, func(progress vellum.ProxyProgress) {
+			allPackages, err = proxy.ProxyDownloadWithProgress(downloadCtx, packageNames, func(progress vellum.ProxyProgress) {
 				runtime.EventsEmit(a.ctx, "install:progress", InstallProgress{
 					Component: progress.Package,
 					Index:     progress.Current - 1,

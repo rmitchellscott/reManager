@@ -782,7 +782,7 @@ func (a *App) establishConnection(host, authType, secret, keyPath, deviceID stri
 					a.mu.Unlock()
 					if sshClient != nil {
 						proxy := vellum.NewProxy(vc, sshClient, string(deviceArch))
-						_ = proxy.UploadAPKINDEX(func(msg string) {
+						_ = proxy.UploadAPKINDEX(a.ctx, func(msg string) {
 							debug.Printf("[DEBUG] Upgrade check APKINDEX: %s\n", msg)
 						})
 					}

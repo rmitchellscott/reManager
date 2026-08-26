@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -13,7 +14,6 @@ import (
 	"net/http"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -25,7 +25,6 @@ import (
 const (
 	VellumRepoBaseURL = "https://packages.vellum.delivery"
 	VellumCacheDir    = "/home/root/.vellum/etc/apk/cache"
-	ProxyTimeout      = 60 * time.Second
 )
 
 type Proxy struct {
@@ -61,25 +60,25 @@ type ProxyProgress struct {
 }
 
 // ProxyDownloadWithProgress downloads packages with structured progress reporting.
-func (p *Proxy) ProxyDownloadWithProgress(packages []string, onProgress func(ProxyProgress)) ([]string, error) {
-	return p.proxyDownloadInternal(packages, onProgress)
+func (p *Proxy) ProxyDownloadWithProgress(ctx context.Context, packages []string, onProgress func(ProxyProgress)) ([]string, error) {
+	return p.proxyDownloadInternal(ctx, packages, onProgress)
 }
 
 // ProxyDownload downloads APKINDEX and packages, uploads them to device cache.
 // Returns the list of all package names that will be installed (including dependencies).
-func (p *Proxy) ProxyDownload(packages []string, onProgress func(string)) ([]string, error) {
-	return p.proxyDownloadInternal(packages, func(progress ProxyProgress) {
+func (p *Proxy) ProxyDownload(ctx context.Context, packages []string, onProgress func(string)) ([]string, error) {
+	return p.proxyDownloadInternal(ctx, packages, func(progress ProxyProgress) {
 		onProgress(progress.Message)
 	})
 }
 
-func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyProgress)) ([]string, error) {
+func (p *Proxy) proxyDownloadInternal(ctx context.Context, packages []string, onProgress func(ProxyProgress)) ([]string, error) {
 	debug.Printf("[DEBUG] ProxyDownload called with packages: %v\n", packages)
 	onProgress(ProxyProgress{Phase: "index", Message: "Downloading package index..."})
 
 	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
 	debug.Printf("[DEBUG] ProxyDownload downloading APKINDEX from: %s\n", apkindexURL)
-	apkindexData, err := downloadFile(apkindexURL)
+	apkindexData, err := downloadFile(ctx, apkindexURL)
 	if err != nil {
 		debug.Printf("[DEBUG] ProxyDownload APKINDEX download failed: %v\n", err)
 		return nil, fmt.Errorf("failed to download APKINDEX: %w", err)
@@ -144,7 +143,7 @@ func (p *Proxy) proxyDownloadInternal(packages []string, onProgress func(ProxyPr
 			Message: fmt.Sprintf("Downloading %s (%d/%d)...", pkg.name, i+1, len(pkgs)),
 		})
 
-		pkgData, err := downloadFile(pkg.url)
+		pkgData, err := downloadFile(ctx, pkg.url)
 		if err != nil {
 			debug.Printf("[DEBUG] ProxyDownload download failed for %s: %v\n", pkg.name, err)
 			return nil, fmt.Errorf("failed to download %s: %w", pkg.name, err)
@@ -211,9 +210,8 @@ func (p *Proxy) uploadToDevice(data []byte, remotePath string) error {
 	return err
 }
 
-func downloadFile(url string) ([]byte, error) {
-	client := httputil.NewClient(ProxyTimeout)
-	resp, err := client.Get(url)
+func downloadFile(ctx context.Context, url string) ([]byte, error) {
+	resp, err := httputil.GetStreaming(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -283,12 +281,12 @@ func parseAPKINDEX(data []byte) (map[string]string, error) {
 }
 
 // ProxyUpgradeDownload downloads APKINDEX, resolves upgradable packages, and uploads them to device cache.
-func (p *Proxy) ProxyUpgradeDownload(onProgress func(ProxyProgress)) error {
+func (p *Proxy) ProxyUpgradeDownload(ctx context.Context, onProgress func(ProxyProgress)) error {
 	debug.Printf("[DEBUG] ProxyUpgradeDownload called\n")
 	onProgress(ProxyProgress{Phase: "index", Message: "Downloading package index..."})
 
 	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
-	apkindexData, err := downloadFile(apkindexURL)
+	apkindexData, err := downloadFile(ctx, apkindexURL)
 	if err != nil {
 		return fmt.Errorf("failed to download APKINDEX: %w", err)
 	}
@@ -341,7 +339,7 @@ func (p *Proxy) ProxyUpgradeDownload(onProgress func(ProxyProgress)) error {
 			Message: fmt.Sprintf("Downloading %s (%d/%d)...", pkg.name, i+1, len(pinnedPkgs)),
 		})
 
-		pkgData, err := downloadFile(pkg.url)
+		pkgData, err := downloadFile(ctx, pkg.url)
 		if err != nil {
 			return fmt.Errorf("failed to download %s: %w", pkg.name, err)
 		}
@@ -376,11 +374,11 @@ func (p *Proxy) ProxyUpgradeDownload(onProgress func(ProxyProgress)) error {
 
 // UploadAPKINDEX downloads the APKINDEX and uploads it to device cache.
 // This should be called before vellum update to ensure the index is available.
-func (p *Proxy) UploadAPKINDEX(onProgress func(string)) error {
+func (p *Proxy) UploadAPKINDEX(ctx context.Context, onProgress func(string)) error {
 	onProgress("Downloading package index...")
 
 	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
-	apkindexData, err := downloadFile(apkindexURL)
+	apkindexData, err := downloadFile(ctx, apkindexURL)
 	if err != nil {
 		return fmt.Errorf("failed to download APKINDEX: %w", err)
 	}

@@ -380,7 +380,7 @@ func (a *App) InstallUserGuide() error {
 	v := strings.TrimPrefix(version, "v")
 
 	downloadURL := guideDownloadURLBase + v + ".epub"
-	resp, err := httputil.NewClient(60 * time.Second).Get(downloadURL)
+	resp, err := httputil.GetStreaming(a.ctx, downloadURL)
 	if err != nil {
 		return fmt.Errorf("failed to download guide: %w", err)
 	}
