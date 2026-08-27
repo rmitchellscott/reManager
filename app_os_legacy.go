@@ -418,7 +418,7 @@ func (a *App) reconcileLegacyInstall(sess *installSession, restore func(), versi
 }
 
 func downloadLegacyImage(ctx context.Context, url string, w io.Writer, totalSize int64, cancelled func() bool, onProgress func(float64)) error {
-	resp, err := httputil.NewClient(10 * time.Minute).Get(url)
+	resp, err := httputil.GetStreaming(ctx, url)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}

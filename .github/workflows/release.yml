@@ -363,6 +363,10 @@ jobs:
             artifacts/reManager-x86_64.flatpak/reManager-x86_64.flatpak
             artifacts/reManager-aarch64.flatpak/reManager-aarch64.flatpak
 
+      - name: Trigger site rebuild
+        continue-on-error: true
+        run: curl -fsS -X POST "${{ secrets.CF_DEPLOY_HOOK }}"
+
   publish-guide:
     needs: [release]
     runs-on: ubuntu-latest

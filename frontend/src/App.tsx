@@ -834,24 +834,18 @@ export default function App() {
 
 
   const runInstallSimulation = async (requested: string[]) => {
-    const showNothingToDo = () => {
-      setQueueError('All packages are already installed')
-      setTimeout(() => setQueueError(null), 4000)
-      setInstallQueue(new Set())
-    }
-
     try {
       const sim = await window.go.main.App.SimulateInstall(requested, device)
       if (sim.error) {
         const pair = sim.conflicts?.[0]
         setQueueError(pair
           ? `${pair.package} and ${pair.blocks} can't be installed together. Remove one of them from your install queue.`
-          : "Some queued packages can't be installed together.")
+          : "The install queue couldn't be resolved.")
         return
       }
       const filteredPackages = sim.packages.filter((name: string) => !installedPackages.has(name))
       if (filteredPackages.length === 0) {
-        showNothingToDo()
+        setInstallQueue(new Set())
       } else {
         setPendingInstallConfirm({ packages: filteredPackages, requested: sim.requested })
       }
@@ -859,7 +853,7 @@ export default function App() {
       console.error('SimulateInstall failed:', err)
       const pkgs = requested.filter((name) => !installedPackages.has(name))
       if (pkgs.length === 0) {
-        showNothingToDo()
+        setInstallQueue(new Set())
       } else {
         setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
       }

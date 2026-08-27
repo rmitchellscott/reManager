@@ -1,6 +1,7 @@
 package vellum
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,7 +24,6 @@ const (
 	VellumCLIReleasesAPI = "https://api.github.com/repos/vellum-dev/vellum-cli/releases"
 	VellumKeysURL        = "https://raw.githubusercontent.com/vellum-dev/vellum/main/keys/packages.rsa.pub"
 	BootstrapDir         = "/tmp/vellum-bootstrap"
-	VellumMajorVersion   = 1
 	BootstrapTimeout     = 120 * time.Second
 )
 
@@ -44,7 +44,7 @@ type BootstrapFiles struct {
 	VellumFilename  string
 }
 
-func getLatestVellumRelease(majorVersion int) (*GitHubRelease, error) {
+func getLatestVellumRelease() (*GitHubRelease, error) {
 	client := httputil.NewClient(30 * time.Second)
 	resp, err := client.Get(VellumCLIReleasesAPI)
 	if err != nil {
@@ -68,7 +68,7 @@ func getLatestVellumRelease(majorVersion int) (*GitHubRelease, error) {
 
 	versionRegex := regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
 	var latestRelease *GitHubRelease
-	var latestMinor, latestPatch int
+	var latestVersion [3]int
 
 	for i := range releases {
 		release := &releases[i]
@@ -77,21 +77,31 @@ func getLatestVellumRelease(majorVersion int) (*GitHubRelease, error) {
 			continue
 		}
 
-		minor, _ := strconv.Atoi(matches[2])
-		patch, _ := strconv.Atoi(matches[3])
+		var version [3]int
+		for i, match := range matches[1:] {
+			version[i], _ = strconv.Atoi(match)
+		}
 
-		if latestRelease == nil || minor > latestMinor || (minor == latestMinor && patch > latestPatch) {
+		if latestRelease == nil || isNewerVersion(version, latestVersion) {
 			latestRelease = release
-			latestMinor = minor
-			latestPatch = patch
+			latestVersion = version
 		}
 	}
 
 	if latestRelease == nil {
-		return nil, fmt.Errorf("no v%d.x.x release found", majorVersion)
+		return nil, fmt.Errorf("no versioned release found")
 	}
 
 	return latestRelease, nil
+}
+
+func isNewerVersion(a, b [3]int) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return false
 }
 
 func parseAPKToolsVersion(bootstrapScript []byte) (string, error) {
@@ -156,7 +166,7 @@ func downloadBootstrapFiles(arch rmdevice.Architecture, onProgress func(string))
 	files.VellumFilename = vellumFile
 
 	onProgress("Finding latest vellum release...")
-	release, err := getLatestVellumRelease(VellumMajorVersion)
+	release, err := getLatestVellumRelease()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get vellum release: %w", err)
 	}
@@ -180,7 +190,7 @@ func downloadBootstrapFiles(arch rmdevice.Architecture, onProgress func(string))
 	}
 
 	onProgress("Downloading bootstrap.sh...")
-	files.BootstrapScript, err = downloadFile(bootstrapURL)
+	files.BootstrapScript, err = downloadFile(context.Background(), bootstrapURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download bootstrap.sh: %w", err)
 	}
@@ -193,19 +203,19 @@ func downloadBootstrapFiles(arch rmdevice.Architecture, onProgress func(string))
 
 	apkURL := fmt.Sprintf("https://github.com/vellum-dev/apk-tools/releases/download/%s/%s", apkVersion, apkFile)
 	onProgress(fmt.Sprintf("Downloading %s...", apkFile))
-	files.APKBinary, err = downloadFile(apkURL)
+	files.APKBinary, err = downloadFile(context.Background(), apkURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download %s: %w", apkFile, err)
 	}
 
 	onProgress(fmt.Sprintf("Downloading %s...", vellumFile))
-	files.VellumBinary, err = downloadFile(vellumURL)
+	files.VellumBinary, err = downloadFile(context.Background(), vellumURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download %s: %w", vellumFile, err)
 	}
 
 	onProgress("Downloading packages.rsa.pub...")
-	files.RSAKey, err = downloadFile(VellumKeysURL)
+	files.RSAKey, err = downloadFile(context.Background(), VellumKeysURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download RSA key: %w", err)
 	}
@@ -296,7 +306,7 @@ func (c *Client) BootstrapOfflineWithPackages(sshClient *ssh.Client, arch rmdevi
 
 	proxy := NewProxy(c, sshClient, repoArch)
 
-	if err := proxy.UploadAPKINDEX(func(msg string) {
+	if err := proxy.UploadAPKINDEX(context.Background(), func(msg string) {
 		onOutput(msg + "\n")
 	}); err != nil {
 		return fmt.Errorf("failed to upload APKINDEX: %w", err)
@@ -304,7 +314,7 @@ func (c *Client) BootstrapOfflineWithPackages(sshClient *ssh.Client, arch rmdevi
 	onOutput("Installing required packages...\n")
 	packages := []string{"vellum", "mount-utils", "vellum-bash-completion"}
 
-	_, err := proxy.ProxyDownload(packages, func(msg string) {
+	_, err := proxy.ProxyDownload(context.Background(), packages, func(msg string) {
 		onOutput(msg + "\n")
 	})
 	if err != nil {

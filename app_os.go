@@ -482,7 +482,7 @@ func (a *App) InstallOSVersion(version string) {
 		tmpPath := tmpFile.Name()
 		defer os.Remove(tmpPath)
 
-		resp, err := httputil.NewClient(10 * time.Minute).Get(url)
+		resp, err := httputil.GetStreaming(a.ctx, url)
 		if err != nil {
 			tmpFile.Close()
 			runtime.EventsEmit(a.ctx, "software:install-error", map[string]string{"error": "download failed: " + err.Error()})
