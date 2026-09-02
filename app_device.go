@@ -89,6 +89,12 @@ func (a *App) GetUpdateServiceStatus() support.UpdateServiceStatus {
 		status.Running = strings.TrimSpace(output) == "active"
 	}
 
+	output, err = a.runCommand("grep -m1 '^AutoUpdate=' /home/root/.config/remarkable/xochitl.conf")
+	debug.Printf("[DEBUG] GetUpdateServiceStatus: AutoUpdate output=%q, err=%v\n", output, err)
+	if err == nil && strings.TrimSpace(output) == "AutoUpdate=false" {
+		status.Enabled = false
+	}
+
 	debug.Printf("[DEBUG] GetUpdateServiceStatus: returning enabled=%v, running=%v\n", status.Enabled, status.Running)
 	return status
 }
