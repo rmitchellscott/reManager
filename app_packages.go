@@ -659,7 +659,7 @@ func (a *App) GetSystemTasksInfo() []SystemTaskInfo {
 			Label:              task.Label,
 			Description:        task.Description,
 			RequiresTerminal:   task.RequiresTerminal,
-			NeedsWriteableRoot: task.NeedsWriteableRoot,
+			NeedsWriteableRoot: a.taskNeedsWriteableRoot(task),
 		}
 	}
 	return result
@@ -1335,7 +1335,7 @@ func (a *App) RunSystemTask(taskID, deviceType string) {
 
 		cmdResults := task.Command(ctx)
 
-		if task.NeedsWriteableRoot {
+		if a.taskNeedsWriteableRoot(*task) {
 			cmdResults = commands.WrapWithWriteableRoot(cmdResults, dev)
 			if err := a.acquireWriteableRoot(dev); err != nil {
 				runtime.EventsEmit(a.ctx, "command:output", fmt.Sprintf("Blocked: %v\n", err))

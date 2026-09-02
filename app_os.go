@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"reManager/internal/debug"
+	"reManager/internal/device"
 	apperrors "reManager/internal/errors"
 	"reManager/internal/httputil"
 	"reManager/internal/logger"
@@ -335,6 +336,14 @@ func (a *App) activeOSVersion() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.connectedFirmware
+}
+
+func (a *App) taskNeedsWriteableRoot(task device.SystemTask) bool {
+	if !task.NeedsWriteableRoot || task.WriteableRootBelowOS == "" {
+		return task.NeedsWriteableRoot
+	}
+	v := a.activeOSVersion()
+	return v == "" || rmversion.Compare(v, task.WriteableRootBelowOS) < 0
 }
 
 func (a *App) isLegacyOS() bool {
