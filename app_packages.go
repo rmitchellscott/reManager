@@ -455,6 +455,33 @@ func (a *App) CheckOSCompatibility(targetOS string) CompatibilityResultJSON {
 	}
 }
 
+func (a *App) refreshDevicePackageIndex(vc *vellum.Client, arch string) {
+	if vc == nil {
+		return
+	}
+
+	settings, _ := a.settingsStore.Load()
+	proxyEnabled := settings == nil || settings.ProxyMode
+
+	a.mu.Lock()
+	sshClient := a.client
+	a.mu.Unlock()
+
+	if !proxyEnabled || sshClient == nil {
+		if err := vc.UpdateIndex(); err != nil {
+			debug.Printf("[DEBUG] Package index refresh failed: %v\n", err)
+		}
+		return
+	}
+
+	proxy := vellum.NewProxy(vc, sshClient, arch)
+	if err := proxy.UploadAPKINDEX(a.ctx, func(msg string) {
+		debug.Printf("[DEBUG] Package index refresh: %s\n", msg)
+	}); err != nil {
+		debug.Printf("[DEBUG] Package index refresh failed: %v\n", err)
+	}
+}
+
 func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 	debug.Println("[DEBUG] GetPackageCompatibilityStatus: called")
 	if a.vellumClient == nil {
@@ -483,6 +510,8 @@ func (a *App) GetPackageCompatibilityStatus() PackageCompatibilityStatus {
 		}
 	}
 	debug.Printf("[DEBUG] GetPackageCompatibilityStatus: filteredInstalled=%v\n", filteredInstalled)
+
+	a.refreshDevicePackageIndex(a.vellumClient, string(a.connectedDeviceArch))
 
 	compat, err := a.vellumClient.CheckOSCompatibility(osState.CurrentVersion)
 	debug.Printf("[DEBUG] GetPackageCompatibilityStatus: compat=%+v, err=%v\n", compat, err)

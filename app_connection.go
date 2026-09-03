@@ -742,6 +742,8 @@ func (a *App) establishConnection(host, authType, secret, keyPath, deviceID stri
 					}
 				}
 
+				a.refreshDevicePackageIndex(vc, string(deviceArch))
+
 				compat, compatErr := vc.CheckOSCompatibility(osState.CurrentVersion)
 
 				compatStatus := PackageCompatibilityStatus{
@@ -773,20 +775,7 @@ func (a *App) establishConnection(host, authType, secret, keyPath, deviceID stri
 			runtime.EventsEmit(a.ctx, "connect:warnings", warnings)
 
 			if _, hasMismatch := warnings["osMismatch"]; !hasMismatch {
-				settings, _ := a.settingsStore.Load()
-				proxyEnabled := settings == nil || settings.ProxyMode
-
-				if proxyEnabled {
-					a.mu.Lock()
-					sshClient := a.client
-					a.mu.Unlock()
-					if sshClient != nil {
-						proxy := vellum.NewProxy(vc, sshClient, string(deviceArch))
-						_ = proxy.UploadAPKINDEX(a.ctx, func(msg string) {
-							debug.Printf("[DEBUG] Upgrade check APKINDEX: %s\n", msg)
-						})
-					}
-				}
+				a.refreshDevicePackageIndex(vc, string(deviceArch))
 
 				upgradeResult, simErr := vc.SimulateUpgrade()
 

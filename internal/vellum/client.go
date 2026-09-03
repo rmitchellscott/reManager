@@ -260,6 +260,16 @@ func (c *Client) GetOSVersionState() (*OSVersionState, error) {
 	}, nil
 }
 
+func (c *Client) UpdateIndex() error {
+	cmd := fmt.Sprintf("%s update", VellumBin)
+	debug.Printf("[DEBUG] UpdateIndex: running '%s'\n", cmd)
+	_, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		debug.Printf("[DEBUG] UpdateIndex: err=%v\n", err)
+	}
+	return err
+}
+
 func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, error) {
 	cmd := fmt.Sprintf("%s check-os %s", VellumBin, targetOS)
 	debug.Printf("[DEBUG] CheckOSCompatibility: running '%s'\n", cmd)
