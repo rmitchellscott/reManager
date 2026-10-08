@@ -832,6 +832,16 @@ export function ConnectPage({
               </Button>
             )}
           </div>
+
+          {savedDevices.length === 0 && (
+            <button
+              className="w-full text-center text-xs text-muted-foreground hover:text-foreground touch:hit-target"
+              onClick={() => setStep('browse')}
+              disabled={connecting}
+            >
+              Browse mods
+            </button>
+          )}
           </div>
           </div>
         </div>
