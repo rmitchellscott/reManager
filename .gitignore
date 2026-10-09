@@ -60,3 +60,7 @@ build/android/local.properties
 build/android/build/
 build/android/gen/
 build/android/overlay.json
+
+# User guide build outputs, published by guide.yml
+docs/guide/reManager User Guide.epub
+docs/guide/reManager User Guide.pdf

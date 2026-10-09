@@ -1,0 +1,102 @@
+name: Guide
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit on main to publish the user guide from'
+        required: true
+        type: string
+
+concurrency:
+  group: guide
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  COMMIT: ${{ inputs.commit }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: auto
+  # aws-cli 2.23 and later send checksums that R2 rejects.
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+  BUCKET: ${{ secrets.R2_BUCKET }}
+
+jobs:
+  publish-guide:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+
+      - name: Check the commit is on main
+        run: |
+          if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
+            echo "::error::$COMMIT is not on main"
+            exit 1
+          fi
+
+      - name: Install pandoc and LaTeX
+        run: |
+          curl -fsSL -o /tmp/pandoc.deb https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-1-amd64.deb
+          sudo apt-get update
+          sudo apt-get install -y /tmp/pandoc.deb texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended lmodern python3-qrcode python3-pil
+
+      - name: Read minApp
+        run: |
+          MIN_APP=$(awk '/^minApp:/ { gsub(/["\047]/, "", $2); print $2 }' docs/guide/metadata.yaml)
+          if ! [[ "$MIN_APP" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::docs/guide/metadata.yaml needs minApp set to a version like 2.0.1, not '$MIN_APP'"
+            exit 1
+          fi
+          echo "MIN_APP=$MIN_APP" >> "$GITHUB_ENV"
+
+      # The bucket is read directly, not through downloads.remanager.io, so the
+      # revision comes from the manifest as stored and not a cached copy.
+      - name: Assign the revision
+        run: |
+          if aws s3api head-object --bucket "$BUCKET" --key guide/manifest.json --endpoint-url "$R2_ENDPOINT" > /dev/null 2> head.err; then
+            aws s3 cp "s3://$BUCKET/guide/manifest.json" manifest.json --endpoint-url "$R2_ENDPOINT"
+          elif grep -q '(404)' head.err; then
+            echo '{"guides": []}' > manifest.json
+          else
+            cat head.err
+            exit 1
+          fi
+          REVISION=$(jq '[.guides[].revision] | max + 1' manifest.json)
+          echo "REVISION=$REVISION" >> "$GITHUB_ENV"
+          echo "Publishing revision $REVISION with minApp $MIN_APP"
+
+      - name: Build the epub and PDF
+        run: |
+          ./docs/guide/build.sh
+          mkdir -p dist
+          cp "docs/guide/reManager User Guide.epub" "dist/$REVISION.epub"
+          cp "docs/guide/reManager User Guide.pdf" "dist/$REVISION.pdf"
+          echo "SHA256=$(sha256sum "dist/$REVISION.epub" | awk '{print $1}')" >> "$GITHUB_ENV"
+
+      # The manifest goes last, so no app sees a revision whose files are missing.
+      - name: Upload the revision files
+        run: |
+          aws s3 cp "dist/$REVISION.epub" "s3://$BUCKET/guide/$REVISION.epub" --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/epub+zip --cache-control "public, max-age=31536000, immutable"
+          aws s3 cp "dist/$REVISION.pdf" "s3://$BUCKET/guide/$REVISION.pdf" --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/pdf --cache-control "public, max-age=31536000, immutable"
+          aws s3 cp "dist/$REVISION.pdf" "s3://$BUCKET/guide/latest.pdf" --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/pdf --cache-control "public, max-age=300"
+
+      - name: Upload the manifest
+        run: |
+          jq --argjson revision "$REVISION" --arg minApp "$MIN_APP" --arg sha256 "$SHA256" --arg commit "$COMMIT" \
+            --arg publishedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '.guides += [{revision: $revision, minApp: $minApp, sha256: $sha256, epub: "\($revision).epub", pdf: "\($revision).pdf", commit: $commit, publishedAt: $publishedAt}]' \
+            manifest.json > manifest.next.json
+          aws s3 cp manifest.next.json "s3://$BUCKET/guide/manifest.json" --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/json --cache-control "public, max-age=300"
+          echo "Published revision $REVISION (minApp $MIN_APP) from \`$COMMIT\`" >> "$GITHUB_STEP_SUMMARY"

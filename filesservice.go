@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -32,6 +33,8 @@ type FilesService struct {
 	roundTrip    time.Duration
 	roundTripGen uint64
 	roundTripMu  sync.Mutex
+
+	guideTargetRevision atomic.Int64
 
 	demoHasGuide  bool
 	demoGuideSeen bool
