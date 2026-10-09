@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
+	rmversion "github.com/rmitchellscott/remarkable-go/version"
 
 	"reManager/internal/debug"
 	"reManager/internal/epubimport"
@@ -23,8 +25,7 @@ import (
 	"reManager/internal/storage"
 )
 
-const guideManifestURL = "https://raw.githubusercontent.com/rmitchellscott/remanager/main/docs/guide/guide-manifest.json"
-const guideDownloadURLBase = "https://raw.githubusercontent.com/rmitchellscott/remanager/main/docs/guide/releases/"
+const guideManifestURL = "https://downloads.remanager.io/guide/manifest.json"
 const guideVisibleName = "reManager User Guide"
 
 type ImportFileInfo struct {
@@ -244,9 +245,49 @@ func (s *FilesService) importPDF(sftpClient *sftp.Client, localPath, visibleName
 	return err
 }
 
-func (s *FilesService) fetchGuideManifest() (map[string]struct {
-	SHA256 string `json:"sha256"`
-}, error) {
+// guideRevision is one entry of the manifest that guide.yml uploads.
+type guideRevision struct {
+	Revision int    `json:"revision"`
+	MinApp   string `json:"minApp"`
+	SHA256   string `json:"sha256"`
+	Epub     string `json:"epub"`
+}
+
+// Revisions rank by minApp before revision, so a fix published for an older
+// app line never reaches a newer one.
+func guideRanksBelow(a, b guideRevision) bool {
+	if c := rmversion.Compare(a.MinApp, b.MinApp); c != 0 {
+		return c < 0
+	}
+	return a.Revision < b.Revision
+}
+
+func guideTarget(revisions []guideRevision, appVersion string) (guideRevision, bool) {
+	var target guideRevision
+	found := false
+	for _, revision := range revisions {
+		if rmversion.Compare(revision.MinApp, appVersion) > 0 {
+			continue
+		}
+		if !found || guideRanksBelow(target, revision) {
+			target, found = revision, true
+		}
+	}
+	return target, found
+}
+
+// A copy that ranks at or above the target is current, so the app never offers
+// to replace a guide with an older one.
+func guideOutOfDate(revisions []guideRevision, target guideRevision, installedSHA256 string) bool {
+	for _, revision := range revisions {
+		if revision.SHA256 == installedSHA256 {
+			return guideRanksBelow(revision, target)
+		}
+	}
+	return true
+}
+
+func (s *FilesService) fetchGuideManifest() ([]guideRevision, error) {
 	client := httputil.NewClient(10 * time.Second)
 	resp, err := client.Get(guideManifestURL)
 	if err != nil {
@@ -258,18 +299,13 @@ func (s *FilesService) fetchGuideManifest() (map[string]struct {
 		return nil, fmt.Errorf("guide manifest returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read guide manifest: %w", err)
+	var manifest struct {
+		Guides []guideRevision `json:"guides"`
 	}
-
-	var manifest map[string]struct {
-		SHA256 string `json:"sha256"`
-	}
-	if err := json.Unmarshal(body, &manifest); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
 		return nil, fmt.Errorf("failed to parse guide manifest: %w", err)
 	}
-	return manifest, nil
+	return manifest.Guides, nil
 }
 
 func (s *FilesService) findGuideOnDevice(sftpClient *sftp.Client) (docID string, err error) {
@@ -308,11 +344,12 @@ func (s *FilesService) findGuideOnDevice(sftpClient *sftp.Client) (docID string,
 	return "", nil
 }
 
-// Unseen marks a guide that is missing or stale and has not been pointed out since this version of reManager started, which is when the guide is news.
+// Unseen marks a guide that is missing or stale and whose revision has not been pointed out yet, which is when the guide is news.
 func (s *FilesService) checkUserGuide() UserGuideStatus {
-	status := s.checkUserGuideOnDevice()
+	status, target := s.checkUserGuideOnDevice()
+	s.guideTargetRevision.Store(int64(target))
 	if !status.Skipped && (!status.Installed || status.NeedsUpdate) {
-		status.Unseen = !s.guideSeen()
+		status.Unseen = !s.guideSeen(target)
 	}
 	return status
 }
@@ -327,12 +364,13 @@ func (s *FilesService) MarkGuideSeen() error {
 	if s.settingsStore == nil {
 		return fmt.Errorf("settings store not initialized")
 	}
+	target := int(s.guideTargetRevision.Load())
 	return s.settingsStore.Update(func(settings *storage.Settings) {
-		settings.GuideSeenVersion = version
+		settings.GuideSeenRevision = target
 	})
 }
 
-func (s *FilesService) guideSeen() bool {
+func (s *FilesService) guideSeen(target int) bool {
 	if s.inDemoMode() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -345,61 +383,59 @@ func (s *FilesService) guideSeen() bool {
 	if err != nil {
 		return true
 	}
-	return settings.GuideSeenVersion == version
+	return settings.GuideSeenRevision == target
 }
 
-func (s *FilesService) checkUserGuideOnDevice() UserGuideStatus {
+func (s *FilesService) checkUserGuideOnDevice() (UserGuideStatus, int) {
 	if s.inDemoMode() {
-		return s.demoGuideStatus()
+		return s.demoGuideStatus(), 0
 	}
 	if version == "dev" {
-		return UserGuideStatus{Skipped: true}
+		return UserGuideStatus{Skipped: true}, 0
 	}
 
-	v := strings.TrimPrefix(version, "v")
-
-	manifest, err := s.fetchGuideManifest()
+	revisions, err := s.fetchGuideManifest()
 	if err != nil {
 		debug.Printf("[DEBUG] checkUserGuideOnDevice: manifest fetch failed: %v\n", err)
-		return UserGuideStatus{Skipped: true}
+		return UserGuideStatus{Skipped: true}, 0
 	}
 
-	entry, ok := manifest[v]
+	target, ok := guideTarget(revisions, strings.TrimPrefix(version, "v"))
 	if !ok {
-		debug.Printf("[DEBUG] checkUserGuideOnDevice: version %s not in manifest\n", v)
-		return UserGuideStatus{Skipped: true}
+		debug.Printf("[DEBUG] checkUserGuideOnDevice: no guide for version %s\n", version)
+		return UserGuideStatus{Skipped: true}, 0
 	}
 
 	sftpClient, err := s.getSFTPClient()
 	if err != nil {
 		debug.Printf("[DEBUG] checkUserGuideOnDevice: sftp failed: %v\n", err)
-		return UserGuideStatus{Skipped: true}
+		return UserGuideStatus{Skipped: true}, target.Revision
 	}
 	defer sftpClient.Close()
 
 	docID, err := s.findGuideOnDevice(sftpClient)
 	if err != nil {
 		debug.Printf("[DEBUG] checkUserGuideOnDevice: scan failed: %v\n", err)
-		return UserGuideStatus{}
+		return UserGuideStatus{}, target.Revision
 	}
 
 	if docID == "" {
-		return UserGuideStatus{Installed: false, NeedsUpdate: false}
+		return UserGuideStatus{Installed: false, NeedsUpdate: false}, target.Revision
 	}
 
 	epubPath := path.Join(pdfimport.XochitlPath, docID+".epub")
 	output, err := s.runCommand("sha256sum " + epubPath)
 	if err != nil {
 		debug.Printf("[DEBUG] checkUserGuideOnDevice: sha256sum failed: %v\n", err)
-		return UserGuideStatus{Installed: true, DocID: docID}
+		return UserGuideStatus{Installed: true, DocID: docID}, target.Revision
 	}
 
 	deviceHash := strings.Fields(strings.TrimSpace(output))
-	if len(deviceHash) > 0 && deviceHash[0] == entry.SHA256 {
-		return UserGuideStatus{Installed: true, DocID: docID}
+	if len(deviceHash) > 0 && !guideOutOfDate(revisions, target, deviceHash[0]) {
+		return UserGuideStatus{Installed: true, DocID: docID}, target.Revision
 	}
 
-	return UserGuideStatus{Installed: true, NeedsUpdate: true, DocID: docID}
+	return UserGuideStatus{Installed: true, NeedsUpdate: true, DocID: docID}, target.Revision
 }
 
 func (s *FilesService) InstallUserGuide(opID string) {
@@ -416,10 +452,21 @@ func (s *FilesService) installUserGuide() error {
 		return fmt.Errorf("guide installation not available in dev builds")
 	}
 
-	v := strings.TrimPrefix(version, "v")
+	revisions, err := s.fetchGuideManifest()
+	if err != nil {
+		return err
+	}
+	target, ok := guideTarget(revisions, strings.TrimPrefix(version, "v"))
+	if !ok {
+		return fmt.Errorf("no guide available for version %s", version)
+	}
 
-	downloadURL := guideDownloadURLBase + v + ".epub"
-	resp, err := httputil.GetStreaming(s.ctx, downloadURL)
+	manifestURL, _ := url.Parse(guideManifestURL)
+	epubURL, err := manifestURL.Parse(target.Epub)
+	if err != nil {
+		return fmt.Errorf("guide manifest names an invalid file %q: %w", target.Epub, err)
+	}
+	resp, err := httputil.GetStreaming(s.ctx, epubURL.String())
 	if err != nil {
 		return fmt.Errorf("failed to download guide: %w", err)
 	}
@@ -434,17 +481,8 @@ func (s *FilesService) installUserGuide() error {
 		return fmt.Errorf("failed to read guide data: %w", err)
 	}
 
-	manifest, err := s.fetchGuideManifest()
-	if err != nil {
-		return fmt.Errorf("failed to verify guide: %w", err)
-	}
-	entry, ok := manifest[v]
-	if !ok {
-		return fmt.Errorf("no guide available for version %s", v)
-	}
-
 	h := sha256.Sum256(epubData)
-	if fmt.Sprintf("%x", h) != entry.SHA256 {
+	if fmt.Sprintf("%x", h) != target.SHA256 {
 		return fmt.Errorf("guide checksum mismatch")
 	}
 

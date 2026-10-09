@@ -18,7 +18,7 @@ type Settings struct {
 	SSHAgentSocketPath         string `json:"sshAgentSocketPath,omitempty"`
 	LastUploadDir              string `json:"lastUploadDir,omitempty"`
 	LastDownloadDir            string `json:"lastDownloadDir,omitempty"`
-	GuideSeenVersion           string `json:"guideSeenVersion,omitempty"`
+	GuideSeenRevision          int    `json:"guideSeenRevision,omitempty"`
 	SyncedAt                   int64  `json:"syncedAt,omitempty"`
 }
 

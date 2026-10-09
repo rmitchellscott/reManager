@@ -4,4 +4,5 @@ author: "Mitchell Scott"
 lang: en-US
 description: "A beginner-friendly guide to managing mods and packages on your reMarkable tablet with reManager."
 toc-title: "Table of Contents"
+minApp: 2.0.1
 ---
