@@ -56,7 +56,7 @@ export default function App() {
   const [step, setStep] = useState<Step>('connect')
   const [sshAgentAvailable, setSSHAgentAvailable] = useState(false)
   // Defaults to desktop so a failed call leaves the user's own key files rather than an empty manager.
-  const [capabilities, setCapabilities] = useState<PlatformCapabilities>({ managedKeys: true, localKeyFiles: true, sshAgent: true, updateCheck: true, keyboardResizesView: false, iPad: false, supportUpload: false })
+  const [capabilities, setCapabilities] = useState<PlatformCapabilities>({ managedKeys: true, localKeyFiles: true, sshAgent: true, updateCheck: true, keyboardResizesView: false, iPad: false, supportUpload: false, revealInFileManager: true })
   const [availableKeys, setAvailableKeys] = useState<SSHKey[]>([])
   const [device, setDevice] = useState<string>('')
   const [deviceInfo, setDeviceInfo] = useState<Record<string, string>>({})
@@ -558,7 +558,7 @@ export default function App() {
           SystemService.GetAppVersion(),
           SystemService.GetSettings(),
           ConnectionService.IsSSHAgentAvailable().catch(() => false),
-          SystemService.GetPlatformCapabilities().catch(() => ({ managedKeys: true, localKeyFiles: true, sshAgent: true, updateCheck: true, keyboardResizesView: false, iPad: false, supportUpload: false })),
+          SystemService.GetPlatformCapabilities().catch(() => ({ managedKeys: true, localKeyFiles: true, sshAgent: true, updateCheck: true, keyboardResizesView: false, iPad: false, supportUpload: false, revealInFileManager: true })),
         ])
 
         setAvailableKeys(keys || [])

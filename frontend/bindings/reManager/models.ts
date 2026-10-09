@@ -435,6 +435,7 @@ export interface PlatformCapabilities {
      */
     "iPad": boolean;
     "supportUpload": boolean;
+    "revealInFileManager": boolean;
 }
 
 /**
