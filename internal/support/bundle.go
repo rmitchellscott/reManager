@@ -296,25 +296,42 @@ func writeEntry(tw *tar.Writer, name string, data []byte) error {
 	return nil
 }
 
+type PreviewGroup struct {
+	Heading string   `json:"heading"`
+	Items   []string `json:"items"`
+}
+
 type SupportBundlePreview struct {
-	Included []string `json:"included"`
-	Excluded []string `json:"excluded"`
+	Included []PreviewGroup `json:"included"`
+	Excluded []string       `json:"excluded"`
 }
 
 func GetPreview() SupportBundlePreview {
 	return SupportBundlePreview{
-		Included: []string{
-			"Device name, type, OS version, and partition info",
-			"Device timezone",
-			"Auto-update service status",
-			"Hashtable version",
-			"Selected and running launcher",
-			"Installed package names and versions",
-			"File and folder names in the xovi directory",
-			"reManager behavior settings",
-			"reManager application and command logs",
-			"On Android, when a connection fails or drops: attached USB devices, network types, and USB network addresses",
-			"reManager version and distribution channel, host OS type and version, and phone or tablet model",
+		Included: []PreviewGroup{
+			{
+				Heading: "Your reMarkable",
+				Items: []string{
+					"Name, model, OS version, timezone, and partitions",
+					"Installed packages, launcher, hashtable, and auto-update status",
+					"File names in the xovi folder",
+					"Network address",
+				},
+			},
+			{
+				Heading: "reManager",
+				Items: []string{
+					"Version, distribution channel, and behavior settings",
+					"App and command logs, including backup file names",
+					"On Android, USB and network state when a connection fails",
+				},
+			},
+			{
+				Heading: "This computer, phone, or tablet",
+				Items: []string{
+					"OS and version, plus the model on phones and tablets",
+				},
+			},
 		},
 		Excluded: []string{
 			"SSH passwords or key passphrases",
