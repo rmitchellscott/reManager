@@ -13,9 +13,9 @@ require (
 	github.com/rmitchellscott/remarkable-go v0.4.1
 	github.com/rymdport/portal v0.4.3-0.20260225172009-01112360d2cb
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
-	github.com/wailsapp/wails/v3 v3.0.0-beta.26
+	github.com/wailsapp/wails/v3 v3.0.0
 	github.com/zalando/go-keyring v0.2.6
-	golang.org/x/crypto v0.56.0
+	golang.org/x/crypto v0.57.0
 	gopkg.in/ini.v1 v1.67.1
 )
 
@@ -41,8 +41,8 @@ require (
 	github.com/mattn/go-runewidth v0.0.27 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/image v0.45.0 // indirect
-	golang.org/x/sys v0.47.0
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sys v0.48.0
+	golang.org/x/text v0.42.0 // indirect
 )
 
 replace github.com/wailsapp/wails/v3 => ./third_party/wails-v3

@@ -1,6 +1,6 @@
 --- a/pkg/application/webview_window_ios.m
 +++ b/pkg/application/webview_window_ios.m
-@@ -268,9 +268,12 @@
+@@ -269,9 +269,12 @@
          tabH = size.height;
          self.tabBar.frame = CGRectMake(0, height - safe.bottom - tabH, width, tabH);
      }

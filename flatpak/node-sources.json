@@ -1525,10 +1525,10 @@
     },
     {
         "type": "file",
-        "url": "https://registry.npmjs.org/@wailsio/runtime/-/runtime-3.0.0-beta.26.tgz",
-        "sha512": "b1812780a83737bad6b8ad421091ae489cff49fc885f5bdc3df262457ed40926f5fba45ee023cc6cc99eff916266faaa50735b0f93416c97134e49870d83475a",
-        "dest-filename": "2780a83737bad6b8ad421091ae489cff49fc885f5bdc3df262457ed40926f5fba45ee023cc6cc99eff916266faaa50735b0f93416c97134e49870d83475a",
-        "dest": "flatpak-node/npm-cache/_cacache/content-v2/sha512/b1/81"
+        "url": "https://registry.npmjs.org/@wailsio/runtime/-/runtime-3.0.0.tgz",
+        "sha512": "3641495d8583ff86374dc1c0a9f21e493e28c9bb70bfd7555939ab8994cc15b20d622436141dd6af8323b10ee8d013729c48f61ac966522b0d7a39e2c4498b55",
+        "dest-filename": "495d8583ff86374dc1c0a9f21e493e28c9bb70bfd7555939ab8994cc15b20d622436141dd6af8323b10ee8d013729c48f61ac966522b0d7a39e2c4498b55",
+        "dest": "flatpak-node/npm-cache/_cacache/content-v2/sha512/36/41"
     },
     {
         "type": "file",
@@ -6654,9 +6654,9 @@
     },
     {
         "type": "inline",
-        "contents": "d4a0f6ec7edc1e36e55c4e8bc80c3ce1d17d216f\t{\"key\": \"make-fetch-happen:request-cache:https://registry.npmjs.org/@wailsio/runtime/-/runtime-3.0.0-beta.26.tgz\", \"integrity\": \"sha512-sYEngKg3N7rWuK1CEJGuSJz/SfyIX1vcPfJiRX7UCSb1+6Re4CPMbMme/5FiZvqqUHNbD5NBbJcTTkmHDYNHWg==\", \"time\": 0, \"size\": 67542, \"metadata\": {\"url\": \"https://registry.npmjs.org/@wailsio/runtime/-/runtime-3.0.0-beta.26.tgz\", \"reqHeaders\": {}, \"resHeaders\": {}}}",
-        "dest-filename": "8a7fb37bf8c66bd38bb6dffa285f37b3087a4d6549e0b1e5ad67aafb4d10",
-        "dest": "flatpak-node/npm-cache/_cacache/index-v5/d2/22"
+        "contents": "ca0b192c6aabab4526e47e61c42aa505b9c846fc\t{\"key\": \"make-fetch-happen:request-cache:https://registry.npmjs.org/@wailsio/runtime/-/runtime-3.0.0.tgz\", \"integrity\": \"sha512-NkFJXYWD/4Y3TcHAqfIeST4oybtwv9dVWTmriZTMFbINYiQ2FB3Wr4MjsQ7o0BNynEj2GslmUisNejnixEmLVQ==\", \"time\": 0, \"size\": 67547, \"metadata\": {\"url\": \"https://registry.npmjs.org/@wailsio/runtime/-/runtime-3.0.0.tgz\", \"reqHeaders\": {}, \"resHeaders\": {}}}",
+        "dest-filename": "b483d02f3fe0a2eba0987393ab30de6e04cb7b7ea49265dd17dadcd40c4b",
+        "dest": "flatpak-node/npm-cache/_cacache/index-v5/8a/65"
     },
     {
         "type": "inline",

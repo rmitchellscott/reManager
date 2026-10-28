@@ -7,7 +7,7 @@
 +static id g_mfKeyboardFrameObs = nil;
  static id g_mfKeyboardHideObs = nil;
 +static BOOL g_mfKeyboardShown = NO;
-+
+ 
 +// The keyboard frame is in screen coordinates. An iPad window in Slide Over, a
 +// tile or Stage Manager can end above the bottom of the screen, so the keyboard
 +// can cover less of the window than its height, or none of it. The height still
@@ -25,7 +25,7 @@
 +    }
 +    mfEmit(@"common:keyboard", @{@"visible": @(height > 0), @"height": @((int)height), @"covered": @((int)covered)});
 +}
- 
++
 +// A frame change is only reported between WillShow and WillHide. With a
 +// hardware keyboard attached, iOS follows the on-screen keyboard's WillHide with
 +// one more frame change for the floating shortcut bar, which is taller than the
