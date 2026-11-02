@@ -1,0 +1,11 @@
+#!/bin/bash
+# Writes a hashtab whose version entry is the running OS version: an empty
+# first entry, then the version magic, a big-endian length and the version.
+version=$(sed -n 's/^REMARKABLE_RELEASE_VERSION=//p' /usr/share/remarkable/update.conf)
+mkdir -p "$(dirname "$1")"
+{
+  printf '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+  printf '\xf4\x59\x06\xd1\x81\x7f\x42\x77'
+  printf "$(printf '\\x%02x' 0 0 0 "${#version}")"
+  printf '%s' "$version"
+} > "$1"

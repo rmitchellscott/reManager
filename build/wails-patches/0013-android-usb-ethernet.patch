@@ -1,0 +1,26 @@
+--- a/pkg/application/mobile_features_android.go
++++ b/pkg/application/mobile_features_android.go
+@@ -182,9 +182,23 @@
+ // network interfaces, and the lock state. JSON: {"address"}. Returns JSON.
+ func (androidManager) USBNetworkDiagnostics(jsonPayload string) string {
+ 	s, _ := androidBridgeStringString("usbNetworkDiagnostics", jsonPayload)
++	return s
++}
++
++// OpenUSBEthernet claims an attached USB CDC-ECM device for a userspace network
++// stack when no Android network reaches the address. JSON: {"address"}.
++// Returns {"routed":true}, {"absent":true}, {"error"} or
++// {"fd","in","out","maxPacket"}.
++func (androidManager) OpenUSBEthernet(jsonPayload string) string {
++	s, _ := androidBridgeStringString("openUsbEthernet", jsonPayload)
+ 	return s
+ }
+ 
++// CloseUSBEthernet releases the device OpenUSBEthernet claimed.
++func (androidManager) CloseUSBEthernet() {
++	androidBridgeVoid("closeUsbEthernet")
++}
++
+ // --- Phase D: sensors & hardware ---------------------------------------------
+ 
+ // Haptic plays a haptic pattern (impact-light/medium/heavy, success,

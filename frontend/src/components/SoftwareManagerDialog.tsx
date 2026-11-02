@@ -1,9 +1,13 @@
+import { ArrowRight, Check, CircleNotch, DownloadSimple, HardDrives, Power, Swap, WarningCircle, X } from '@phosphor-icons/react'
 import { useState, useEffect, useCallback } from 'react'
+import { errorDetail, handleError } from '@/lib/errorMessages'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import {
   Dialog,
+  DialogCloseButton,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -18,39 +22,13 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Download, Check, Loader2, X, AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
-import { TerminalWithCopy } from '@/components/TerminalWithCopy'
+import { OutputDisclosure } from '@/components/OutputDisclosure'
+import { useAppContext } from '@/contexts/AppContext'
 import { CheckOSDialog } from '@/components/CheckOSDialog'
-import { CompatibilityResult } from '@/lib/types'
-
-interface PartitionSlot {
-  number: number
-  version: string
-  label: string
-  isActive: boolean
-  isNextBoot: boolean
-}
-
-interface SystemInfo {
-  active: PartitionSlot
-  fallback: PartitionSlot
-  deviceType: string
-  encrypted: boolean
-  updatePending: boolean
-}
-
-interface OSVersionInfo {
-  version: string
-  isLatest: boolean
-  isInstalled: boolean
-}
-
-interface InstallProgress {
-  phase: string
-  percent: number
-  message: string
-}
+import { CompatibilityResult, ErrorCode, OSInstallStage, type OSInstallProgress, type OSVersionInfo, type PartitionInfo, type PartitionSlot } from '@/lib/types'
+import { OSService, OperationsService, PackagesService } from '@bindings/reManager'
+import { operationFailure } from '@/lib/operations'
 
 interface SoftwareManagerDialogProps {
   open: boolean
@@ -61,8 +39,9 @@ interface SoftwareManagerDialogProps {
 }
 
 export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumInstalled, onSelectPackageForOS }: SoftwareManagerDialogProps) {
-  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
-  const [partitionError, setPartitionError] = useState<string | null>(null)
+  const { resolvedTerminalTheme, commandRunning, runningOperation, startOperation } = useAppContext()
+  const [systemInfo, setSystemInfo] = useState<PartitionInfo | null>(null)
+  const [partitionError, setPartitionError] = useState<{ message: string; detail: string } | null>(null)
   const [lockDirError, setLockDirError] = useState<string | null>(null)
   const [versions, setVersions] = useState<OSVersionInfo[]>([])
   const [versionsFailed, setVersionsFailed] = useState(false)
@@ -77,13 +56,17 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
   const [showInstallProgress, setShowInstallProgress] = useState(false)
   const [showInstallComplete, setShowInstallComplete] = useState(false)
   const [showRebootConfirm, setShowRebootConfirm] = useState(false)
-  const [switching, setSwitching] = useState(false)
+  const switching = runningOperation?.kind === 'switch-partition'
+  const rebooting = runningOperation?.kind === 'reboot'
+  const [switchError, setSwitchError] = useState<{ message: string; detail: string } | null>(null)
+  const [rebootError, setRebootError] = useState<{ message: string; detail: string } | null>(null)
 
-  const [installProgress, setInstallProgress] = useState<InstallProgress>({ phase: '', percent: 0, message: 'Downloading...' })
+  const [installRun, setInstallRun] = useState<{ id: string; progress: OSInstallProgress } | null>(null)
   const [installedVersion, setInstalledVersion] = useState('')
   const [showInstallError, setShowInstallError] = useState(false)
   const [installErrorMessage, setInstallErrorMessage] = useState('')
   const [installErrorOutput, setInstallErrorOutput] = useState('')
+  const [installErrorOutputOpen, setInstallErrorOutputOpen] = useState(false)
 
   const [compatCache, setCompatCache] = useState<Record<string, CompatibilityResult>>({})
   const [partitionCompatLoading, setPartitionCompatLoading] = useState(false)
@@ -93,7 +76,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
 
   const checkCompatibility = useCallback(async (version: string): Promise<CompatibilityResult | null> => {
     try {
-      const res = await window.go.main.App.CheckOSCompatibility(version)
+      const res = await PackagesService.CheckOSCompatibility(version)
       if (!res.fetchFailed) {
         setCompatCache(prev => ({ ...prev, [version]: res }))
         return res
@@ -105,42 +88,52 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
   const loadData = useCallback(async () => {
     if (!isConnected) return
     setLoading(true)
+    setVersionsLoading(true)
     setVersionsFailed(false)
     setPartitionError(null)
     setLockDirError(null)
 
     try {
-      const readiness = await window.go.main.App.CheckOSManagerReady()
-      if (!readiness.ready && readiness.code === 'ERR_LOCK_DIR_MISSING') {
-        setLockDirError(readiness.message || 'reMarkable is not ready for OS updates right now.')
+      const readiness = await OSService.CheckOSManagerReady()
+      if (!readiness.ready && readiness.code === ErrorCode.ErrLockDirMissing) {
+        setLockDirError(readiness.message || 'Your reMarkable is not ready for OS updates right now.')
         setLoading(false)
+        setVersionsLoading(false)
         return
       }
     } catch {}
 
-    let info: SystemInfo
+    let info: PartitionInfo
     try {
-      info = await window.go.main.App.GetPartitionInfo()
+      const partition = await OSService.GetPartitionInfo()
+      if (!partition) throw new Error('no partition info returned')
+      info = partition
       setSystemInfo(info)
-    } catch (err: any) {
-      const message = err?.message || String(err)
-      setPartitionError(message)
-      toast.error(`Failed to load partition info: ${message}`)
+    } catch (err) {
+      setPartitionError({ message: handleError(err, ''), detail: errorDetail(err) })
+      setVersionsLoading(false)
+      toast.error(handleError(err, 'Could not read partition info.'))
       return
     } finally {
       setLoading(false)
     }
 
+    const rebootPending = !info.active.isNextBoot || info.updatePending
+    if (rebootPending) {
+      setVersions([])
+      setVersionsLoading(false)
+      return
+    }
+
     try {
-      const mode = await window.go.main.App.GetOSInstallMode()
+      const mode = await OSService.GetOSInstallMode()
       setInstallMode(mode === 'legacy' ? 'legacy' : 'swupdate')
     } catch {
       setInstallMode('swupdate')
     }
 
-    setVersionsLoading(true)
     try {
-      const availableVersions = await window.go.main.App.GetAvailableOSVersions()
+      const availableVersions = await OSService.GetAvailableOSVersions()
       const installed = new Set([info.active.version, info.fallback.version])
       setVersions((availableVersions || []).map(v => ({
         ...v,
@@ -153,13 +146,21 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     }
   }, [isConnected])
 
+  const installRunning = installRun !== null
+  const installProgress = installRun?.progress ?? { stage: OSInstallStage.OSInstallDownloading, percent: 0, message: 'Downloading…' }
+
   useEffect(() => {
     if (open && isConnected) {
       loadData()
+      if (installRunning) {
+        setShowInstallProgress(true)
+        return
+      }
       setInstallNeedsReboot(false)
       setSelectedVersion('')
       setCompatCache({})
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, isConnected, loadData])
 
   useEffect(() => {
@@ -184,50 +185,17 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     })
   }, [selectedVersion, vellumInstalled, checkCompatibility, compatCache])
 
-  useEffect(() => {
-    if (!open) return
-
-    const cleanupProgress = window.runtime.EventsOn('software:install-progress', (...args: unknown[]) => {
-      const progress = args[0] as InstallProgress
-      setInstallProgress(progress)
-    })
-
-    const cleanupComplete = window.runtime.EventsOn('software:install-complete', (...args: unknown[]) => {
-      const data = args[0] as { version: string; partition: string }
-      setShowInstallProgress(false)
-      setInstalledVersion(data.version)
-      setShowInstallComplete(true)
-      setInstallNeedsReboot(true)
-      loadData()
-    })
-
-    const cleanupError = window.runtime.EventsOn('software:install-error', (...args: unknown[]) => {
-      const data = args[0] as { error: string; output?: string }
-      setShowInstallProgress(false)
-      if (data.error === 'cancelled') return
-      setInstallErrorMessage(data.error)
-      setInstallErrorOutput(data.output || '')
-      setShowInstallError(true)
-    })
-
-    return () => {
-      cleanupProgress()
-      cleanupComplete()
-      cleanupError()
-    }
-  }, [open, loadData])
-
   const slotA = systemInfo ? (systemInfo.active.number === 2 ? systemInfo.active : systemInfo.fallback) : null
   const slotB = systemInfo ? (systemInfo.active.number === 3 ? systemInfo.active : systemInfo.fallback) : null
 
   const standbySlot = systemInfo ? systemInfo.fallback : null
   const bootSwitchPending = systemInfo ? !systemInfo.active.isNextBoot : false
-  const needsReboot = bootSwitchPending || installNeedsReboot
+  const needsReboot = bootSwitchPending || !!systemInfo?.updatePending || installNeedsReboot
 
   const isLegacy = installMode === 'legacy'
 
   const selectedVersionCompat = selectedVersion ? compatCache[selectedVersion] : null
-  const selectedVersionHasIncompat = selectedVersionCompat ? selectedVersionCompat.incompatible.length > 0 : false
+  const selectedVersionHasIncompat = selectedVersionCompat ? (selectedVersionCompat.incompatible ?? []).length > 0 : false
 
   const handleInstallClick = () => {
     if (selectedVersionHasIncompat) {
@@ -239,38 +207,79 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
 
   const handleSwitchConfirm = async () => {
     if (!standbySlot) return
-    setSwitching(true)
-    try {
-      const nextBootTarget = systemInfo!.active.isNextBoot
-        ? systemInfo!.fallback.number
-        : systemInfo!.active.number
-      await window.go.main.App.SwitchBootPartition(nextBootTarget)
-      setShowSwitchConfirm(false)
-      await loadData()
-    } catch (err: any) {
-      toast.error(`Failed to switch partition: ${err?.message || err}`)
-    } finally {
-      setSwitching(false)
+    const nextBootTarget = systemInfo!.active.isNextBoot
+      ? systemInfo!.fallback.number
+      : systemInfo!.active.number
+    setSwitchError(null)
+    const result = await startOperation({
+      kind: 'switch-partition',
+      title: 'Switch partition',
+      background: true,
+      reportsOwnFailure: true,
+      run: id => OSService.SwitchBootPartition(id, nextBootTarget),
+    })
+    if (!result.ok) {
+      const failure = operationFailure(result)
+      setSwitchError({ message: handleError(failure, 'Could not switch partition.'), detail: errorDetail(failure) })
+      return
     }
+    setShowSwitchConfirm(false)
+    await loadData()
   }
 
-  const handleInstallConfirm = () => {
+  const handleInstallConfirm = async () => {
     if (!selectedVersion) return
+    const version = selectedVersion
     setShowInstallConfirm(false)
     setShowIncompatWarning(false)
-    setInstallProgress({ phase: 'downloading', percent: 0, message: 'Downloading...' })
     setShowInstallProgress(true)
-    window.go.main.App.InstallOSVersion(selectedVersion)
+    let output = ''
+    const result = await startOperation({
+      kind: 'os-install',
+      target: version,
+      title: `Install ${version}`,
+      background: true,
+      reportsOwnFailure: true,
+      onOSInstallProgress: progress => setInstallRun(prev => prev && { ...prev, progress }),
+      onOutput: text => { output += text },
+      run: id => {
+        setInstallRun({ id, progress: { stage: OSInstallStage.OSInstallDownloading, percent: 0, message: 'Downloading…' } })
+        return OSService.InstallOSVersion(id, version)
+      },
+    })
+    setInstallRun(null)
+    setShowInstallProgress(false)
+    if (result.ok) {
+      setInstalledVersion(version)
+      setRebootError(null)
+      setShowInstallComplete(true)
+      setInstallNeedsReboot(true)
+      loadData()
+      return
+    }
+    if (result.canceled) return
+    setInstallErrorMessage(result.error ?? '')
+    setInstallErrorOutput(output.trim())
+    setShowInstallError(true)
   }
 
   const handleReboot = async () => {
-    try {
-      await window.go.main.App.RebootDevice()
-      setShowRebootConfirm(false)
-      onOpenChange(false)
-    } catch (err: any) {
-      toast.error(`Failed to reboot: ${err?.message || err}`)
+    setRebootError(null)
+    const result = await startOperation({
+      kind: 'reboot',
+      title: 'Reboot',
+      background: true,
+      reportsOwnFailure: true,
+      run: id => OSService.RebootDevice(id),
+    })
+    if (!result.ok) {
+      const failure = operationFailure(result)
+      setRebootError({ message: handleError(failure, 'Could not reboot.'), detail: errorDetail(failure) })
+      return
     }
+    setShowRebootConfirm(false)
+    setShowInstallComplete(false)
+    onOpenChange(false)
   }
 
   const getCurrentBootSlot = () => {
@@ -302,16 +311,16 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
 
   const renderCompatIcon = (version: string) => {
     if (version === 'unknown') {
-      return <span className="text-muted-foreground">—</span>
+      return <span className="text-muted-foreground">Unknown</span>
     }
     const result = compatCache[version]
     if (!result) {
       if (partitionCompatLoading) {
-        return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        return <CircleNotch className="h-4 w-4 animate-spin text-muted-foreground" />
       }
       return null
     }
-    const hasIncompat = result.incompatible.length > 0
+    const hasIncompat = (result.incompatible ?? []).length > 0
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -323,7 +332,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
             )}
           </button>
         </TooltipTrigger>
-        <TooltipContent>View package compatibility details</TooltipContent>
+        <TooltipContent>View compatibility details</TooltipContent>
       </Tooltip>
     )
   }
@@ -354,9 +363,9 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
         className={`border rounded-[10px] p-4 transition-colors ${highlighted ? 'border-foreground' : ''} ${clickable ? 'cursor-pointer hover:border-foreground' : ''}`}
         onClick={clickable ? () => setShowSwitchConfirm(true) : undefined}
       >
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-sm font-semibold">Partition {label}</span>
-          <Badge variant={badgeVariant} className="text-[11px] px-2 py-0">
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <span className="text-sm font-semibold truncate">Partition {label}</span>
+          <Badge variant={badgeVariant} className="text-xs px-2 py-0 shrink-0">
             {badgeLabel}
           </Badge>
         </div>
@@ -367,7 +376,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
           </div>
           {vellumInstalled && (
             <div className="flex flex-col items-end gap-0.5">
-              <span className="text-[11px] text-muted-foreground">Packages</span>
+              <span className="text-xs text-muted-foreground">Compatibility</span>
               {renderCompatIcon(slot.version)}
             </div>
           )}
@@ -382,14 +391,14 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
     if (versionCompatLoading || !compatCache[selectedVersion]) {
       return (
         <div className="flex items-center gap-2 text-xs text-muted-foreground h-5">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Checking packages...
+          <CircleNotch className="h-3.5 w-3.5 animate-spin" />
+          Checking…
         </div>
       )
     }
 
     const result = compatCache[selectedVersion]
-    const hasIncompat = result.incompatible.length > 0
+    const hasIncompat = (result.incompatible ?? []).length > 0
     return (
       <div className="flex items-center gap-2 text-xs h-5">
         {hasIncompat ? (
@@ -403,10 +412,10 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
               className="text-primary hover:underline"
               onClick={() => setCheckOSVersion(selectedVersion)}
             >
-              {hasIncompat ? 'Package issues found' : 'Packages compatible'}
+              {hasIncompat ? 'Compatibility issues found' : 'Installed mods are compatible'}
             </button>
           </TooltipTrigger>
-          <TooltipContent>View package compatibility details</TooltipContent>
+          <TooltipContent>View compatibility details</TooltipContent>
         </Tooltip>
       </div>
     )
@@ -415,15 +424,10 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="w-[92vw] sm:w-[56vw] sm:max-w-3xl max-h-[85vh] flex flex-col overflow-y-auto p-7 relative">
-          <button
-            onClick={() => onOpenChange(false)}
-            className="absolute top-4 right-4 rounded-sm opacity-70 hover:opacity-100 transition-opacity"
-          >
-            <X className="h-4 w-4" />
-          </button>
+        <DialogContent size="xl" className="overflow-y-auto">
+          <DialogCloseButton onClick={() => onOpenChange(false)} />
           <DialogHeader className="mb-3">
-            <DialogTitle className="text-base">OS Manager</DialogTitle>
+            <DialogTitle>OS Manager</DialogTitle>
             <DialogDescription className="text-xs">
               View, install, and switch OS versions.
             </DialogDescription>
@@ -431,12 +435,12 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
 
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <CircleNotch className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : lockDirError ? (
             <>
               <div className="flex flex-col items-center text-center py-6">
-                <AlertCircle className="h-6 w-6 text-destructive" />
+                <WarningCircle className="h-6 w-6 text-destructive" />
                 <div className="mt-3 text-sm font-medium">Cannot install or switch OS versions right now</div>
                 <div className="mt-1.5 text-xs text-muted-foreground break-words max-w-md">{lockDirError}</div>
               </div>
@@ -448,16 +452,19 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
             </>
           ) : partitionError ? (
             <div className="flex flex-col items-center gap-3 py-8 text-center">
-              <AlertCircle className="h-6 w-6 text-destructive" />
+              <WarningCircle className="h-6 w-6 text-destructive" />
               <div>
-                <div className="text-sm font-medium">Couldn't read partition info</div>
-                <div className="mt-1 text-xs text-muted-foreground break-words max-w-md">{partitionError}</div>
+                <div className="text-sm font-medium">Could not read partition info</div>
+                {partitionError.message && (
+                  <div className="mt-1 text-xs text-muted-foreground break-words max-w-md">{partitionError.message}</div>
+                )}
               </div>
-              <Button variant="outline" size="sm" onClick={() => loadData()}>Retry</Button>
+              <OutputDisclosure output={partitionError.detail} className="w-full max-w-md text-left" />
+              <Button variant="outline" size="sm" onClick={() => loadData()}>Try again</Button>
             </div>
           ) : systemInfo ? (
             <>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {renderSlotCard(slotA, 'A', !!(slotA && !slotA.isNextBoot && !installNeedsReboot && !systemInfo?.updatePending))}
                 {renderSlotCard(slotB, 'B', !!(slotB && !slotB.isNextBoot && !installNeedsReboot && !systemInfo?.updatePending))}
               </div>
@@ -471,11 +478,13 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                     <div className="text-sm font-medium">Install a version</div>
                     <div className="text-xs text-muted-foreground">Download and install to the standby partition.</div>
                   </div>
-                  <div className="flex gap-2">
-                    <Select value={selectedVersion} onValueChange={setSelectedVersion} disabled={needsReboot || versionsFailed || versionsLoading}>
-                      <SelectTrigger className="flex-1 h-9">
-                        {versionsLoading && <Loader2 className="h-3.5 w-3.5 animate-spin mr-2 shrink-0 text-muted-foreground" />}
-                        <SelectValue placeholder={needsReboot ? "Reboot to install a version" : versionsLoading ? "Loading versions..." : versionsFailed ? "Could not load versions" : "Choose a version..."}>{selectedVersion || undefined}</SelectValue>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Select value={selectedVersion} onValueChange={setSelectedVersion} disabled={needsReboot || versionsFailed || versionsLoading || installRunning}>
+                      <SelectTrigger className="w-full sm:flex-1 h-9 touch:hit-target">
+                        <div className="flex min-w-0 items-center gap-2">
+                          {versionsLoading && <CircleNotch className="h-3.5 w-3.5 animate-spin shrink-0 text-muted-foreground" />}
+                          <SelectValue className="truncate" placeholder={needsReboot ? "Reboot to install a version" : versionsLoading ? "Loading versions…" : versionsFailed ? "Could not load versions" : "Choose a version…"}>{selectedVersion || undefined}</SelectValue>
+                        </div>
                       </SelectTrigger>
                       <SelectContent>
                         {versions.map((v) => (
@@ -483,7 +492,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                             <span className="flex items-center w-full">
                               <span>{v.version}</span>
                               {getVersionLabel(v.version) && (
-                                <span className="text-[11px] text-muted-foreground ml-auto pl-3">{getVersionLabel(v.version)}</span>
+                                <span className="text-xs text-muted-foreground ml-auto pl-3">{getVersionLabel(v.version)}</span>
                               )}
                             </span>
                           </SelectItem>
@@ -492,22 +501,22 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                     </Select>
                     <Button
                       size="sm"
-                      className="h-9"
-                      disabled={!selectedVersion || needsReboot || versionsFailed || versionsLoading}
+                      className="h-9 w-full sm:w-auto touch:hit-target"
+                      disabled={!selectedVersion || needsReboot || versionsFailed || versionsLoading || installRunning}
                       onClick={handleInstallClick}
                     >
                       Install
                     </Button>
                   </div>
                   {isLegacy && (
-                    <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
-                      <AlertCircle className="h-3.5 w-3.5 mt-px shrink-0" />
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <WarningCircle className="h-3.5 w-3.5 shrink-0" />
                       <span>Newer versions need 3.11.2.5 first. Install it, then reboot.</span>
                     </div>
                   )}
                   {versionsFailed && (
                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <AlertCircle className="h-3.5 w-3.5" />
+                      <WarningCircle className="h-3.5 w-3.5" />
                       Check your internet connection and reopen.
                     </div>
                   )}
@@ -525,17 +534,16 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
             </>
           ) : (
             <div className="text-center text-muted-foreground py-8">
-              <p>Connect to a device to view partition information</p>
+              <p>Connect a reMarkable to see its partitions.</p>
             </div>
           )}
         </DialogContent>
       </Dialog>
 
-      {/* Switch boot confirmation */}
       <Dialog open={showSwitchConfirm} onOpenChange={setShowSwitchConfirm}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="text-base">Switch boot partition?</DialogTitle>
+          <DialogHeader severity="info" icon={Swap}>
+            <DialogTitle>Switch boot partition?</DialogTitle>
             <DialogDescription>
               On next restart, your reMarkable will boot from a different partition.
             </DialogDescription>
@@ -545,64 +553,64 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
             return (
               <div className="flex gap-3 items-center">
                 <div className={`flex-1 p-2.5 rounded-lg border ${aIsCurrent ? 'bg-muted' : 'border-foreground'}`}>
-                  <div className="text-[11px] text-muted-foreground mb-0.5">{aIsCurrent ? 'Current' : 'Next boot'}</div>
-                  <div className="text-[13px] font-semibold">{slotA?.version}</div>
+                  <div className="text-xs text-muted-foreground mb-0.5">{aIsCurrent ? 'Current' : 'Next boot'}</div>
+                  <div className="text-sm font-semibold">{slotA?.version}</div>
                   <div className="text-xs text-muted-foreground">Partition A</div>
                 </div>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`text-muted-foreground shrink-0 ${!aIsCurrent ? 'rotate-180' : ''}`}>
-                  <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
-                </svg>
+                <ArrowRight className={`h-4 w-4 text-muted-foreground shrink-0 ${!aIsCurrent ? 'rotate-180' : ''}`} />
                 <div className={`flex-1 p-2.5 rounded-lg border ${aIsCurrent ? 'border-foreground' : 'bg-muted'}`}>
-                  <div className="text-[11px] text-muted-foreground mb-0.5">{aIsCurrent ? 'Next boot' : 'Current'}</div>
-                  <div className="text-[13px] font-semibold">{slotB?.version}</div>
+                  <div className="text-xs text-muted-foreground mb-0.5">{aIsCurrent ? 'Next boot' : 'Current'}</div>
+                  <div className="text-sm font-semibold">{slotB?.version}</div>
                   <div className="text-xs text-muted-foreground">Partition B</div>
                 </div>
               </div>
             )
           })()}
+          {switchError && (
+            <Alert variant="destructive">
+              <WarningCircle className="h-4 w-4" />
+              <AlertDescription>{switchError.message}</AlertDescription>
+            </Alert>
+          )}
+          {switchError && <OutputDisclosure output={switchError.detail} />}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowSwitchConfirm(false)}>Cancel</Button>
-            <Button onClick={handleSwitchConfirm} disabled={switching}>
-              {switching && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            <Button onClick={handleSwitchConfirm} disabled={commandRunning || !isConnected}>
+              {switching && <CircleNotch className="h-4 w-4 mr-2 animate-spin" />}
               Switch
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Install confirmation */}
       <Dialog open={showInstallConfirm} onOpenChange={setShowInstallConfirm}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="text-base">Install version {selectedVersion}?</DialogTitle>
+          <DialogHeader severity="info" icon={HardDrives}>
+            <DialogTitle>Install version {selectedVersion}?</DialogTitle>
           </DialogHeader>
           <div className="text-sm text-muted-foreground">
             {getInstallDescription()}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowInstallConfirm(false)}>Cancel</Button>
-            <Button onClick={handleInstallConfirm}>
-              <Download className="h-3.5 w-3.5 mr-1.5" />
+            <Button onClick={handleInstallConfirm} disabled={commandRunning || !isConnected}>
+              <DownloadSimple className="h-3.5 w-3.5 mr-1.5" />
               Download & install
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Incompatibility warning */}
       <Dialog open={showIncompatWarning} onOpenChange={setShowIncompatWarning}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="text-base flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-destructive" />
-              Incompatible packages
-            </DialogTitle>
+          <DialogHeader severity="destructive" icon={WarningCircle}>
+            <DialogTitle>Incompatible mods</DialogTitle>
             <DialogDescription>
-              The following installed packages are not compatible with {selectedVersion}:
+              These installed mods are not compatible with {selectedVersion}:
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-48 overflow-y-auto space-y-1">
-            {selectedVersionCompat?.incompatible.map(pkg => (
+            {(selectedVersionCompat?.incompatible ?? []).map(pkg => (
               <div key={pkg} className="flex items-center gap-2 text-sm py-1">
                 <X className="h-4 w-4 text-destructive flex-shrink-0" />
                 {pkg}
@@ -610,8 +618,8 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
             ))}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={handleInstallConfirm}>
-              Install Anyway
+            <Button variant="outline" onClick={handleInstallConfirm} disabled={commandRunning || !isConnected}>
+              Install anyway
             </Button>
             <Button onClick={() => setShowIncompatWarning(false)}>
               Cancel
@@ -620,87 +628,110 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
         </DialogContent>
       </Dialog>
 
-      {/* Install progress */}
       <Dialog open={showInstallProgress} onOpenChange={() => {}} closable={false}>
-        <DialogContent className="sm:min-w-[420px]">
-          <DialogHeader>
-            <DialogTitle className="text-base">Installing {selectedVersion}</DialogTitle>
+        <DialogContent>
+          <DialogHeader severity="info" icon={HardDrives}>
+            <DialogTitle>Version {selectedVersion}</DialogTitle>
           </DialogHeader>
           <div className="text-sm text-muted-foreground mb-3">{installProgress.message}</div>
           <div className="h-[36px] flex items-center">
-            {installProgress.phase === 'installing' || installProgress.phase === 'finalizing' ? (
-              <div className="flex items-center justify-center w-full">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            {installProgress.stage === OSInstallStage.OSInstallInstalling || installProgress.stage === OSInstallStage.OSInstallFinalizing ? (
+              <div className="w-full">
+                <Progress indeterminate className="mb-2" indicatorClassName="bg-[var(--info)]" aria-label={`Installing ${selectedVersion}`} />
+                <div className="h-4" />
               </div>
             ) : (
               <div className="w-full">
-                <Progress value={installProgress.percent} className="mb-2" />
-                <div className="text-xs text-right text-muted-foreground">{Math.round(installProgress.percent)}%</div>
+                <Progress value={installProgress.percent} className="mb-2" indicatorClassName="bg-[var(--info)]" />
+                <div className="text-xs text-right text-muted-foreground tabular-nums">{Math.round(installProgress.percent)}%</div>
               </div>
             )}
           </div>
           <DialogFooter className="mt-4">
-            <Button
-              variant="outline"
-              disabled={installProgress.phase !== 'downloading' && installProgress.phase !== 'uploading'}
-              onClick={() => {
-                window.go.main.App.CancelOSInstall()
-                setShowInstallProgress(false)
-              }}
-            >
-              Cancel
+            {installProgress.stage === OSInstallStage.OSInstallDownloading || installProgress.stage === OSInstallStage.OSInstallUploading ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (installRun) void OperationsService.CancelOperation(installRun.id)
+                  setShowInstallProgress(false)
+                }}
+              >
+                Cancel
+              </Button>
+            ) : (
+              // Past the upload the reMarkable is writing its standby partition, which is not safe to stop.
+              <Button variant="outline" onClick={() => setShowInstallProgress(false)}>
+                Close
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showInstallComplete} onOpenChange={setShowInstallComplete}>
+        <DialogContent>
+          <DialogHeader severity="success" icon={Check}>
+            <DialogTitle>Installation complete</DialogTitle>
+            <DialogDescription>
+              Version <strong className="text-card-foreground">{installedVersion}</strong> is installed on <strong className="text-card-foreground">Partition {standbySlot?.label}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          {rebootError && (
+            <Alert variant="destructive">
+              <WarningCircle className="h-4 w-4" />
+              <AlertDescription>{rebootError.message}</AlertDescription>
+            </Alert>
+          )}
+          {rebootError && <OutputDisclosure output={rebootError.detail} />}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowInstallComplete(false)}>Done</Button>
+            <Button onClick={handleReboot} disabled={commandRunning || !isConnected}>
+              {rebooting && <CircleNotch className="h-4 w-4 mr-2 animate-spin" />}
+              Reboot
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Install complete */}
-      <Dialog open={showInstallComplete} onOpenChange={setShowInstallComplete}>
-        <DialogContent className="text-center">
-          <div className="w-12 h-12 rounded-full bg-muted inline-flex items-center justify-center mx-auto mb-3">
-            <Check className="h-6 w-6" />
-          </div>
-          <DialogHeader className="items-center">
-            <DialogTitle className="text-base">Installation complete</DialogTitle>
-          </DialogHeader>
-          <div className="text-sm text-muted-foreground mb-2">
-            Version <strong className="text-card-foreground">{installedVersion}</strong> has been installed to <strong className="text-card-foreground">Partition {standbySlot?.label}</strong>.
-          </div>
-          <DialogFooter className="justify-center">
-            <Button variant="outline" onClick={() => setShowInstallComplete(false)}>Done</Button>
-            <Button variant="destructive" onClick={() => { setShowInstallComplete(false); handleReboot() }}>Reboot</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Reboot confirmation */}
       <Dialog open={showRebootConfirm} onOpenChange={setShowRebootConfirm}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="text-base">Reboot device?</DialogTitle>
+          <DialogHeader severity="info" icon={Power}>
+            <DialogTitle>Reboot reMarkable?</DialogTitle>
           </DialogHeader>
           <div className="text-sm text-muted-foreground">Your reMarkable will restart immediately.</div>
+          {rebootError && (
+            <Alert variant="destructive">
+              <WarningCircle className="h-4 w-4" />
+              <AlertDescription>{rebootError.message}</AlertDescription>
+            </Alert>
+          )}
+          {rebootError && <OutputDisclosure output={rebootError.detail} />}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowRebootConfirm(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleReboot}>Reboot</Button>
+            <Button onClick={handleReboot} disabled={commandRunning || !isConnected}>
+              {rebooting && <CircleNotch className="h-4 w-4 mr-2 animate-spin" />}
+              Reboot
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Install error */}
       <Dialog open={showInstallError} onOpenChange={setShowInstallError}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="text-base flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-destructive" />
-              Installation failed
-            </DialogTitle>
+        <DialogContent
+          size={installErrorOutputOpen ? '2xl' : 'default'}
+          className="transition-[max-width] duration-200 ease-out"
+        >
+          <DialogHeader severity="destructive" icon={WarningCircle}>
+            <DialogTitle>Installation failed</DialogTitle>
             <DialogDescription>{installErrorMessage}</DialogDescription>
           </DialogHeader>
           {installErrorOutput && (
-            <div className="h-[200px]">
-              <TerminalWithCopy output={installErrorOutput} />
-            </div>
+            <OutputDisclosure
+              output={installErrorOutput}
+              theme={resolvedTerminalTheme as 'dark' | 'light'}
+              failed
+              onOpenChange={setInstallErrorOutputOpen}
+            />
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowInstallError(false)}>Close</Button>

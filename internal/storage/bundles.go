@@ -8,10 +8,12 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"reManager/internal/debug"
 )
 
 const (
-	maxBundleRecords  = 20
+	maxBundleRecords    = 20
 	bundleRetentionDays = 30
 )
 
@@ -63,20 +65,24 @@ func (bs *BundleStore) GetAll() ([]BundleRecord, error) {
 	}
 
 	now := time.Now().Unix()
-	var active []BundleRecord
-	pruned := false
+	var active, expired []BundleRecord
 	for _, r := range records {
 		bs.computeExpiry(&r)
 		if r.ExpiresAt > now {
 			active = append(active, r)
 		} else {
-			bs.secretStore.Delete("bundle:" + r.RemoteID)
-			pruned = true
+			expired = append(expired, r)
 		}
 	}
 
-	if pruned {
-		bs.writeRecords(active)
+	if len(expired) > 0 {
+		if err := bs.writeRecords(active); err != nil {
+			debug.Println("[DEBUG] keeping expired bundle records:", err)
+		} else {
+			for _, r := range expired {
+				bs.secretStore.Delete("bundle:" + r.RemoteID)
+			}
+		}
 	}
 
 	sort.Slice(active, func(i, j int) bool {
@@ -114,14 +120,19 @@ func (bs *BundleStore) Add(record BundleRecord, deleteToken string) error {
 
 	records = append([]BundleRecord{record}, records...)
 
+	var dropped []BundleRecord
 	if len(records) > maxBundleRecords {
-		for _, old := range records[maxBundleRecords:] {
-			bs.secretStore.Delete("bundle:" + old.RemoteID)
-		}
+		dropped = records[maxBundleRecords:]
 		records = records[:maxBundleRecords]
 	}
 
-	return bs.writeRecords(records)
+	if err := bs.writeRecords(records); err != nil {
+		return err
+	}
+	for _, old := range dropped {
+		bs.secretStore.Delete("bundle:" + old.RemoteID)
+	}
+	return nil
 }
 
 func (bs *BundleStore) Remove(remoteID string) error {
@@ -199,7 +210,7 @@ func (bs *BundleStore) writeRecords(records []BundleRecord) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal bundles: %w", err)
 	}
-	if err := os.WriteFile(bs.configPath, data, 0600); err != nil {
+	if err := writeFileAtomic(bs.configPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write bundles file: %w", err)
 	}
 	return nil

@@ -168,8 +168,8 @@ func TestLauncherSelectDialogMessages(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.HasPrefix(result.DialogConfig.Message, tc.want) {
-				t.Errorf("message = %q, want prefix %q", result.DialogConfig.Message, tc.want)
+			if result.DialogConfig.Message != tc.want {
+				t.Errorf("message = %q, want %q", result.DialogConfig.Message, tc.want)
 			}
 		})
 	}
@@ -223,8 +223,8 @@ func TestRebuildHashtableDialogRestartsRunningLauncher(t *testing.T) {
 	if len(post.Actions) != 0 {
 		t.Errorf("an auto-restarted launcher needs no start action, got %v", actionValues(post.Actions))
 	}
-	if !strings.Contains(post.Message, "oxide") {
-		t.Errorf("post-command message should name the launcher: %q", post.Message)
+	if !strings.Contains(post.Subtitle, "oxide") {
+		t.Errorf("post-command subtitle should name the launcher: %q", post.Subtitle)
 	}
 }
 

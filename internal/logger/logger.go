@@ -10,9 +10,11 @@ import (
 )
 
 const (
-	maxFileSize  = 5 * 1024 * 1024 // 5 MB
+	maxFileSize  = 5 * 1024 * 1024
 	maxFileCount = 5
 	logFileName  = "remanager.log"
+
+	unsavedDeviceLogDir = "unsaved-device"
 )
 
 type Logger struct {
@@ -59,7 +61,6 @@ func (l *Logger) rotate() error {
 	first := filepath.Join(l.logDir, "remanager.1.log")
 	os.Rename(current, first)
 
-	// Remove excess files
 	excess := filepath.Join(l.logDir, fmt.Sprintf("remanager.%d.log", maxFileCount))
 	os.Remove(excess)
 
@@ -114,11 +115,11 @@ func (l *Logger) StartCommandLog(deviceID, cmd string) *CommandLog {
 	safe := sanitizeForFilename(cmd)
 	name := fmt.Sprintf("%s-%d.log", safe, ts)
 
-	dir := l.logDir
-	if deviceID != "" {
-		dir = filepath.Join(l.logDir, deviceID)
-		os.MkdirAll(dir, 0700)
+	if deviceID == "" {
+		deviceID = unsavedDeviceLogDir
 	}
+	dir := filepath.Join(l.logDir, deviceID)
+	os.MkdirAll(dir, 0700)
 	path := filepath.Join(dir, name)
 
 	f, err := os.Create(path)
@@ -212,6 +213,15 @@ func (l *Logger) GetLogDir() string {
 	return l.logDir
 }
 
+func isAppLogFile(name string) bool {
+	return strings.HasPrefix(name, "remanager.") && strings.HasSuffix(name, ".log")
+}
+
+// Builds before unsavedDeviceLogDir wrote unsaved-device command logs into the log directory, next to the app log.
+func isLegacyRootCommandLog(entry os.DirEntry) bool {
+	return !entry.IsDir() && strings.HasSuffix(entry.Name(), ".log") && !isAppLogFile(entry.Name())
+}
+
 func (l *Logger) CleanupOldCommandLogs(maxAge time.Duration) {
 	cutoff := time.Now().Add(-maxAge)
 	entries, err := os.ReadDir(l.logDir)
@@ -219,6 +229,12 @@ func (l *Logger) CleanupOldCommandLogs(maxAge time.Duration) {
 		return
 	}
 	for _, entry := range entries {
+		if isLegacyRootCommandLog(entry) {
+			if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
+				os.Remove(filepath.Join(l.logDir, entry.Name()))
+			}
+			continue
+		}
 		if !entry.IsDir() {
 			continue
 		}
@@ -252,6 +268,12 @@ func (l *Logger) DeleteAllCommandLogs() error {
 		return fmt.Errorf("failed to read log directory: %w", err)
 	}
 	for _, entry := range entries {
+		if isLegacyRootCommandLog(entry) {
+			if err := os.Remove(filepath.Join(l.logDir, entry.Name())); err != nil {
+				return fmt.Errorf("failed to remove %s: %w", entry.Name(), err)
+			}
+			continue
+		}
 		if !entry.IsDir() {
 			continue
 		}

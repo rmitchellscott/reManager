@@ -6,6 +6,7 @@ import (
 	rmdevice "github.com/rmitchellscott/remarkable-go/device"
 
 	"reManager/internal/component"
+	"reManager/internal/executor"
 )
 
 const xochitlConfPath = "/home/root/.config/remarkable/xochitl.conf"
@@ -23,26 +24,26 @@ func setAutoUpdateScript(enabled bool) string {
 }
 
 type SystemTask struct {
-	ID                   string
-	Label                string
-	Description          string
-	DeviceTypes          []rmdevice.Type
-	Command              func(ctx component.CommandContext) []component.CommandResult
-	RequiresTerminal     bool
-	NeedsWriteableRoot   bool
-	WriteableRootBelowOS string
+	ID                  string
+	Label               string
+	Description         string
+	DeviceTypes         []rmdevice.Type
+	Command             func(ctx component.CommandContext) []component.CommandResult
+	RequiresTerminal    bool
+	NeedsWritableRoot   bool
+	WritableRootBelowOS string
 }
 
 var SystemTasks = []SystemTask{
 	{
 		ID:          "enable-updates",
-		Label:       "Enable Auto-Updates",
+		Label:       "Enable automatic updates",
 		Description: "Re-enable automatic software updates",
 		Command: func(ctx component.CommandContext) []component.CommandResult {
 			return []component.CommandResult{
 				{
 					Script:      setAutoUpdateScript(true),
-					Description: "Allow auto-updates in xochitl settings",
+					Description: "Allow automatic updates in xochitl settings",
 				},
 				{
 					Script:      "systemctl enable update-engine.service",
@@ -54,19 +55,19 @@ var SystemTasks = []SystemTask{
 				},
 			}
 		},
-		RequiresTerminal:     true,
-		NeedsWriteableRoot:   true,
-		WriteableRootBelowOS: minEnforcedAutoUpdateVersion,
+		RequiresTerminal:    true,
+		NeedsWritableRoot:   true,
+		WritableRootBelowOS: minEnforcedAutoUpdateVersion,
 	},
 	{
 		ID:          "disable-updates",
-		Label:       "Disable Auto-Updates",
+		Label:       "Disable automatic updates",
 		Description: "Prevent automatic software updates",
 		Command: func(ctx component.CommandContext) []component.CommandResult {
 			return []component.CommandResult{
 				{
 					Script:      setAutoUpdateScript(false),
-					Description: "Turn off auto-updates in xochitl settings",
+					Description: "Turn off automatic updates in xochitl settings",
 				},
 				{
 					Script:      "systemctl stop update-engine.service",
@@ -78,24 +79,24 @@ var SystemTasks = []SystemTask{
 				},
 			}
 		},
-		RequiresTerminal:     true,
-		NeedsWriteableRoot:   true,
-		WriteableRootBelowOS: minEnforcedAutoUpdateVersion,
+		RequiresTerminal:    true,
+		NeedsWritableRoot:   true,
+		WritableRootBelowOS: minEnforcedAutoUpdateVersion,
 	},
 	{
 		ID:          "restart-xochitl",
 		Label:       "Restart reMarkable UI",
-		Description: "Restart the Xochitl UI service",
+		Description: "Restart the xochitl UI service",
 		Command: func(ctx component.CommandContext) []component.CommandResult {
 			return []component.CommandResult{
 				{
-					Script:      "systemctl restart xochitl",
-					Description: "Restart Xochitl service",
+					Script:      executor.WithXochitlStartReset(executor.RestartXochitlKeepingMods),
+					Description: "Restart xochitl service",
 				},
 			}
 		},
-		RequiresTerminal:   true,
-		NeedsWriteableRoot: false,
+		RequiresTerminal:  true,
+		NeedsWritableRoot: false,
 	},
 }
 

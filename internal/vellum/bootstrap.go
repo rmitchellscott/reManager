@@ -165,12 +165,12 @@ func downloadBootstrapFiles(arch rmdevice.Architecture, onProgress func(string))
 	files.APKFilename = apkFile
 	files.VellumFilename = vellumFile
 
-	onProgress("Finding latest vellum release...")
+	onProgress("Finding the latest Vellum release…")
 	release, err := getLatestVellumRelease()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get vellum release: %w", err)
 	}
-	onProgress(fmt.Sprintf("Using vellum %s", release.TagName))
+	onProgress(fmt.Sprintf("Using Vellum %s", release.TagName))
 
 	var bootstrapURL, vellumURL string
 	for _, asset := range release.Assets {
@@ -189,7 +189,7 @@ func downloadBootstrapFiles(arch rmdevice.Architecture, onProgress func(string))
 		return nil, fmt.Errorf("%s not found in release assets", vellumFile)
 	}
 
-	onProgress("Downloading bootstrap.sh...")
+	onProgress("Downloading bootstrap.sh…")
 	files.BootstrapScript, err = downloadFile(context.Background(), bootstrapURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download bootstrap.sh: %w", err)
@@ -202,19 +202,19 @@ func downloadBootstrapFiles(arch rmdevice.Architecture, onProgress func(string))
 	onProgress(fmt.Sprintf("Using apk-tools %s", apkVersion))
 
 	apkURL := fmt.Sprintf("https://github.com/vellum-dev/apk-tools/releases/download/%s/%s", apkVersion, apkFile)
-	onProgress(fmt.Sprintf("Downloading %s...", apkFile))
+	onProgress(fmt.Sprintf("Downloading %s…", apkFile))
 	files.APKBinary, err = downloadFile(context.Background(), apkURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download %s: %w", apkFile, err)
 	}
 
-	onProgress(fmt.Sprintf("Downloading %s...", vellumFile))
+	onProgress(fmt.Sprintf("Downloading %s…", vellumFile))
 	files.VellumBinary, err = downloadFile(context.Background(), vellumURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download %s: %w", vellumFile, err)
 	}
 
-	onProgress("Downloading packages.rsa.pub...")
+	onProgress("Downloading packages.rsa.pub…")
 	files.RSAKey, err = downloadFile(context.Background(), VellumKeysURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download RSA key: %w", err)
@@ -223,29 +223,34 @@ func downloadBootstrapFiles(arch rmdevice.Architecture, onProgress func(string))
 	return files, nil
 }
 
-func (c *Client) BootstrapOffline(sshClient *ssh.Client, arch rmdevice.Architecture, onOutput func(line string)) error {
-	onOutput("Downloading bootstrap files...\n")
+func (c *Client) BootstrapOffline(ctx context.Context, sshClient *ssh.Client, arch rmdevice.Architecture, onOutput func(line string)) error {
+	onOutput("Downloading bootstrap files…\n")
 	files, err := downloadBootstrapFiles(arch, func(msg string) {
 		onOutput(msg + "\n")
 	})
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
-	onOutput("Connecting to device...\n")
+	onOutput("Connecting to your reMarkable…\n")
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
 		return fmt.Errorf("failed to create SFTP client: %w", err)
 	}
 	defer sftpClient.Close()
+	stopClosingOnCancel := context.AfterFunc(ctx, func() { sftpClient.Close() })
+	defer stopClosingOnCancel()
 
-	onOutput("Creating bootstrap directory...\n")
+	onOutput("Creating bootstrap directory…\n")
 	if err := sftpClient.MkdirAll(BootstrapDir); err != nil {
 		return fmt.Errorf("failed to create bootstrap dir: %w", err)
 	}
 
 	uploadFile := func(name string, data []byte, executable bool) error {
-		onOutput(fmt.Sprintf("Transferring %s...\n", name))
+		onOutput(fmt.Sprintf("Transferring %s…\n", name))
 		remotePath := fmt.Sprintf("%s/%s", BootstrapDir, name)
 		f, err := sftpClient.Create(remotePath)
 		if err != nil {
@@ -277,7 +282,7 @@ func (c *Client) BootstrapOffline(sshClient *ssh.Client, arch rmdevice.Architect
 		return err
 	}
 
-	onOutput("Running bootstrap...\n")
+	onOutput("Running bootstrap…\n")
 	noVerify := ""
 	if os.Getenv("VELLUM_BOOTSTRAP_DIR") != "" {
 		noVerify = "--no-verify "
@@ -287,15 +292,15 @@ func (c *Client) BootstrapOffline(sshClient *ssh.Client, arch rmdevice.Architect
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
 
-	onOutput("Cleaning up...\n")
+	onOutput("Cleaning up…\n")
 	cleanupCmd := fmt.Sprintf("rm -rf %s", BootstrapDir)
 	c.executor.ExecuteWithOutput(cleanupCmd)
 
 	return nil
 }
 
-func (c *Client) BootstrapOfflineWithPackages(sshClient *ssh.Client, arch rmdevice.Architecture, onOutput func(line string)) error {
-	if err := c.BootstrapOffline(sshClient, arch, onOutput); err != nil {
+func (c *Client) BootstrapOfflineWithPackages(ctx context.Context, sshClient *ssh.Client, arch rmdevice.Architecture, onOutput func(line string)) error {
+	if err := c.BootstrapOffline(ctx, sshClient, arch, onOutput); err != nil {
 		return err
 	}
 
@@ -306,20 +311,23 @@ func (c *Client) BootstrapOfflineWithPackages(sshClient *ssh.Client, arch rmdevi
 
 	proxy := NewProxy(c, sshClient, repoArch)
 
-	if err := proxy.UploadAPKINDEX(context.Background(), func(msg string) {
+	if err := proxy.UploadAPKINDEX(ctx, func(msg string) {
 		onOutput(msg + "\n")
 	}); err != nil {
 		return fmt.Errorf("failed to upload APKINDEX: %w", err)
 	}
-	onOutput("Installing required packages...\n")
+	onOutput("Installing required packages…\n")
 	packages := []string{"vellum", "mount-utils", "vellum-bash-completion"}
 
-	_, err := proxy.ProxyDownload(context.Background(), packages, func(msg string) {
+	_, err := proxy.ProxyDownload(ctx, packages, func(msg string) {
 		onOutput(msg + "\n")
 	})
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil {
-		onOutput(fmt.Sprintf("Warning: failed to proxy packages: %v\n", err))
-		onOutput("Attempting direct install...\n")
+		onOutput(fmt.Sprintf("Warning: could not download packages through reManager: %v\n", err))
+		onOutput("Trying a direct install…\n")
 	}
 
 	cmd := fmt.Sprintf("%s add %s", VellumBin, strings.Join(packages, " "))

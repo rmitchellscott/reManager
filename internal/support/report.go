@@ -12,13 +12,14 @@ import (
 )
 
 type ReportRequest struct {
-	Description string `json:"description"`
-	Email       string `json:"email,omitempty"`
-	AppVersion  string `json:"app_version,omitempty"`
-	HostOS      string `json:"host_os,omitempty"`
-	DeviceModel string `json:"device_model,omitempty"`
-	Firmware    string `json:"firmware_version,omitempty"`
-	BundleURL   string `json:"bundle_url,omitempty"`
+	Description         string `json:"description"`
+	Email               string `json:"email,omitempty"`
+	AppVersion          string `json:"app_version,omitempty"`
+	HostOS              string `json:"host_os,omitempty"`
+	DistributionChannel string `json:"distribution_channel,omitempty"`
+	DeviceModel         string `json:"device_model,omitempty"`
+	Firmware            string `json:"firmware_version,omitempty"`
+	BundleURL           string `json:"bundle_url,omitempty"`
 }
 
 func SubmitReport(baseURL string, report ReportRequest) error {

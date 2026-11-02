@@ -1,44 +1,41 @@
 package errors
 
+type ErrorCode string
+
 const (
-	// Connection errors
-	ErrAuthFailed         = "ERR_AUTH_FAILED"
-	ErrConnectionRefused  = "ERR_CONNECTION_REFUSED"
-	ErrTimeout            = "ERR_TIMEOUT"
-	ErrNetworkUnreachable = "ERR_NETWORK_UNREACHABLE"
-	ErrHostDown           = "ERR_HOST_DOWN"
-	ErrDNSFailed          = "ERR_DNS_FAILED"
-	ErrShellRCNoisy       = "ERR_SHELL_RC_NOISY"
+	ErrAuthFailed         ErrorCode = "ERR_AUTH_FAILED"
+	ErrConnectionRefused  ErrorCode = "ERR_CONNECTION_REFUSED"
+	ErrTimeout            ErrorCode = "ERR_TIMEOUT"
+	ErrNetworkUnreachable ErrorCode = "ERR_NETWORK_UNREACHABLE"
+	ErrHostDown           ErrorCode = "ERR_HOST_DOWN"
+	ErrDNSFailed          ErrorCode = "ERR_DNS_FAILED"
+	ErrShellRCNoisy       ErrorCode = "ERR_SHELL_RC_NOISY"
 
-	// SSH key errors
-	ErrKeyNotFound    = "ERR_KEY_NOT_FOUND"
-	ErrKeyPassphrase  = "ERR_KEY_PASSPHRASE"
-	ErrKeyParseFailed = "ERR_KEY_PARSE_FAILED"
+	ErrKeyNotFound    ErrorCode = "ERR_KEY_NOT_FOUND"
+	ErrKeyPassphrase  ErrorCode = "ERR_KEY_PASSPHRASE"
+	ErrKeyParseFailed ErrorCode = "ERR_KEY_PARSE_FAILED"
+	ErrKeyNotChosen   ErrorCode = "ERR_KEY_NOT_CHOSEN"
 
-	// File operation errors
-	ErrFileNotFound     = "ERR_FILE_NOT_FOUND"
-	ErrPermissionDenied = "ERR_PERMISSION_DENIED"
-	ErrDiskFull = "ERR_DISK_FULL"
+	ErrFileNotFound     ErrorCode = "ERR_FILE_NOT_FOUND"
+	ErrPermissionDenied ErrorCode = "ERR_PERMISSION_DENIED"
+	ErrDiskFull         ErrorCode = "ERR_DISK_FULL"
 
-	// Storage/keyring errors
-	ErrKeyringFailed = "ERR_KEYRING_FAILED"
-	ErrStorageFailed = "ERR_STORAGE_FAILED"
+	ErrKeyringFailed ErrorCode = "ERR_KEYRING_FAILED"
+	ErrStorageFailed ErrorCode = "ERR_STORAGE_FAILED"
 
-	// Device errors
-	ErrDeviceNotFound    = "ERR_DEVICE_NOT_FOUND"
-	ErrDeviceDetection   = "ERR_DEVICE_DETECTION"
-	ErrUnsupportedDevice = "ERR_UNSUPPORTED_DEVICE"
+	ErrDeviceNotFound    ErrorCode = "ERR_DEVICE_NOT_FOUND"
+	ErrDeviceDetection   ErrorCode = "ERR_DEVICE_DETECTION"
+	ErrUnsupportedDevice ErrorCode = "ERR_UNSUPPORTED_DEVICE"
+	ErrDeviceChanged     ErrorCode = "ERR_DEVICE_CHANGED"
 
-	// Operation errors
-	ErrOperationCancelled = "ERR_OPERATION_CANCELLED"
-	ErrSFTPFailed         = "ERR_SFTP_FAILED"
+	ErrOperationCanceled ErrorCode = "ERR_OPERATION_CANCELED"
+	ErrSFTPFailed        ErrorCode = "ERR_SFTP_FAILED"
+	ErrInvalidInput      ErrorCode = "ERR_INVALID_INPUT"
 
-	// OS update / partition errors
-	ErrTargetSlotUnhealthy = "ERR_TARGET_SLOT_UNHEALTHY"
-	ErrSlotCheckUnavailable = "ERR_SLOT_CHECK_UNAVAILABLE"
-	ErrUpdateInProgress    = "ERR_UPDATE_IN_PROGRESS"
-	ErrLockDirMissing      = "ERR_LOCK_DIR_MISSING"
+	ErrTargetSlotUnhealthy  ErrorCode = "ERR_TARGET_SLOT_UNHEALTHY"
+	ErrSlotCheckUnavailable ErrorCode = "ERR_SLOT_CHECK_UNAVAILABLE"
+	ErrUpdateInProgress     ErrorCode = "ERR_UPDATE_IN_PROGRESS"
+	ErrLockDirMissing       ErrorCode = "ERR_LOCK_DIR_MISSING"
 
-	// Fallback
-	ErrUnknown = "ERR_UNKNOWN"
+	ErrUnknown ErrorCode = "ERR_UNKNOWN"
 )

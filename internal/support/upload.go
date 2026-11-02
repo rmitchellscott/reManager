@@ -2,6 +2,7 @@ package support
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -31,16 +32,27 @@ type UploadClient struct {
 	httpClient *http.Client
 }
 
+// supportURL is set only in official release builds, through
+// -ldflags "-X reManager/internal/support.supportURL=...", so a build from the
+// public source never reaches the official support service.
+var supportURL string
+
+var ErrNoSupportService = errors.New("this build of reManager has no support service")
+
 func GetSupportURL() string {
 	if url := os.Getenv("REMANAGER_SUPPORT_URL"); url != "" {
 		return url
 	}
-	return "https://support.remanager.io"
+	return supportURL
+}
+
+func UploadAvailable() bool {
+	return GetSupportURL() != ""
 }
 
 func NewUploadClient(baseURL string) *UploadClient {
 	return &UploadClient{
-		BaseURL: baseURL,
+		BaseURL:    baseURL,
 		httpClient: httputil.NewClient(2 * time.Minute),
 	}
 }

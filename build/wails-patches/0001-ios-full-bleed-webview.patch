@@ -1,0 +1,18 @@
+--- a/pkg/application/webview_window_ios.m
++++ b/pkg/application/webview_window_ios.m
+@@ -268,9 +268,12 @@
+         tabH = size.height;
+         self.tabBar.frame = CGRectMake(0, height - safe.bottom - tabH, width, tabH);
+     }
+-    CGFloat webTop = safe.top;
+-    CGFloat webBottom = safe.bottom + tabH;
+-    self.webView.frame = UIEdgeInsetsInsetRect(self.view.bounds, UIEdgeInsetsMake(webTop, safe.left, webBottom, safe.right));
++    // Full bleed on every edge. Insetting for the status bar, or for the notch
++    // in landscape, leaves strips painted in the window's static background
++    // color, which cannot follow a theme the frontend chooses at runtime.
++    // The page pads itself with env(safe-area-inset-*) instead, and the
++    // floating tab bar depends on reaching the bottom edge.
++    self.webView.frame = self.view.bounds;
+ }
+ // Orientation lock and status-bar appearance are driven by global state set
+ // from Go (see mobile_features_ios.m). These overrides feed UIKit the current

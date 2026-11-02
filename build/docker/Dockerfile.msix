@@ -1,0 +1,28 @@
+# Builds makemsix from the Microsoft MSIX packaging SDK, which packs an MSIX on
+# Linux and macOS. makeappx.exe, the usual tool, is Windows-only.
+#
+# cmake/linux.cmake in the SDK pins CMAKE_SYSTEM_PROCESSOR to x86_64, so build
+# this image for linux/amd64 even on an arm64 host.
+FROM ubuntu:24.04
+
+# The SDK requires CMake >= 3.29 and noble ships 3.28, so take it from pip.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang make git ca-certificates zlib1g-dev libicu-dev python3-pip \
+    && pip3 install --no-cache-dir --break-system-packages 'cmake>=3.29' \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG MSIX_SDK_REF=master
+RUN git clone --depth 1 --branch "${MSIX_SDK_REF}" \
+        https://github.com/microsoft/msix-packaging.git /src
+WORKDIR /src
+
+# --pack turns on the packaging features, which are off by default, and forces
+# the validating XML parser on. That parser checks AppxManifest.xml against the
+# MSIX schemas during the pack, so a successful pack is also a schema check.
+RUN ./makelinux.sh --pack --skip-samples --skip-tests
+
+RUN find /src -name 'makemsix' -type f -perm -u+x -exec cp {} /usr/local/bin/makemsix \; \
+    && find /src -name 'libmsix.so' -exec cp {} /usr/local/lib/ \; \
+    && ldconfig
+
+ENTRYPOINT ["makemsix"]

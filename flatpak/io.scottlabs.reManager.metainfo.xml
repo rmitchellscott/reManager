@@ -15,13 +15,13 @@
     </p>
     <p>Features:</p>
     <ul>
-      <li>Multi-Device Management: Save multiple sets of SSH credentials with password or key-based authentication</li>
-      <li>Package Management: Browse, install, upgrade, and uninstall packages with automatic dependency resolution</li>
-      <li>Maintenance Tools: Enable/disable auto-updates, set timezone, run package-provided scripts</li>
-      <li>Interactive Terminal: Access a complete shell session on your reMarkable</li>
-      <li>File Browser: Browse filesystem, transfer files to and from your reMarkable</li>
-      <li>Backup and Restore: Backup and restore document library and configuration</li>
-      <li>Configuration Editor: Edit system configuration files with syntax highlighting</li>
+      <li>Multi-device management: Save multiple sets of SSH credentials with password or key-based authentication</li>
+      <li>Mod management: Browse, install, upgrade, and remove mods with automatic dependency resolution</li>
+      <li>System tools: Turn automatic updates on or off, set the timezone, and run mod-provided scripts</li>
+      <li>Interactive terminal: Access a complete shell session on your reMarkable</li>
+      <li>File Browser: Browse the filesystem and transfer files to and from your reMarkable</li>
+      <li>Backup and restore: Back up and restore your document library and configuration</li>
+      <li>Configuration editor: Edit system configuration files with syntax highlighting</li>
     </ul>
   </description>
   <url type="homepage">https://github.com/rmitchellscott/reManager</url>
@@ -31,8 +31,20 @@
   <launchable type="desktop-id">io.scottlabs.reManager.desktop</launchable>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/screenshot-linux-light.png</image>
-      <caption>Main application window</caption>
+      <image>https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/store/flathub/screenshot-1-discover.png</image>
+      <caption>Browse and search mods</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/store/flathub/screenshot-2-package.png</image>
+      <caption>Mod details and changelog</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/store/flathub/screenshot-3-upgrades.png</image>
+      <caption>Upgrade installed mods</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/rmitchellscott/reManager/main/assets/store/flathub/screenshot-4-system.png</image>
+      <caption>Device status and tools</caption>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>

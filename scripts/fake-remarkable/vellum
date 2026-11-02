@@ -1,0 +1,57 @@
+#!/bin/bash
+# Stands in for vellum on the fake reMarkable. Each package an add or del
+# touches takes the seconds in /fake/step-seconds, read fresh for each one.
+state=/home/root/.vellum/state/fake-installed
+db=/home/root/.vellum/lib/apk/db/installed
+mkdir -p "$(dirname "$state")" "$(dirname "$db")"
+touch "$state"
+printf '%s\tvellum %s\n' "$(date +%T)" "$*" >> /var/log/remanager-vellum.log
+
+step_seconds() { cat /fake/step-seconds 2>/dev/null || echo 30; }
+installed() { printf 'vellum 1.0.0-r0\nremarkable-os 3.26.0.68-r0\n'; cat "$state"; }
+# Proxy mode uploads the real index before it simulates, and then downloads
+# the exact version the simulation names, so a made-up version would 404.
+real_version() {
+  local index
+  index=$(ls /home/root/.vellum/etc/apk/cache/APKINDEX.*.tar.gz 2>/dev/null | head -1)
+  [ -n "$index" ] && tar -xzOf "$index" APKINDEX 2>/dev/null | awk -v want="$1" '/^P:/{p=substr($0,3)} /^V:/{if(p==want){print substr($0,3); exit}}'
+}
+package_args() { for arg in "$@"; do case "$arg" in -*|\'!*|!*) ;; *) echo "$arg" ;; esac; done; }
+
+write_db() {
+  : > "$db"
+  installed | while read -r name version; do
+    printf 'P:%s\nV:%s\nt:%s\n\n' "$name" "$version" "$(date +%s)" >> "$db"
+  done
+}
+
+apply() {
+  local verb=$1 simulate=$2; shift 2
+  mapfile -t packages < <(package_args "$@")
+  local total=${#packages[@]} index=0
+  for name in "${packages[@]}"; do
+    index=$((index + 1))
+    version=$(real_version "$name"); version=${version:-1.0.0-r0}
+    echo "($index/$total) $verb $name ($version)"
+    [ "$simulate" = yes ] && continue
+    sleep "$(step_seconds)"
+    if [ -e /fake/fail-installs ] && [ "$verb" = Installing ]; then
+      echo "ERROR: $name: simulated failure from the fake reMarkable"
+      exit 1
+    fi
+    if [ "$verb" = Installing ]; then
+      grep -q "^$name " "$state" || echo "$name $version" >> "$state"
+    else
+      sed -i "/^$name /d" "$state"
+    fi
+  done
+  [ "$simulate" = yes ] || { write_db; echo "OK: $total packages"; }
+}
+
+case "$1" in
+  info) installed | cut -d' ' -f1 ;;
+  list) installed | while read -r name version; do echo "$name-$version aarch64 {$name} (MIT) [installed]"; done ;;
+  add) shift; if [ "$1" = --simulate ]; then shift; apply Installing yes "$@"; else apply Installing no "$@"; fi ;;
+  del) shift; if [ "$1" = --simulate ]; then shift; apply Purging yes "$@"; else apply Purging no "$@"; fi ;;
+esac
+exit 0

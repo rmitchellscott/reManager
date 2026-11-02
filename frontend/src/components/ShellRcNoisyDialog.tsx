@@ -1,4 +1,4 @@
-import { AlertTriangle, Copy, CopyCheck } from 'lucide-react'
+import { CheckCircle, Copy, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -28,19 +28,18 @@ export function ShellRcNoisyDialog({ open, onRetry, onClose, isRetrying }: Shell
   return (
     <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) onClose() }}>
       <DialogContent>
-        <DialogHeader>
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-6 w-6 text-amber-500" />
-            <DialogTitle>Your reMarkable's shell is printing on SSH</DialogTitle>
-          </div>
+        <DialogHeader severity="warning" icon={Warning}>
+          <DialogTitle>Your reMarkable's shell is printing on SSH</DialogTitle>
           <DialogDescription>
-            reManager talks to your reMarkable over non-interactive SSH, which must stay silent.
-            Your reMarkable sources <code className="text-xs">~/.bashrc</code> for every session,
-            so anything it prints corrupts file transfers and device detection.
+            Anything your shell prints corrupts file transfers and model detection.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            reManager talks to your reMarkable over non-interactive SSH, which must stay silent.
+            Your reMarkable sources <code className="text-xs">~/.bashrc</code> for every session.
+          </p>
           <p className="text-sm text-muted-foreground">
             Add this to the very top of <code className="text-xs">~/.bashrc</code>, before anything that prints:
           </p>
@@ -50,9 +49,10 @@ export function ShellRcNoisyDialog({ open, onRetry, onClose, isRetrying }: Shell
               variant="ghost"
               size="icon"
               onClick={() => copyToClipboard(guard)}
+              aria-label="Copy"
               className="absolute top-2 right-2 h-7 w-7"
             >
-              {isCopied ? <CopyCheck className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {isCopied ? <CheckCircle className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">
@@ -61,12 +61,12 @@ export function ShellRcNoisyDialog({ open, onRetry, onClose, isRetrying }: Shell
           </p>
         </div>
 
-        <DialogFooter className="flex-col sm:flex-row gap-2">
+        <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
           <Button onClick={onRetry} disabled={isRetrying}>
-            {isRetrying ? 'Retrying...' : 'Try again'}
+            {isRetrying ? 'Retrying…' : 'Try again'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -14,8 +14,6 @@ import (
 	"sync"
 
 	"reManager/internal/platform"
-	"github.com/rymdport/portal/secret"
-	"github.com/zalando/go-keyring"
 )
 
 type SecretStore struct {
@@ -51,24 +49,33 @@ func NewSecretStore(serviceName string) (*SecretStore, error) {
 }
 
 func (ss *SecretStore) Set(key, value string) error {
+	if nativeAvailable() {
+		return nativeSet(ss.serviceName, key, value)
+	}
 	if platform.IsRunningInFlatpak() {
 		return ss.setFlatpak(key, value)
 	}
-	return keyring.Set(ss.serviceName, key, value)
+	return systemKeyringSet(ss.serviceName, key, value)
 }
 
 func (ss *SecretStore) Get(key string) (string, error) {
+	if nativeAvailable() {
+		return nativeGet(ss.serviceName, key)
+	}
 	if platform.IsRunningInFlatpak() {
 		return ss.getFlatpak(key)
 	}
-	return keyring.Get(ss.serviceName, key)
+	return systemKeyringGet(ss.serviceName, key)
 }
 
 func (ss *SecretStore) Delete(key string) error {
+	if nativeAvailable() {
+		return nativeDelete(ss.serviceName, key)
+	}
 	if platform.IsRunningInFlatpak() {
 		return ss.deleteFlatpak(key)
 	}
-	return keyring.Delete(ss.serviceName, key)
+	return systemKeyringDelete(ss.serviceName, key)
 }
 
 func (ss *SecretStore) getMasterKey() ([]byte, error) {
@@ -81,7 +88,7 @@ func (ss *SecretStore) getMasterKey() ([]byte, error) {
 		}
 		defer r.Close()
 
-		_, err = secret.RetrieveSecret(w.Fd(), nil)
+		err = retrievePortalSecret(w.Fd())
 		w.Close()
 		if err != nil {
 			initErr = fmt.Errorf("failed to retrieve portal secret: %w", err)
@@ -168,10 +175,8 @@ func (ss *SecretStore) decrypt(encoded string) (string, error) {
 	return string(plaintext), nil
 }
 
+// The caller holds mu.
 func (ss *SecretStore) loadSecrets() (map[string]string, error) {
-	ss.mu.RLock()
-	defer ss.mu.RUnlock()
-
 	data, err := os.ReadFile(ss.secretsPath)
 	if os.IsNotExist(err) {
 		return make(map[string]string), nil
@@ -187,19 +192,29 @@ func (ss *SecretStore) loadSecrets() (map[string]string, error) {
 	return secrets, nil
 }
 
+// The caller holds mu for writing.
 func (ss *SecretStore) saveSecrets(secrets map[string]string) error {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-
 	data, err := json.MarshalIndent(secrets, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal secrets: %w", err)
 	}
 
-	if err := os.WriteFile(ss.secretsPath, data, 0600); err != nil {
+	if err := writeFileAtomic(ss.secretsPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write secrets file: %w", err)
 	}
 	return nil
+}
+
+func (ss *SecretStore) updateSecrets(change func(secrets map[string]string)) error {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	secrets, err := ss.loadSecrets()
+	if err != nil {
+		return err
+	}
+	change(secrets)
+	return ss.saveSecrets(secrets)
 }
 
 func (ss *SecretStore) setFlatpak(key, value string) error {
@@ -208,17 +223,15 @@ func (ss *SecretStore) setFlatpak(key, value string) error {
 		return err
 	}
 
-	secrets, err := ss.loadSecrets()
-	if err != nil {
-		return err
-	}
-
-	secrets[key] = encrypted
-	return ss.saveSecrets(secrets)
+	return ss.updateSecrets(func(secrets map[string]string) {
+		secrets[key] = encrypted
+	})
 }
 
 func (ss *SecretStore) getFlatpak(key string) (string, error) {
+	ss.mu.RLock()
 	secrets, err := ss.loadSecrets()
+	ss.mu.RUnlock()
 	if err != nil {
 		return "", err
 	}
@@ -232,11 +245,7 @@ func (ss *SecretStore) getFlatpak(key string) (string, error) {
 }
 
 func (ss *SecretStore) deleteFlatpak(key string) error {
-	secrets, err := ss.loadSecrets()
-	if err != nil {
-		return err
-	}
-
-	delete(secrets, key)
-	return ss.saveSecrets(secrets)
+	return ss.updateSecrets(func(secrets map[string]string) {
+		delete(secrets, key)
+	})
 }

@@ -1,0 +1,7 @@
+#!/bin/bash
+# Stands in for timedatectl set-timezone, which relinks /etc/localtime and so
+# fails while the root filesystem is read-only, as it does on the tablet.
+if [ "$1" = set-timezone ]; then
+  [ -e "/usr/share/zoneinfo/$2" ] || { echo "Failed to set time zone: Invalid or not installed time zone '$2'" >&2; exit 1; }
+  ln -sfn "/usr/share/zoneinfo/$2" /etc/localtime || exit 1
+fi

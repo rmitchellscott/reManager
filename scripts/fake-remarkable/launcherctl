@@ -1,0 +1,68 @@
+#!/bin/bash
+# Stands in for oxide's launcherctl, a Qt binary that cannot run in the fake's
+# Alpine userland. Copied over the packaged binary once launcherctl installs,
+# it drives the same per-launcher scripts in share/launcherctl, where the
+# current launcher is the "current" symlink.
+share=/home/root/.vellum/share/launcherctl
+
+launchers() {
+  local path
+  for path in "$share"/*; do
+    [ -f "$path" ] && [ -x "$path" ] && [ "${path##*/}" != current ] && echo "${path##*/}"
+  done
+}
+
+current_launcher() {
+  [ -e "$share/current" ] || ln -s none "$share/current"
+  basename "$(readlink "$share/current")"
+}
+
+active_launchers() {
+  local launcher
+  for launcher in $(launchers); do
+    "$share/$launcher" is-active >/dev/null 2>&1 && echo "$launcher"
+  done
+}
+
+start_launcher() {
+  local current launcher
+  current=$(current_launcher)
+  for launcher in $(active_launchers); do
+    [ "$launcher" != "$current" ] && "$share/$launcher" stop
+  done
+  "$share/current" is-active >/dev/null 2>&1 && return 0
+  "$share/current" start
+}
+
+stop_launcher() {
+  local launcher
+  for launcher in $(active_launchers); do
+    "$share/$launcher" stop || return 1
+  done
+}
+
+case "$1" in
+  list-launchers) launchers ;;
+  current-launcher) current_launcher ;;
+  active-launcher)
+    active=$(active_launchers)
+    if [ -z "$active" ]; then echo "Error: No launcher is currently active" >&2; exit 1; fi
+    if [ "$(echo "$active" | wc -l)" -gt 1 ]; then echo "Error: More than one launcher is currently active" >&2; exit 1; fi
+    echo "$active" ;;
+  switch-launcher)
+    [ -x "$share/$2" ] || { echo "$2 is not installed"; exit 1; }
+    for launcher in $(launchers); do
+      [ "$launcher" != "$2" ] && "$share/$launcher" disable
+    done
+    "$share/$2" is-enabled || "$share/$2" enable || exit 1
+    ln -sfn "$2" "$share/current"
+    if [ "$3" = --start ]; then start_launcher; fi ;;
+  start-launcher) start_launcher ;;
+  stop-launcher) stop_launcher ;;
+  restart-launcher) stop_launcher; start_launcher ;;
+  status)
+    echo "Launcher: $(current_launcher)"
+    active=$(active_launchers)
+    if [ -z "$active" ]; then echo "Status: inactive"; else echo "Status: active <${active//$'\n'/, }>"; fi ;;
+  *) echo "launcherctl: unsupported command $1" >&2; exit 1 ;;
+esac

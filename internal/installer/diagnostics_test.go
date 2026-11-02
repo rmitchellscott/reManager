@@ -62,9 +62,9 @@ func TestDiagnosticsCapsLines(t *testing.T) {
 
 func TestParsePurgedPackage(t *testing.T) {
 	cases := map[string]string{
-		"(1/4) Purging launcherctl-oxide (3.1-r0)": "launcherctl-oxide",
-		"(3/4) Purging jq (1.8.1-r2)":              "jq",
-		"( 2/10) Removing oxide-utils (3.1-r0)":    "oxide-utils",
+		"(1/4) Purging launcherctl-oxide (3.1-r0)":     "launcherctl-oxide",
+		"(3/4) Purging jq (1.8.1-r2)":                  "jq",
+		"( 2/10) Removing oxide-utils (3.1-r0)":        "oxide-utils",
 		"  Executing launcherctl-3.1-r0.pre-deinstall": "",
 		"OK: 7020 KiB in 5 packages":                   "",
 		"1 error; 18.4 MiB in 9 packages":              "",

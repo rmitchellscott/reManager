@@ -1,48 +1,57 @@
 package pdfimport
 
-// Package pdfimport handles building and uploading the xochitl document bundle
-// for a PDF file. Shared between the GUI (app.go) and the CLI (cmd/remanager).
+// Package pdfimport assembles the sidecar files xochitl expects alongside a PDF
+// and writes the whole set to the tablet. Used by both the GUI and the CLI.
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pkg/sftp"
 )
 
-// XochitlPath is the reMarkable directory that xochitl watches for documents.
+// XochitlPath is scanned by xochitl; a document appears once its bundle lands here.
 const XochitlPath = "/home/root/.local/share/remarkable/xochitl"
 
+func init() {
+	// pdfcpu creates a config directory under the user's home on first use unless this is set, which a desktop app has no reason to do.
+	model.ConfigPath = "disable"
+}
+
 type pdfContent struct {
-	CoverPageNumber       *int                   `json:"coverPageNumber,omitempty"`
-	CustomZoomCenterX     int                    `json:"customZoomCenterX"`
-	CustomZoomCenterY     int                    `json:"customZoomCenterY"`
-	CustomZoomOrientation string                 `json:"customZoomOrientation"`
-	CustomZoomPageHeight  int                    `json:"customZoomPageHeight"`
-	CustomZoomPageWidth   int                    `json:"customZoomPageWidth"`
-	CustomZoomScale       int                    `json:"customZoomScale"`
-	DocumentMetadata      map[string]interface{} `json:"documentMetadata"`
-	ExtraMetadata         map[string]interface{} `json:"extraMetadata"`
-	FileType              string                 `json:"fileType"`
-	FontName              string                 `json:"fontName"`
-	FormatVersion         int                    `json:"formatVersion"`
-	LineHeight            int                    `json:"lineHeight"`
-	Margins               int                    `json:"margins"`
-	Orientation           string                 `json:"orientation"`
-	OriginalPageCount     int                    `json:"originalPageCount"`
-	PageCount             int                    `json:"pageCount"`
-	PageTags              []string               `json:"pageTags"`
-	Pages                 []string               `json:"pages"`
-	RedirectionPageMap    []int                  `json:"redirectionPageMap"`
-	TextAlignment         string                 `json:"textAlignment"`
-	TextScale             int                    `json:"textScale"`
-	Transform             map[string]interface{} `json:"transform"`
-	ZoomMode              string                 `json:"zoomMode"`
+	CoverPageNumber       *int           `json:"coverPageNumber,omitempty"`
+	CustomZoomCenterX     int            `json:"customZoomCenterX"`
+	CustomZoomCenterY     int            `json:"customZoomCenterY"`
+	CustomZoomOrientation string         `json:"customZoomOrientation"`
+	CustomZoomPageHeight  int            `json:"customZoomPageHeight"`
+	CustomZoomPageWidth   int            `json:"customZoomPageWidth"`
+	CustomZoomScale       int            `json:"customZoomScale"`
+	DocumentMetadata      map[string]any `json:"documentMetadata"`
+	ExtraMetadata         map[string]any `json:"extraMetadata"`
+	FileType              string         `json:"fileType"`
+	FontName              string         `json:"fontName"`
+	FormatVersion         int            `json:"formatVersion"`
+	LineHeight            int            `json:"lineHeight"`
+	Margins               int            `json:"margins"`
+	Orientation           string         `json:"orientation"`
+	OriginalPageCount     int            `json:"originalPageCount"`
+	PageCount             int            `json:"pageCount"`
+	PageTags              []string       `json:"pageTags"`
+	Pages                 []string       `json:"pages"`
+	RedirectionPageMap    []int          `json:"redirectionPageMap"`
+	TextAlignment         string         `json:"textAlignment"`
+	TextScale             int            `json:"textScale"`
+	Transform             map[string]any `json:"transform"`
+	ZoomMode              string         `json:"zoomMode"`
 }
 
 type DocMetadata struct {
@@ -56,64 +65,25 @@ type DocMetadata struct {
 	VisibleName    string `json:"visibleName"`
 }
 
-// EstimatePageCount attempts to count PDF pages via byte-pattern matching.
-// Returns 0 if it cannot determine the count.
-func EstimatePageCount(pdfData []byte) int {
-	pageRe := regexp.MustCompile(`/Type\s*/Page\b`)
-	pagesRe := regexp.MustCompile(`/Type\s*/Pages\b`)
-	countRe := regexp.MustCompile(`/Count\s+(\d+)`)
-
-	pageHits := len(pageRe.FindAllIndex(pdfData, -1))
-	pagesHits := len(pagesRe.FindAllIndex(pdfData, -1))
-	if pageHits-pagesHits > 0 {
-		return pageHits - pagesHits
-	}
-
-	matches := countRe.FindAllSubmatch(pdfData, -1)
-	maxCount := 0
-	for _, m := range matches {
-		if len(m) < 2 {
-			continue
-		}
-		n, err := strconv.Atoi(string(m[1]))
-		if err != nil {
-			continue
-		}
-		if n > maxCount {
-			maxCount = n
-		}
-	}
-	return maxCount
-}
-
-// UploadBytes writes data to a new remote file over SFTP.
-func UploadBytes(client *sftp.Client, remotePath string, data []byte) error {
-	f, err := client.Create(remotePath)
+// PageCount returns 0 if the document cannot be parsed; byte-pattern counting fails because PDF 1.5 onward packs page objects into compressed object streams where neither /Type /Page nor /Count appears in the raw bytes.
+func PageCount(pdfData []byte) int {
+	count, err := api.PageCount(bytes.NewReader(pdfData), model.NewDefaultConfiguration())
 	if err != nil {
-		return fmt.Errorf("failed to create remote file %s: %w", remotePath, err)
+		return 0
 	}
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("failed to write remote file %s: %w", remotePath, err)
-	}
-	return nil
+	return count
 }
 
-// Upload writes the PDF file and all xochitl sidecar files (.content, .metadata,
-// .pagedata) for the given PDF data. visibleName is the display name shown in
-// xochitl; parentID is the UUID of a collection, or "" for the root.
-// Returns the document UUID on success.
-func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, pageCount int, coverPageNumber *int) (string, error) {
+// newContent gives every page its own UUID and an identity entry in the redirection map, so an inaccurate pageCount yields a document xochitl renders with missing or phantom pages.
+func newContent(pageCount int, coverPageNumber *int) pdfContent {
 	pages := make([]string, pageCount)
 	redirection := make([]int, pageCount)
-	for i := 0; i < pageCount; i++ {
+	for i := range pages {
 		pages[i] = uuid.NewString()
 		redirection[i] = i
 	}
 
-	nowMs := strconv.FormatInt(time.Now().UnixMilli(), 10)
-
-	content := pdfContent{
+	return pdfContent{
 		CoverPageNumber:       coverPageNumber,
 		CustomZoomCenterX:     0,
 		CustomZoomCenterY:     936,
@@ -121,8 +91,8 @@ func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, p
 		CustomZoomPageHeight:  1872,
 		CustomZoomPageWidth:   1404,
 		CustomZoomScale:       1,
-		DocumentMetadata:      map[string]interface{}{},
-		ExtraMetadata:         map[string]interface{}{},
+		DocumentMetadata:      map[string]any{},
+		ExtraMetadata:         map[string]any{},
 		FileType:              "pdf",
 		FontName:              "",
 		FormatVersion:         1,
@@ -136,11 +106,14 @@ func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, p
 		RedirectionPageMap:    redirection,
 		TextAlignment:         "justify",
 		TextScale:             1,
-		Transform:             map[string]interface{}{},
+		Transform:             map[string]any{},
 		ZoomMode:              "bestFit",
 	}
+}
 
-	metadata := DocMetadata{
+func newMetadata(visibleName, parentID string) DocMetadata {
+	nowMs := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	return DocMetadata{
 		CreatedTime:    nowMs,
 		LastModified:   nowMs,
 		LastOpened:     "0",
@@ -150,12 +123,68 @@ func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, p
 		Type:           "DocumentType",
 		VisibleName:    visibleName,
 	}
+}
 
-	contentData, err := json.MarshalIndent(content, "", "    ")
+func UploadBytes(client *sftp.Client, remotePath string, data []byte) error {
+	remote, err := client.Create(remotePath)
+	if err != nil {
+		return fmt.Errorf("failed to create remote file %s: %w", remotePath, err)
+	}
+
+	if _, err := remote.Write(data); err != nil {
+		remote.Close()
+		return fmt.Errorf("failed to write remote file %s: %w", remotePath, err)
+	}
+	if err := remote.Close(); err != nil {
+		return fmt.Errorf("failed to write remote file %s: %w", remotePath, err)
+	}
+	return nil
+}
+
+// DocumentUpload records what one import has written to the xochitl directory, so a failed import can remove it again rather than leave xochitl a document with missing or truncated files.
+type DocumentUpload struct {
+	client  *sftp.Client
+	created []string
+}
+
+func NewDocumentUpload(client *sftp.Client) *DocumentUpload {
+	return &DocumentUpload{client: client}
+}
+
+func (u *DocumentUpload) WriteFile(remotePath string, data []byte) error {
+	u.created = append(u.created, remotePath)
+	return UploadBytes(u.client, remotePath, data)
+}
+
+// MkdirAll records only the directories it creates, so Discard never removes one that was already on the tablet.
+func (u *DocumentUpload) MkdirAll(dir string) error {
+	topMissing := ""
+	for d := dir; d != XochitlPath && d != "/" && d != "."; d = path.Dir(d) {
+		_, err := u.client.Stat(d)
+		if !errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		topMissing = d
+	}
+	if topMissing != "" {
+		u.created = append(u.created, topMissing)
+	}
+	return u.client.MkdirAll(dir)
+}
+
+func (u *DocumentUpload) Discard() {
+	for i := len(u.created) - 1; i >= 0; i-- {
+		_ = u.client.RemoveAll(u.created[i])
+	}
+}
+
+// Upload returns the new document's UUID. An empty parentID files the document at the root rather than inside a collection.
+func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, pageCount int, coverPageNumber *int) (string, error) {
+	contentData, err := json.MarshalIndent(newContent(pageCount, coverPageNumber), "", "    ")
 	if err != nil {
 		return "", fmt.Errorf("failed to encode .content JSON: %w", err)
 	}
-	metadataData, err := json.MarshalIndent(metadata, "", "    ")
+	metadataData, err := json.MarshalIndent(newMetadata(visibleName, parentID), "", "    ")
 	if err != nil {
 		return "", fmt.Errorf("failed to encode .metadata JSON: %w", err)
 	}
@@ -163,16 +192,18 @@ func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, p
 	docID := uuid.NewString()
 	base := path.Join(XochitlPath, docID)
 
-	for _, u := range []struct {
-		remote string
-		data   []byte
+	upload := NewDocumentUpload(client)
+	for _, file := range []struct {
+		remotePath string
+		data       []byte
 	}{
 		{base + ".pdf", pdfData},
 		{base + ".content", contentData},
-		{base + ".metadata", metadataData},
 		{base + ".pagedata", []byte("\n")},
+		{base + ".metadata", metadataData},
 	} {
-		if err := UploadBytes(client, u.remote, u.data); err != nil {
+		if err := upload.WriteFile(file.remotePath, file.data); err != nil {
+			upload.Discard()
 			return "", err
 		}
 	}

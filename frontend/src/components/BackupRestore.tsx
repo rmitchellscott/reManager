@@ -1,5 +1,10 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
-import { handleError } from '@/lib/errorMessages'
+import { CheckCircle, Warning } from '@phosphor-icons/react'
+import { useEffect, useLayoutEffect, useState, useRef } from 'react'
+import { errorDetail, handleError } from '@/lib/errorMessages'
+import { operationFailure } from '@/lib/operations'
+import { useAppContext } from '@/contexts/AppContext'
+import { BackupPhase, type BackupProgress, type RestoreFile } from '@/lib/types'
+import { OutputDisclosure } from '@/components/OutputDisclosure'
 import { formatBytes } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -8,6 +13,7 @@ import {
   Dialog,
   DialogContent,
   DialogFooter,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -16,31 +22,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { AlertTriangle, Loader2, CheckCircle2 } from 'lucide-react'
-
+import { FilesService, OperationsService } from '@bindings/reManager'
 interface BackupRestoreDialogProps {
   mode: 'backup' | 'restore' | null
+  isConnected: boolean
   onClose: () => void
-}
-
-interface ProgressData {
-  phase: string
-  filePath?: string
-  filesDone?: number
-  filesTotal?: number
-  bytesDone?: number
-  bytesTotal?: number
-  percentage: number
-  message: string
-}
-
-interface ErrorData {
-  message: string
-}
-
-interface CompleteData {
-  message: string
-  path?: string
 }
 
 interface FinalStats {
@@ -65,81 +51,105 @@ function formatThroughput(bytesPerSecond: number): string {
   return `${formatBytes(bytesPerSecond)}/s`
 }
 
-export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps) {
+function StatWithShortLabel({ label, shortLabel, value }: { label: string; shortLabel: string; value: string }) {
+  const cellRef = useRef<HTMLDivElement>(null)
+  const mirrorRef = useRef<HTMLSpanElement>(null)
+  const [longLabelFits, setLongLabelFits] = useState(true)
+
+  useLayoutEffect(() => {
+    const cell = cellRef.current
+    const mirror = mirrorRef.current
+    if (!cell || !mirror) return
+    const measure = () => setLongLabelFits(mirror.offsetWidth <= cell.clientWidth)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(cell)
+    observer.observe(mirror)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div ref={cellRef} className="relative min-w-0">
+      <span ref={mirrorRef} aria-hidden className="invisible absolute left-0 top-0 whitespace-nowrap">
+        {label}: {value}
+      </span>
+      {longLabelFits ? label : shortLabel}: {value}
+    </div>
+  )
+}
+
+export function BackupRestoreDialog({ mode, isConnected, onClose }: BackupRestoreDialogProps) {
+  const { runningOperation, startOperation } = useAppContext()
   const [stage, setStage] = useState<'confirm' | 'progress'>('confirm')
-  const [progress, setProgress] = useState<ProgressData | null>(null)
+  const [progress, setProgress] = useState<BackupProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [errorDetails, setErrorDetails] = useState('')
   const [success, setSuccess] = useState<string | null>(null)
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  const [startTime, setStartTime] = useState<number | null>(null)
+  const [selectedFile, setSelectedFile] = useState<RestoreFile | null>(null)
   const [throughput, setThroughput] = useState<number>(0)
   const [elapsedTime, setElapsedTime] = useState<number>(0)
   const [finalStats, setFinalStats] = useState<FinalStats>({})
-  const [deviceMismatch, setDeviceMismatch] = useState<{ backup: string; current: string } | null>(null)
   const samplesRef = useRef<Array<{ time: number; bytes: number }>>([])
   const lastThroughputUpdateRef = useRef<number>(0)
-  const progressRef = useRef<ProgressData | null>(null)
+  const progressRef = useRef<BackupProgress | null>(null)
+  const startTimeRef = useRef<number | null>(null)
+  const operationIdRef = useRef<string | null>(null)
+  const restoreRequestedRef = useRef(false)
+  const running = runningOperation?.kind === 'backup'
 
   const WINDOW_SIZE_MS = 10000
   const THROUGHPUT_UPDATE_INTERVAL_MS = 1000
 
-  const getPhaseMessage = (phase: string): string => {
+  const getPhaseMessage = ({ phase, message }: BackupProgress): string => {
     switch (phase) {
-      case 'scanning':
-        return 'Scanning reMarkable files...'
-      case 'downloading':
-        return 'Downloading from reMarkable tablet...'
-      case 'archiving':
-        return 'Creating archive...'
-      case 'extracting':
-        return 'Extracting backup...'
-      case 'uploading':
-        return 'Uploading to reMarkable tablet...'
-      case 'complete':
+      case BackupPhase.PhaseScanning:
+        return 'Scanning files on your reMarkable…'
+      case BackupPhase.PhaseDownloading:
+        return 'Downloading from your reMarkable…'
+      case BackupPhase.PhaseUploading:
+        return 'Uploading to your reMarkable…'
+      case BackupPhase.PhaseStoppingUI:
+      case BackupPhase.PhaseStartingUI:
+        return message
+      case BackupPhase.PhaseComplete:
         return 'Complete'
       default:
         return phase
     }
   }
 
-  const handleProgress = useCallback((...args: unknown[]) => {
-    const p = args[0] as ProgressData
+  const handleProgress = (p: BackupProgress) => {
     const now = Date.now()
-
-    if (startTime === null) {
-      setStartTime(now)
+    if (startTimeRef.current === null) {
+      startTimeRef.current = now
     }
+    setElapsedTime(now - startTimeRef.current)
 
-    setElapsedTime(startTime ? now - startTime : 0)
+    samplesRef.current.push({ time: now, bytes: p.bytesDone })
 
-    if (p.bytesDone !== undefined) {
-      samplesRef.current.push({ time: now, bytes: p.bytesDone })
+    const cutoff = now - WINDOW_SIZE_MS
+    samplesRef.current = samplesRef.current.filter(s => s.time > cutoff)
 
-      const cutoff = now - WINDOW_SIZE_MS
-      samplesRef.current = samplesRef.current.filter(s => s.time > cutoff)
+    if (now - lastThroughputUpdateRef.current >= THROUGHPUT_UPDATE_INTERVAL_MS) {
+      if (samplesRef.current.length >= 2) {
+        const oldest = samplesRef.current[0]
+        const newest = samplesRef.current[samplesRef.current.length - 1]
+        const timeDelta = (newest.time - oldest.time) / 1000
+        const bytesDelta = newest.bytes - oldest.bytes
 
-      if (now - lastThroughputUpdateRef.current >= THROUGHPUT_UPDATE_INTERVAL_MS) {
-        if (samplesRef.current.length >= 2) {
-          const oldest = samplesRef.current[0]
-          const newest = samplesRef.current[samplesRef.current.length - 1]
-          const timeDelta = (newest.time - oldest.time) / 1000
-          const bytesDelta = newest.bytes - oldest.bytes
-
-          if (timeDelta > 0.5) {
-            setThroughput(bytesDelta / timeDelta)
-            lastThroughputUpdateRef.current = now
-          }
+        if (timeDelta > 0.5) {
+          setThroughput(bytesDelta / timeDelta)
+          lastThroughputUpdateRef.current = now
         }
       }
     }
 
     progressRef.current = p
     setProgress(p)
-  }, [startTime])
+  }
 
-  const handleComplete = useCallback((...args: unknown[]) => {
-    const data = args[0] as CompleteData
-    const duration = startTime ? Date.now() - startTime : 0
+  const handleComplete = (message: string, path?: string) => {
+    const duration = startTimeRef.current ? Date.now() - startTimeRef.current : 0
     const currentProgress = progressRef.current
 
     setFinalStats({
@@ -149,61 +159,67 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
       throughput: duration > 0 && currentProgress?.bytesDone
         ? (currentProgress.bytesDone / (duration / 1000))
         : undefined,
-      path: data.path,
+      path,
     })
 
     setProgress(null)
-    setSuccess(data.message)
-  }, [startTime])
+    setSuccess(message)
+  }
 
-  const handleBackupError = useCallback((...args: unknown[]) => {
-    const data = args[0] as ErrorData & { code?: string }
+  const resetRun = () => {
+    setError(null)
+    setSuccess(null)
     setProgress(null)
-    setError(data.code ? handleError(data, 'Backup') : handleError(data.message, 'Backup'))
-  }, [])
+    setThroughput(0)
+    setElapsedTime(0)
+    setFinalStats({})
+    samplesRef.current = []
+    lastThroughputUpdateRef.current = 0
+    progressRef.current = null
+    startTimeRef.current = null
+  }
 
-  useEffect(() => {
-    const unsubBackupProgress = window.runtime.EventsOn('backup:progress', handleProgress)
-    const unsubBackupComplete = window.runtime.EventsOn('backup:complete', handleComplete)
-    const unsubBackupError = window.runtime.EventsOn('backup:error', handleBackupError)
-    const unsubRestoreProgress = window.runtime.EventsOn('restore:progress', handleProgress)
-    const unsubRestoreComplete = window.runtime.EventsOn('restore:complete', handleComplete)
-    const unsubRestoreError = window.runtime.EventsOn('restore:error', handleBackupError)
-    const unsubDeviceMismatch = window.runtime.EventsOn('restore:device-mismatch', (...args: unknown[]) => {
-      const data = args[0] as { backupDevice: string; currentDevice: string }
-      setDeviceMismatch({ backup: data.backupDevice, current: data.currentDevice })
+  const run = async (runMode: 'backup' | 'restore', start: (id: string) => Promise<unknown>) => {
+    setStage('progress')
+    let runId = ''
+    let output = ''
+    const result = await startOperation({
+      kind: 'backup',
+      target: runMode,
+      title: runMode === 'restore' ? 'Restore backup' : 'Create backup',
+      background: true,
+      reportsOwnFailure: true,
+      onBackupProgress: p => {
+        if (operationIdRef.current === runId) handleProgress(p)
+      },
+      onOutput: text => { output += text },
+      run: id => {
+        runId = id
+        operationIdRef.current = id
+        return start(id)
+      },
     })
-
-    return () => {
-      unsubBackupProgress()
-      unsubBackupComplete()
-      unsubBackupError()
-      unsubRestoreProgress()
-      unsubRestoreComplete()
-      unsubRestoreError()
-      unsubDeviceMismatch()
+    if (operationIdRef.current !== runId) return
+    operationIdRef.current = null
+    if (result.ok) {
+      handleComplete(runMode === 'restore' ? 'Restore complete.' : 'Backup complete', result.value)
+      return
     }
-  }, [handleProgress, handleComplete, handleBackupError])
+    if (result.canceled) return
+    setProgress(null)
+    const failure = operationFailure(result)
+    setError(handleError(failure, runMode === 'restore' ? 'Could not restore the backup.' : 'Could not create the backup.'))
+    setErrorDetails(output.trim() || errorDetail(failure))
+  }
 
-  // Prompt for file first for both backup and restore
   useEffect(() => {
     if (mode === 'backup') {
-      setError(null)
-      setSuccess(null)
-      setProgress(null)
-      setStartTime(null)
-      setThroughput(0)
-      setElapsedTime(0)
-      setFinalStats({})
-      samplesRef.current = []
-      lastThroughputUpdateRef.current = 0
-      progressRef.current = null
+      resetRun()
       const selectFile = async () => {
         try {
-          const filePath = await window.go.main.App.SelectBackupFile()
+          const filePath = await FilesService.SelectBackupFile()
           if (filePath) {
-            setStage('progress')
-            window.go.main.App.CreateDeviceBackup(filePath)
+            void run('backup', id => FilesService.CreateDeviceBackup(id, filePath))
           } else {
             onClose()
           }
@@ -213,23 +229,14 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
       }
       selectFile()
     } else if (mode === 'restore') {
-      setError(null)
-      setSuccess(null)
-      setProgress(null)
-      setStartTime(null)
-      setThroughput(0)
-      setElapsedTime(0)
-      setFinalStats({})
-      setDeviceMismatch(null)
-      samplesRef.current = []
-      lastThroughputUpdateRef.current = 0
-      progressRef.current = null
+      resetRun()
       setSelectedFile(null)
+      restoreRequestedRef.current = false
       const selectFile = async () => {
         try {
-          const filePath = await window.go.main.App.SelectRestoreFile()
-          if (filePath) {
-            setSelectedFile(filePath)
+          const file = await FilesService.SelectRestoreFile()
+          if (file.path) {
+            setSelectedFile(file)
             setStage('confirm')
           } else {
             onClose()
@@ -240,58 +247,64 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
       }
       selectFile()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, onClose])
 
-  // Update elapsed time every second while operation is in progress
   useEffect(() => {
-    if (startTime && progress !== null) {
-      const interval = setInterval(() => {
-        setElapsedTime(Date.now() - startTime)
-      }, 1000)
-      return () => clearInterval(interval)
-    }
-  }, [startTime, progress])
+    if (!running) return
+    const interval = setInterval(() => {
+      if (startTimeRef.current) setElapsedTime(Date.now() - startTimeRef.current)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [running])
 
   const handleRestoreConfirm = () => {
-    if (selectedFile) {
-      setStartTime(null)
-      setThroughput(0)
-      setElapsedTime(0)
-      setFinalStats({})
-      samplesRef.current = []
-      lastThroughputUpdateRef.current = 0
-      progressRef.current = null
-      setStage('progress')
-      window.go.main.App.RestoreDeviceBackup(selectedFile)
+    if (selectedFile && !restoreRequestedRef.current) {
+      restoreRequestedRef.current = true
+      resetRun()
+      const archivePath = selectedFile.path
+      void run('restore', id => FilesService.RestoreDeviceBackup(id, archivePath))
     }
   }
 
   const handleCancel = () => {
-    window.go.main.App.CancelBackup()
+    if (operationIdRef.current) void OperationsService.CancelOperation(operationIdRef.current)
+    operationIdRef.current = null
     setProgress(null)
     onClose()
   }
 
   const handleClose = () => {
-    if (progress === null) {
+    if (!running) {
       onClose()
     }
   }
 
-  const isOperating = progress !== null
+  const isOperating = running
+  const isMeasurable = progress?.phase === BackupPhase.PhaseDownloading || progress?.phase === BackupPhase.PhaseUploading
+  const isIndeterminate = !success && !error && !isMeasurable
+  const restoreConfirm = mode === 'restore' && stage === 'confirm'
 
   if (!mode) return null
 
   return (
     <Dialog open={mode !== null} onOpenChange={(open) => !open && handleClose()}>
-      <DialogContent className="w-[500px] max-w-[90vw]">
-        <DialogHeader>
+      <DialogContent>
+        <DialogHeader
+          severity={success ? 'success' : restoreConfirm ? 'destructive' : undefined}
+          icon={success ? CheckCircle : restoreConfirm ? Warning : undefined}
+        >
           <DialogTitle>
             {success
-              ? (mode === 'backup' ? 'Backup Created' : 'Restore Complete')
-              : (mode === 'backup' ? 'Creating Backup' : 'Restore Backup')
+              ? (mode === 'backup' ? 'Backup created' : 'Restore complete')
+              : (mode === 'backup' ? 'Creating backup' : 'Restore backup')
             }
           </DialogTitle>
+          {restoreConfirm && (
+            <DialogDescription>
+              Documents and settings in this backup will replace the ones on your reMarkable. Documents added since the backup are kept.
+            </DialogDescription>
+          )}
         </DialogHeader>
 
         <div className="space-y-4">
@@ -300,44 +313,43 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
               {selectedFile && (
                 <div className="text-sm">
                   <div className="font-medium mb-1">Selected backup:</div>
-                  <div className="text-muted-foreground truncate">{selectedFile}</div>
+                  <div className="text-muted-foreground truncate">{selectedFile.path}</div>
                 </div>
               )}
-              {deviceMismatch && (
-                <Alert className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertTitle className="text-amber-900 dark:text-amber-50">Different Device</AlertTitle>
-                  <AlertDescription className="text-muted-foreground">
-                    This backup was created on "{deviceMismatch.backup || 'Unknown'}" but you're restoring to "{deviceMismatch.current || 'Unknown'}".
+              {selectedFile?.fromAnotherDevice && (
+                <Alert variant="warning">
+                  <Warning className="h-4 w-4" />
+                  <AlertTitle>Different reMarkable</AlertTitle>
+                  <AlertDescription>
+                    This backup was created on "{selectedFile.backupDevice || 'Unknown'}" but you're restoring to "{selectedFile.currentDevice || 'Unknown'}".
                   </AlertDescription>
                 </Alert>
               )}
-              <Alert className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle className="text-amber-900 dark:text-amber-50">Warning</AlertTitle>
-                <AlertDescription className="text-muted-foreground">
-                  This will overwrite all documents and configurations on your device.
-                  Device reboot recommended after restore completes.
-                </AlertDescription>
-              </Alert>
+              <p className="text-sm text-muted-foreground">
+                Your reMarkable will be unresponsive until the restore finishes. If you have a passcode, enter it on your reMarkable afterward.
+              </p>
             </div>
           )}
 
           {stage === 'progress' && (
             <div className="space-y-3">
-              <Progress value={success ? 100 : Math.min(99, progress?.percentage || 0)} className="h-2" />
+              <Progress
+                indeterminate={isIndeterminate}
+                value={success ? 100 : Math.min(99, progress?.percentage || 0)}
+                className="h-2"
+                aria-label={mode === 'backup' ? 'Creating backup' : 'Restoring backup'}
+              />
 
               {!success && !error && progress && (
                 <>
                   <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <span className="font-medium">{getPhaseMessage(progress.phase)}</span>
-                    </div>
-                    <span className="text-muted-foreground">{Math.min(99, Math.round(progress.percentage))}%</span>
+                    <span className="font-medium">{getPhaseMessage(progress)}</span>
+                    {isMeasurable && (
+                      <span className="text-muted-foreground tabular-nums">{Math.min(99, Math.round(progress.percentage))}%</span>
+                    )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-muted-foreground tabular-nums">
                     {progress.filesDone !== undefined && progress.filesTotal !== undefined && (
                       <div>Files: {progress.filesDone.toLocaleString()} / {progress.filesTotal.toLocaleString()}</div>
                     )}
@@ -356,15 +368,10 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
 
               {success && (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2 font-medium text-green-600 dark:text-green-400">
-                      <CheckCircle2 className="h-4 w-4" />
-                      <span>Complete</span>
-                    </div>
-                    <span className="text-muted-foreground">100%</span>
-                  </div>
+                  <div className="h-5" aria-hidden />
 
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-muted-foreground">
+
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-muted-foreground tabular-nums">
                     {finalStats.files !== undefined && finalStats.files > 0 && (
                       <div>Total files: {finalStats.files.toLocaleString()}</div>
                     )}
@@ -375,7 +382,7 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
                       <div>Duration: {formatDuration(finalStats.duration)}</div>
                     )}
                     {finalStats.throughput !== undefined && finalStats.throughput > 0 && (
-                      <div>Avg speed: {formatThroughput(finalStats.throughput)}</div>
+                      <StatWithShortLabel label="Average speed" shortLabel="Avg speed" value={formatThroughput(finalStats.throughput)} />
                     )}
                   </div>
 
@@ -383,13 +390,13 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
-                          onClick={() => window.go.main.App.RevealInFileManager(finalStats.path!)}
+                          onClick={() => FilesService.RevealInFileManager(finalStats.path!)}
                           className="text-sm text-primary underline-offset-4 hover:underline text-left truncate w-full"
                         >
                           Saved: {finalStats.path.split(/[/\\]/).pop()}
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent>Click to open folder</TooltipContent>
+                      <TooltipContent>Open folder</TooltipContent>
                     </Tooltip>
                   )}
                 </div>
@@ -397,10 +404,11 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
 
               {error && (
                 <Alert variant="destructive">
-                  <AlertTriangle className="h-4 w-4" />
+                  <Warning className="h-4 w-4" />
                   <AlertDescription className="ml-2">{error}</AlertDescription>
                 </Alert>
               )}
+              {error && <OutputDisclosure output={errorDetails} />}
             </div>
           )}
         </div>
@@ -411,7 +419,7 @@ export function BackupRestoreDialog({ mode, onClose }: BackupRestoreDialogProps)
               <Button onClick={onClose} variant="outline" className="flex-1">
                 Cancel
               </Button>
-              <Button onClick={handleRestoreConfirm} variant="destructive" className="flex-1">
+              <Button onClick={handleRestoreConfirm} variant="destructive" className="flex-1" disabled={!isConnected}>
                 Restore
               </Button>
             </>

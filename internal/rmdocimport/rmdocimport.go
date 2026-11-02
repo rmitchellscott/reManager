@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"path"
 	"strconv"
 	"strings"
@@ -45,6 +46,13 @@ func discoverUUID(zr *zip.Reader) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no .metadata file found at root level of rmdoc archive")
+}
+
+func belongsToDocument(entryName, origUUID string) bool {
+	if strings.Contains(entryName, `\`) || !fs.ValidPath(strings.TrimSuffix(entryName, "/")) {
+		return false
+	}
+	return strings.HasPrefix(entryName, origUUID+".") || strings.HasPrefix(entryName, origUUID+"/")
 }
 
 func readZipEntry(zr *zip.Reader, name string) ([]byte, error) {
@@ -112,28 +120,42 @@ func Upload(client *sftp.Client, zipData []byte, visibleName string) (string, er
 		return "", err
 	}
 
+	for _, f := range zr.File {
+		if !belongsToDocument(f.Name, origUUID) {
+			return "", fmt.Errorf("rmdoc archive has an entry outside document %s: %q", origUUID, f.Name)
+		}
+	}
+
 	newUUID := uuid.NewString()
 	nowMs := strconv.FormatInt(time.Now().UnixMilli(), 10)
 
-	dirCreated := false
+	createdDirs := map[string]bool{}
+	upload := pdfimport.NewDocumentUpload(client)
+	uploaded := false
+	defer func() {
+		if !uploaded {
+			upload.Discard()
+		}
+	}()
+	var metadataPath string
+	var metadataData []byte
 
 	for _, f := range zr.File {
 		newName := strings.Replace(f.Name, origUUID, newUUID, 1)
 		remotePath := path.Join(pdfimport.XochitlPath, newName)
 
 		if f.FileInfo().IsDir() {
-			if err := client.MkdirAll(remotePath); err != nil {
+			if err := upload.MkdirAll(remotePath); err != nil {
 				return "", fmt.Errorf("failed to create directory %s: %w", remotePath, err)
 			}
 			continue
 		}
 
-		if !dirCreated && strings.Contains(newName, "/") {
-			dir := path.Dir(remotePath)
-			if err := client.MkdirAll(dir); err != nil {
+		if dir := path.Dir(remotePath); strings.Contains(newName, "/") && !createdDirs[dir] {
+			if err := upload.MkdirAll(dir); err != nil {
 				return "", fmt.Errorf("failed to create directory %s: %w", dir, err)
 			}
-			dirCreated = true
+			createdDirs[dir] = true
 		}
 
 		data, err := readZipEntry(zr, f.Name)
@@ -150,12 +172,20 @@ func Upload(client *sftp.Client, zipData []byte, visibleName string) (string, er
 					data = updated
 				}
 			}
+			metadataPath, metadataData = remotePath, data
+			continue
 		}
 
-		if err := pdfimport.UploadBytes(client, remotePath, data); err != nil {
+		if err := upload.WriteFile(remotePath, data); err != nil {
 			return "", err
 		}
 	}
 
+	if metadataPath != "" {
+		if err := upload.WriteFile(metadataPath, metadataData); err != nil {
+			return "", err
+		}
+	}
+	uploaded = true
 	return newUUID, nil
 }

@@ -1,13 +1,15 @@
+import { Check, CircleNotch, WarningCircle, X } from '@phosphor-icons/react'
 import { useState, useEffect, useRef } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
-import { Loader2, Check, X, AlertCircle } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { StatusBadge } from '@/components/StatusBadge'
 import { CompatibilityResult } from '@/lib/types'
+import { handleError } from '@/lib/errorMessages'
+import { PackagesService } from '@bindings/reManager'
 
 interface CheckOSDialogProps {
   open: boolean
@@ -39,14 +41,14 @@ export function CheckOSDialog({
       setResult(null)
       ;(async () => {
         try {
-          const res = await window.go.main.App.CheckOSCompatibility(initialVersion)
+          const res = await PackagesService.CheckOSCompatibility(initialVersion)
           if (res.fetchFailed) {
-            setError('Could not fetch package index. Check your connection.')
+            setError('Could not fetch the package index. Check your internet connection.')
           } else {
             setResult(res)
           }
-        } catch {
-          setError('Failed to check compatibility')
+        } catch (err) {
+          setError(handleError(err, 'Could not check compatibility.'))
         } finally {
           setLoading(false)
         }
@@ -65,14 +67,14 @@ export function CheckOSDialog({
     setResult(null)
 
     try {
-      const res = await window.go.main.App.CheckOSCompatibility(targetVersion.trim())
+      const res = await PackagesService.CheckOSCompatibility(targetVersion.trim())
       if (res.fetchFailed) {
-        setError('Could not fetch package index. Check your connection.')
+        setError('Could not fetch the package index. Check your internet connection.')
       } else {
         setResult(res)
       }
     } catch (err) {
-      setError('Failed to check compatibility')
+      setError(handleError(err, 'Could not check compatibility.'))
     } finally {
       setLoading(false)
     }
@@ -85,26 +87,26 @@ export function CheckOSDialog({
     onOpenChange(false)
   }
 
-  const compatiblePackages = result ? [...result.compatible, ...result.noConstraint] : []
+  const compatiblePackages = result ? [...(result.compatible ?? []), ...(result.noConstraint ?? [])] : []
   const incompatiblePackages = result?.incompatible ?? []
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="lg">
         <DialogHeader>
-          <DialogTitle>Check OS Compatibility</DialogTitle>
+          <DialogTitle>Check OS compatibility</DialogTitle>
           <DialogDescription>
-            Check if installed packages are compatible with a target OS version.
+            Check whether your installed mods work on another OS version.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="target-version">Target OS Version</Label>
+            <Label htmlFor="target-version">Target OS version</Label>
             <div className="flex gap-2">
               <Input
                 id="target-version"
-                placeholder="e.g., 3.24.0.149"
+                placeholder="3.24.0.149"
                 value={targetVersion}
                 onChange={(e) => setTargetVersion(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleCheck()}
@@ -117,8 +119,8 @@ export function CheckOSDialog({
               >
                 {loading ? (
                   <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Checking
+                    <CircleNotch className="h-4 w-4 mr-2 animate-spin" />
+                    Checking…
                   </>
                 ) : (
                   'Check'
@@ -129,7 +131,7 @@ export function CheckOSDialog({
 
           {error && (
             <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
+              <WarningCircle className="h-4 w-4" />
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
@@ -140,7 +142,7 @@ export function CheckOSDialog({
                 {compatiblePackages.length > 0 && (
                   <AccordionItem value="compatible" className="border-none">
                     <AccordionTrigger className="py-2 text-sm font-medium hover:no-underline">
-                      Compatible Packages ({compatiblePackages.length})
+                      Compatible mods ({compatiblePackages.length})
                     </AccordionTrigger>
                     <AccordionContent>
                       <div className="max-h-48 overflow-y-auto">
@@ -164,7 +166,7 @@ export function CheckOSDialog({
                 {incompatiblePackages.length > 0 && (
                   <AccordionItem value="incompatible" className="border-none">
                     <AccordionTrigger className="py-2 text-sm font-medium hover:no-underline">
-                      Incompatible Packages ({incompatiblePackages.length})
+                      Incompatible mods ({incompatiblePackages.length})
                     </AccordionTrigger>
                     <AccordionContent>
                       <div className="max-h-48 overflow-y-auto">
@@ -187,7 +189,7 @@ export function CheckOSDialog({
               </Accordion>
 
               {compatiblePackages.length === 0 && incompatiblePackages.length === 0 && (
-                <p className="text-sm text-muted-foreground">No packages installed.</p>
+                <p className="text-sm text-muted-foreground">No mods installed.</p>
               )}
             </div>
           )}

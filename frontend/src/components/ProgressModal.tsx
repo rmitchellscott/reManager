@@ -1,64 +1,125 @@
-import { DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { useEffect, useState } from 'react'
+import { CheckCircle, WarningCircle, Wrench } from '@phosphor-icons/react'
+import type { Icon } from '@phosphor-icons/react'
+import { DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
-import { TerminalWithCopy } from '@/components/TerminalWithCopy'
-import { Loader2, CheckCircle2 } from 'lucide-react'
+import { OutputDisclosure } from '@/components/OutputDisclosure'
+import { EstimatedProgress } from '@/components/EstimatedProgress'
+
+const STOP_GRACE_MS = 10_000
 
 interface ProgressModalProps {
   title: string
   progressText: string
-  percentage: number
   terminalOutput: string
   isComplete: boolean
   onClose: () => void
   canStop?: boolean
   onStop?: () => void
+  stopWarning?: string
+  stopping?: boolean
+  onAbandon?: () => void
   terminalTheme?: 'dark' | 'light'
-  showProgress?: boolean
+  failed?: boolean
+  showOutput?: boolean
+  icon?: Icon
+  expectedSeconds?: number
+  runKey?: string
+  onRetry?: () => void
+  retryDisabled?: boolean
+  runningSeverity?: 'info' | 'neutral'
+  onOutputOpenChange?: (open: boolean) => void
 }
 
 export function ProgressModal({
   title,
   progressText,
-  percentage,
   terminalOutput,
   isComplete,
   onClose,
   canStop,
   onStop,
+  stopWarning,
+  stopping = false,
+  onAbandon,
   terminalTheme,
-  showProgress = true,
+  failed = false,
+  showOutput = false,
+  icon,
+  expectedSeconds,
+  runKey,
+  onRetry,
+  retryDisabled = false,
+  runningSeverity = 'neutral',
+  onOutputOpenChange,
 }: ProgressModalProps) {
+  const state = failed
+    ? { severity: 'destructive' as const, icon: WarningCircle }
+    : isComplete
+      ? { severity: 'success' as const, icon: CheckCircle }
+      : { severity: runningSeverity, icon: icon ?? Wrench }
+
+  const barTint = runningSeverity === 'info' ? 'bg-[var(--info)]' : 'bg-primary'
+
+  const [confirmingStop, setConfirmingStop] = useState(false)
+  const [stopOverdue, setStopOverdue] = useState(false)
+  useEffect(() => {
+    setStopOverdue(false)
+    if (!stopping) return
+    const timer = window.setTimeout(() => setStopOverdue(true), STOP_GRACE_MS)
+    return () => window.clearTimeout(timer)
+  }, [stopping])
+  useEffect(() => {
+    if (!canStop) setConfirmingStop(false)
+  }, [canStop])
+
+  const requestStop = () => {
+    if (stopWarning) setConfirmingStop(true)
+    else onStop?.()
+  }
+
   return (
     <>
-      <DialogHeader>
+      <DialogHeader severity={state.severity} icon={state.icon}>
         <DialogTitle>{title}</DialogTitle>
+        {progressText && <DialogDescription>{progressText}</DialogDescription>}
       </DialogHeader>
-      <div className="space-y-4">
-        <p className="text-sm font-medium text-center text-foreground flex items-center justify-center gap-2">
-          <span className="h-4 w-4 flex-shrink-0">
-            {!isComplete && <Loader2 className="h-4 w-4 animate-spin" />}
-          </span>
-          {progressText}
-        </p>
-        {showProgress && <Progress value={percentage} />}
-        {isComplete && !terminalOutput.trim() ? (
-          <div className="h-[400px] rounded-lg flex flex-col items-center justify-center gap-3">
-            <CheckCircle2 className="h-12 w-12 text-green-600 dark:text-green-400" />
-            <p className="text-sm text-muted-foreground">Operation completed successfully.</p>
-          </div>
-        ) : (
-          <div className="h-[400px] rounded-lg overflow-hidden overscroll-y-contain">
-            <TerminalWithCopy output={terminalOutput} theme={terminalTheme} />
-          </div>
-        )}
-      </div>
-      <DialogFooter className="min-h-[40px]">
+
+      {isComplete || failed
+        ? <Progress value={100} className="h-1 bg-muted" indicatorClassName={failed ? 'bg-destructive' : barTint} aria-label={title} />
+        : expectedSeconds
+          ? <EstimatedProgress expectedSeconds={expectedSeconds} runKey={runKey} label={title} indicatorClassName={barTint} />
+          : <Progress indeterminate className="h-1 bg-muted" indicatorClassName={barTint} aria-label={title} />}
+
+      <OutputDisclosure output={terminalOutput} theme={terminalTheme} failed={failed} alwaysOpen={showOutput} awaitingOutput onOpenChange={onOutputOpenChange} />
+
+      {confirmingStop && <p className="text-sm text-muted-foreground">{stopWarning}</p>}
+
+      <DialogFooter>
         {isComplete ? (
-          <Button onClick={onClose}>Close</Button>
+          failed && onRetry ? (
+            <>
+              <Button variant="outline" onClick={onClose}>Close</Button>
+              <Button onClick={onRetry} disabled={retryDisabled}>Try again</Button>
+            </>
+          ) : (
+            <Button onClick={onClose}>Close</Button>
+          )
+        ) : stopping ? (
+          stopOverdue && onAbandon
+            ? <Button onClick={onAbandon}>Close</Button>
+            : <Button disabled>Stopping…</Button>
+        ) : confirmingStop ? (
+          <>
+            <Button variant="outline" onClick={() => setConfirmingStop(false)}>Keep running</Button>
+            <Button variant="destructive" onClick={() => { setConfirmingStop(false); onStop?.() }}>Stop</Button>
+          </>
         ) : canStop ? (
-          <Button onClick={onStop} variant="destructive">Stop</Button>
-        ) : null}
+          <Button variant="outline" onClick={requestStop}>Stop</Button>
+        ) : (
+          <Button disabled>Close</Button>
+        )}
       </DialogFooter>
     </>
   )

@@ -1,0 +1,17 @@
+--- a/pkg/application/mobile_features_android.go
++++ b/pkg/application/mobile_features_android.go
+@@ -177,6 +177,14 @@
+ 	return s
+ }
+ 
++// USBNetworkDiagnostics reports what Android sees of a USB network link: the
++// attached USB devices, recent attach and detach events, the networks and USB
++// network interfaces, and the lock state. JSON: {"address"}. Returns JSON.
++func (androidManager) USBNetworkDiagnostics(jsonPayload string) string {
++	s, _ := androidBridgeStringString("usbNetworkDiagnostics", jsonPayload)
++	return s
++}
++
+ // --- Phase D: sensors & hardware ---------------------------------------------
+ 
+ // Haptic plays a haptic pattern (impact-light/medium/heavy, success,

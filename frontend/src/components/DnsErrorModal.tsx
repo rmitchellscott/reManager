@@ -1,7 +1,6 @@
+import { Warning } from '@phosphor-icons/react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { AlertTriangle } from 'lucide-react'
-
 interface DnsErrorModalProps {
   open: boolean
   onClose: () => void
@@ -11,22 +10,23 @@ interface DnsErrorModalProps {
 export function DnsErrorModal({ open, onClose, onEnableProxyMode }: DnsErrorModalProps) {
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <div className="flex items-center gap-3">
-            <AlertTriangle className="h-6 w-6 text-yellow-500" />
-            <DialogTitle>DNS Error Detected</DialogTitle>
-          </div>
-          <DialogDescription className="pt-2">
-            Your reMarkable couldn't resolve DNS to download packages. Enabling Proxy Mode allows reManager to download packages on your computer and transfer them to the reMarkable, bypassing DNS issues. You can disable this later in Settings.
+      <DialogContent size="md">
+        <DialogHeader severity="warning" icon={Warning}>
+          <DialogTitle>DNS error</DialogTitle>
+          <DialogDescription>
+            Your reMarkable could not resolve DNS to download packages.
           </DialogDescription>
         </DialogHeader>
-        <DialogFooter className="flex gap-2 sm:gap-0">
+
+        <p className="text-sm text-muted-foreground">
+          reManager can download them on your computer and transfer them across instead. You can turn this off later under Settings › Connection.
+        </p>
+        <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Dismiss
           </Button>
           <Button onClick={onEnableProxyMode}>
-            Enable Proxy Mode
+            Download through reManager
           </Button>
         </DialogFooter>
       </DialogContent>

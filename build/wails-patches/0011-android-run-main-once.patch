@@ -1,0 +1,37 @@
+--- a/pkg/application/application_android.go
++++ b/pkg/application/application_android.go
+@@ -322,6 +322,7 @@
+ 	// Android main function registration
+ 	androidMainFunc func()
+ 	androidMainLock sync.Mutex
++	androidMainOnce sync.Once
+ 
+ 	// App ready signal
+ 	appReady     = make(chan struct{})
+@@ -680,16 +681,22 @@
+ 	// Store JavaVM and bridge global reference for JNI callbacks
+ 	C.storeBridgeRef(env, bridge)
+ 
+-	// Start the registered main function in a goroutine
+ 	androidMainLock.Lock()
+ 	mainFunc := androidMainFunc
+ 	androidMainLock.Unlock()
+ 
+-	if mainFunc != nil {
+-		go mainFunc()
+-	} else {
++	if mainFunc == nil {
+ 		androidLogf("error", "No main function registered! Call application.RegisterAndroidMain(main) in init()")
++		return
+ 	}
++
++	// An activity recreated in the same process brings a new bridge to the app
++	// that is already running. A second main would make a second App whose Run
++	// fails, so main starts once per process and later bridges only replace
++	// the stored reference above.
++	androidMainOnce.Do(func() {
++		go mainFunc()
++	})
+ }
+ 
+ //export Java_com_wails_app_WailsBridge_nativeShutdown

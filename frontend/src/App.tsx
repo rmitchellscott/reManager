@@ -1,263 +1,122 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { ArrowsCounterClockwise, CircleNotch, Package, Warning, WarningCircle, WifiHigh, WifiSlash, Wrench } from '@phosphor-icons/react'
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react'
 import { Toaster, toast } from 'sonner'
 import { applyThemeWithPortal } from './main'
-import { debugLog } from '@/lib/utils'
+import { BrowsePage } from '@/pages/BrowsePage'
+import { RetryCountdown } from '@/components/RetryCountdown'
+import { HookDialog } from '@/components/HookDialog'
+import { cn, debugLog } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Progress } from '@/components/ui/progress'
+import { Tabs } from '@/components/ui/tabs'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { MainTabBar } from '@/components/MainTabBar'
+import { useKeyboardVisible } from '@/hooks/useKeyboardVisible'
+import { useCollapseOnScroll } from '@/hooks/useCollapseOnScroll'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { ProgressModal } from '@/components/ProgressModal'
+import { OutputDisclosure } from '@/components/OutputDisclosure'
+import { errorDetail, handleError } from '@/lib/errorMessages'
+import { onSyncedChange } from '@/lib/syncEvents'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { TerminalWithCopy } from '@/components/TerminalWithCopy'
-import { ConsolidatedWarningBanner, hasActiveWarnings } from '@/components/ConsolidatedWarningBanner'
-import { BannerSwitcher } from '@/components/BannerSwitcher'
 import { VellumInstallSuccessDialog } from '@/components/VellumInstallSuccessDialog'
 import { VellumUninstallSuccessDialog } from '@/components/VellumUninstallSuccessDialog'
-import { SettingsDialog } from '@/components/SettingsDialog'
+import { SettingsDialog, type SettingsSection } from '@/components/SettingsDialog'
 import { PageHeader } from '@/components/PageHeader'
 import { SupportBundlePage } from '@/components/SupportBundlePage'
+import type { SupportScreen } from '@/components/SupportHome'
 import { DnsErrorModal } from '@/components/DnsErrorModal'
 import { FilesystemRestoreErrorDialog } from '@/components/FilesystemRestoreErrorDialog'
-import { UserGuideOffer } from '@/components/UserGuideOffer'
 import { ConnectPage } from '@/pages/ConnectPage'
 import { AppProvider } from '@/contexts/AppContext'
 import { useConnectionEvents } from '@/hooks/useConnectionEvents'
+import { useBackHandler } from '@/hooks/useBackHandler'
 import { useVellumEvents } from '@/hooks/useVellumEvents'
-import { useInstallEvents } from '@/hooks/useInstallEvents'
-import { useMaintenanceEvents } from '@/hooks/useMaintenanceEvents'
+import { useOperation, type OperationKind } from '@/hooks/useOperation'
+import { operationFailure } from '@/lib/operations'
+import { useTransferEvents } from '@/hooks/useTransferEvents'
 import { useWarnings } from '@/hooks/useWarnings'
-import { UtilitiesTab } from '@/tabs/UtilitiesTab'
-import { MaintenanceTab } from '@/tabs/MaintenanceTab'
-import { ModsTab } from '@/tabs/ModsTab'
-import { Badge } from '@/components/ui/badge'
-import { Banner } from '@/components/ui/banner'
-import { Loader2, Check, AlertTriangle, AlertCircle, WifiOff, Info, CheckCircle2, BookOpen, Cpu } from 'lucide-react'
-import { Checkbox } from '@/components/ui/checkbox'
-import { formatOsRange, launcherSelected } from '@/lib/format'
-import { PackageInfo, CompatibilityResult, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, UpdateServiceStatus, InstallSimulationResult, InstallSet, UninstallSimulationResult, InstalledPackagesResult, HashtabVersionStatus, TimezoneStatus, VirtualChoice, PackageConflict, Step, TransferSnapshot } from '@/lib/types'
+import { SystemTab } from '@/tabs/SystemTab'
+import { ModsTab, type OsSyncStatus, type PlanActions, type SelectPackageForOSFn } from '@/tabs/ModsTab'
+import { PlanBarContent, PlanBarWash, type PlanBarModel } from '@/components/mods/PlanBar'
+import { useTouchLayout } from '@/hooks/useMediaQuery'
+import { upgradeCandidateMap, withoutUninstalled } from '@/lib/updates'
+import { systemAlertLevel, pullsFocus } from '@/lib/alerts'
+import { deriveSystemStatus } from '@/lib/systemStatus'
+import { useFollowedDevs } from '@/hooks/useFollowedDevs'
+import { deriveModsStatus, noPlanSolveFacts, type PlanSolveFacts } from '@/lib/modsStatus'
+import { PackageInfo, MaintenanceCommandInfo, SystemTaskInfo, SSHKey, SavedDevice, PlatformCapabilities, Step, UpgradeCandidate, DeviceOutlook, ReenableStatus, ColorScheme, SyncKey, ErrorCode, type SettingsInfo } from '@/lib/types'
+import { ConfigService, ConnectionService, DeviceService, FilesService, OSService, PackagesService, SystemService } from '@bindings/reManager'
+import { onEvent } from '@/lib/events'
 
-declare global {
-  interface Window {
-    go: {
-      main: {
-        App: {
-          Connect(host: string, password: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
-          ConnectWithKey(host: string, keyPath: string, passphrase: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
-          ConnectWithAgent(host: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
-          IsSSHAgentAvailable(): Promise<boolean>
-          CancelConnect(): Promise<void>
-          Disconnect(): Promise<void>
-          IsConnected(): Promise<boolean>
-          RunCommand(cmd: string): Promise<string>
-          GetReadmeContent(url: string): Promise<string>
-          RunCommandWithOutput(cmd: string, requiresPTY: boolean): Promise<void>
-          StopCommand(): Promise<void>
-          StartShell(rows: number, cols: number): Promise<void>
-          WriteToShell(data: string): Promise<void>
-          ResizeShell(rows: number, cols: number): Promise<void>
-          StopShell(): Promise<void>
-          IsShellActive(): Promise<boolean>
-          GetDeviceInfo(): Promise<Record<string, string>>
-          GetUpdateServiceStatus(): Promise<UpdateServiceStatus>
-          GetXochitlStatus(): Promise<{ running: boolean; xoviActive: boolean; activeLauncher: string; currentLauncher: string }>
-          GetXochitlStatusQuick(): Promise<{ running: boolean; xoviActive: boolean }>
-          GetDefaultSSHKeys(): Promise<SSHKey[]>
-          SelectKeyFile(): Promise<string>
-          GetSavedDevices(): Promise<SavedDevice[]>
-          SaveDevice(id: string, name: string, host: string, authType: string, password: string, keyPath: string, keyPassphrase: string): Promise<string>
-          DeleteSavedDevice(id: string): Promise<void>
-          ConnectToSavedDevice(id: string): Promise<{ success: boolean; message: string; code?: string; retryable?: boolean; device?: string }>
-          UpdateDeviceName(id: string, name: string): Promise<void>
-          CheckVellumInstalled(): Promise<boolean>
-          BootstrapVellum(): Promise<void>
-          CheckPackageInstalled(pkgName: string): Promise<boolean>
-          CheckHashtabVersion(): Promise<HashtabVersionStatus>
-          GetPackages(deviceType: string, firmware: string, arch: string): Promise<PackageInfo[]>
-          RefreshMetadata(): Promise<void>
-          GetInstalledPackages(): Promise<string[]>
-          GetInstalledPackagesWithOsCheck(): Promise<InstalledPackagesResult>
-          GetInstalledPackagesWithVersions(): Promise<Record<string, string>>
-          GetPackageForOS(name: string, targetOS: string, deviceType: string, arch: string): Promise<PackageInfo | null>
-          RunReenable(): Promise<void>
-          SimulatePackageUpgrade(): Promise<{ packages: string[]; hasUpgrades: boolean }>
-          RunPackageUpgrade(): Promise<void>
-          RunUpgrade(): Promise<void>
-          GetPackageCompatibilityStatus(): Promise<{
-            installedPackages: string[]
-            compatiblePackages: string[]
-            incompatiblePackages: string[]
-            currentOsVersion: string
-            storedOsVersion: string
-            fetchFailed: boolean
-          }>
-          GetMaintenanceCommands(pkgName: string): Promise<MaintenanceCommandInfo[]>
-          GetAllMaintenanceCommands(): Promise<Record<string, MaintenanceCommandInfo[]>>
-          GetSystemTasksInfo(): Promise<SystemTaskInfo[]>
-          GetDeviceDisplayName(machine: string): Promise<string>
-          GetDeviceArchitecture(deviceType: string): Promise<string>
-          InstallPackages(requested: string[], resolved: string[], deviceType: string): Promise<void>
-          UninstallPackages(packageNames: string[], deviceType: string): Promise<void>
-          SimulateInstall(packageNames: string[], deviceType: string): Promise<InstallSimulationResult>
-          GetInstallChoices(packageNames: string[], deviceType: string): Promise<VirtualChoice[]>
-          GetPackageConflicts(installed: Record<string, string>, queue: string[], deviceType: string, firmware: string): Promise<Record<string, PackageConflict>>
-          SimulateUninstall(packageNames: string[]): Promise<UninstallSimulationResult>
-          RunMaintenanceCommand(pkgName: string, commandId: string, deviceType: string): Promise<void>
-          RunSystemTask(taskId: string, deviceType: string): Promise<void>
-          RespondToDialog(response: string): Promise<void>
-          CancelInstallation(): Promise<void>
-          GetAppVersion(): Promise<string>
-          CheckForAppUpdate(): Promise<{ updateAvailable: boolean; latestVersion: string; currentVersion: string; releaseURL: string; error?: string }>
-          GetSettings(): Promise<{ tabVisibility: Record<string, boolean>; proxyMode: boolean; suppressSystemFileWarnings: boolean; suppressGuideOffer: boolean; preventSleep: boolean; theme: string; terminalTheme: string; editorTheme: string; checkForUpdates: boolean; sshAgentSocketPath: string }>
-          SaveSettings(tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string): Promise<void>
-          InstallUserGuide(): Promise<void>
-          CheckUserGuide(): Promise<{ installed: boolean; needsUpdate: boolean; skipped: boolean; docId: string }>
-          DismissGuideOffer(): Promise<void>
-          EnableGuideOffer(): Promise<void>
-          GetSystemColorScheme(): Promise<string>
-          UninstallVellum(removeAllPackages: boolean): Promise<void>
-          CleanupBrokenVellum(): Promise<void>
-          GetDeviceTimezone(): Promise<string>
-          GetTimezoneStatus(): Promise<TimezoneStatus>
-          SaveDeviceTimezone(timezone: string): Promise<void>
-          SetDeviceTimezone(timezone: string, deviceType: string): Promise<void>
-          ListDirectory(path: string): Promise<{ name: string; path: string; size: number; isDir: boolean; modTime: number; mode: string }[]>
-          DownloadFile(remotePath: string): void
-          SelectFilesForUpload(): Promise<string[]>
-          UploadFilesFromPaths(localPaths: string[], remotePath: string): void
-          DownloadFolder(remotePath: string): void
-          UploadFolder(remotePath: string): void
-          CancelTransfer(id: string): void
-          CancelAllTransfers(): void
-          ClearCompletedTransfers(): void
-          GetTransfers(): Promise<TransferSnapshot>
-          DeletePath(path: string): Promise<void>
-          RenamePath(oldPath: string, newPath: string): Promise<void>
-          CreateDirectory(path: string): Promise<void>
-          ReadConfigFile(): Promise<string>
-          WriteConfigFile(content: string): Promise<void>
-          BackupConfigFile(): Promise<string>
-          SelectPDFFile(): Promise<string>
-          SelectPDFFiles(): Promise<string[]>
-          SelectImportFiles(): Promise<string[]>
-          GetPDFFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number }>
-          GetImportFileInfo(localPath: string): Promise<{ path: string; size: number; pageCount: number; fileType: string; visibleName: string }>
-          ImportEpubFromPath(localPath: string, visibleName: string, restartXochitl: boolean): Promise<void>
-          ImportPDFFromPath(localPath: string, visibleName: string, restartXochitl: boolean, pageCountOverride: number, coverPageNumber: number | null): Promise<void>
-          ImportRmdocFromPath(localPath: string, visibleName: string, restartXochitl: boolean): Promise<void>
-          ListConfigBackups(): Promise<Array<{ name: string; timestamp: number; size: number }>>
-          RestoreConfigBackup(backupName: string): Promise<void>
-          SelectBackupFile(): Promise<string>
-          CreateDeviceBackup(destPath: string): void
-          SelectRestoreFile(): Promise<string>
-          RestoreDeviceBackup(archivePath: string): void
-          CancelBackup(): void
-          RevealInFileManager(path: string): void
-          RetryRestoreFilesystem(): Promise<void>
-          RebootDevice(): Promise<void>
-          GetPartitionInfo(): Promise<{
-            active: { number: number; version: string; label: string; isActive: boolean; isNextBoot: boolean }
-            fallback: { number: number; version: string; label: string; isActive: boolean; isNextBoot: boolean }
-            deviceType: string
-            encrypted: boolean
-            updatePending: boolean
-          }>
-          SwitchBootPartition(partitionNumber: number): Promise<{
-            success: boolean; method: string; previousBoot: number; newBoot: number; message: string
-          }>
-          GetAvailableOSVersions(): Promise<{
-            version: string; isLatest: boolean; isInstalled: boolean; filename: string; size: number
-          }[]>
-          GetOSInstallMode(): Promise<string>
-          CheckOSManagerReady(): Promise<{ ready: boolean; code?: string; message?: string }>
-          InstallOSVersion(version: string): void
-          CancelOSInstall(): void
-          CheckOSCompatibility(targetVersion: string): Promise<CompatibilityResult>
-          IsSleepScreenSupported(): Promise<boolean>
-          GetSleepScreen(): Promise<string>
-          SetSleepScreen(imagePath: string): Promise<void>
-          ResetSleepScreen(): Promise<void>
-          RestartXochitl(): Promise<void>
-          RescanLibrary(): Promise<void>
-          DeleteAllLogs(): Promise<void>
-          GetSupportBundlePreview(): Promise<{ included: string[]; excluded: string[] }>
-          GenerateSupportBundle(deviceID: string): void
-          UploadSupportBundle(deviceID: string): void
-          AppendSupportBundle(remoteID: string, deviceID: string): void
-          DeleteSupportBundle(remoteID: string): Promise<void>
-          GetBundleHistory(): Promise<{ id: string; remoteId: string; url: string; deviceName: string; deviceId: string; uploadedAt: number; lastAppended?: number; expiresAt?: number }[]>
-          CopyToClipboard(text: string): void
-          GetSupportBundleSessionID(): Promise<string>
-          ResetSupportBundleSession(): Promise<void>
-          SubmitProblemReport(description: string, email: string, bundleURL: string, deviceID: string): Promise<void>
-        }
-      }
-    }
-    runtime: {
-      EventsOn(eventName: string, callback: (...args: unknown[]) => void): () => void
-      BrowserOpenURL(url: string): void
-    }
-  }
-}
+const STOP_PARTWAY_WARNING = 'Stopping partway can leave mods not working until this runs again.'
+const VELLUM_STOP_WARNING = 'Stopping partway can leave Vellum broken until it is repaired.'
 
 export default function App() {
   const [step, setStep] = useState<Step>('connect')
   const [sshAgentAvailable, setSSHAgentAvailable] = useState(false)
+  // Defaults to desktop so a failed call leaves the user's own key files rather than an empty manager.
+  const [capabilities, setCapabilities] = useState<PlatformCapabilities>({ managedKeys: true, localKeyFiles: true, sshAgent: true, updateCheck: true, keyboardResizesView: false, iPad: false, supportUpload: false })
   const [availableKeys, setAvailableKeys] = useState<SSHKey[]>([])
   const [device, setDevice] = useState<string>('')
   const [deviceInfo, setDeviceInfo] = useState<Record<string, string>>({})
   const [installedPackages, setInstalledPackages] = useState<Map<string, string>>(new Map())
+  const [installTimes, setInstallTimes] = useState<Map<string, number>>(new Map())
   const [refreshingPackages, setRefreshingPackages] = useState(false)
   const [vellumInstalled, setVellumInstalled] = useState<boolean | null>(null)
   const {
     warningsChecked, setWarningsChecked,
-    osUpgradeDetected, setOsUpgradeDetected,
-    prevOsVersion, setPrevOsVersion,
-    newOsVersion, setNewOsVersion,
+    warningsCheckedRef,
     osMismatchDetected, setOsMismatchDetected,
     osMismatchDetectedRef,
     storedOsVersion, setStoredOsVersion,
     currentOsVersion, setCurrentOsVersion,
-    checklistLoading, setChecklistLoading,
     compatibilityStatus, setCompatibilityStatus,
-    hashtabMismatch, setHashtabMismatch,
-    hashtabMissing, setHashtabMissing,
-    prerelease, setPrerelease,
+    hashtab, setHashtab,
+    osChannel, setOsChannel,
+    incompatibleWithLatestOS, setIncompatibleWithLatestOS,
     timezoneMismatch, setTimezoneMismatch,
     deviceTimezone, setDeviceTimezone,
     selectedTimezone, setSelectedTimezone,
     reenableStatus, setReenableStatus,
-    showAutoUpdateBanner, setShowAutoUpdateBanner,
     updateServiceStatus, setUpdateServiceStatus,
     xochitlRunning, setXochitlRunning,
     xoviActive, setXoviActive,
     activeLauncher, setActiveLauncher,
     currentLauncher, setCurrentLauncher,
-    guideOffer, setGuideOffer,
-    guideInstalling, setGuideInstalling,
+    guideStatus, setGuideStatus,
     showGuideRestartDialog, setShowGuideRestartDialog,
   } = useWarnings()
 
-  const [installing, setInstalling] = useState(false)
-  const [activeTab, setActiveTab] = useState<'mods' | 'maintenance' | 'utilities'>('mods')
+  const keyboardVisible = useKeyboardVisible()
+  const { collapsed: tabsCollapsed, expand: expandTabs } = useCollapseOnScroll()
+
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0 })
+    expandTabs()
+  }, [step])
+
+  const [activeTab, setActiveTab] = useState<'mods' | 'system'>('mods')
+  const [modsLocked, setModsLocked] = useState(false)
+  const freshDeviceRef = useRef(false)
+  const autoSelectedRef = useRef(false)
   const [installQueue, setInstallQueue] = useState<Set<string>>(new Set())
   const [uninstallQueue, setUninstallQueue] = useState<Set<string>>(new Set())
-  const [uninstalling, setUninstalling] = useState(false)
-  const [commandRunning, setCommandRunning] = useState(false)
 
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | undefined>(undefined)
+  const openSettings = (section?: SettingsSection) => {
+    setSettingsSection(section)
+    setShowSettingsDialog(true)
+  }
   const [showSoftwareManager, setShowSoftwareManager] = useState(false)
   const [showSupportBundles, setShowSupportBundles] = useState(false)
+  const [supportScreen, setSupportScreen] = useState<SupportScreen>('report')
   const [appVersion, setAppVersion] = useState('dev')
-  const [tabVisibility, setTabVisibility] = useState<Record<string, boolean>>({
-    mods: true,
-    maintenance: true,
-    utilities: true,
-  })
   const [proxyMode, setProxyMode] = useState(true)
   const [suppressSystemFileWarnings, setSuppressSystemFileWarnings] = useState(false)
-  const [suppressGuideOffer, setSuppressGuideOffer] = useState(false)
   const [preventSleep, setPreventSleep] = useState(true)
-  const [theme, setTheme] = useState('system')
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'system')
   const [terminalTheme, setTerminalTheme] = useState('match')
   const [editorTheme, setEditorTheme] = useState('match')
   const [checkForUpdates, setCheckForUpdates] = useState(true)
@@ -266,66 +125,161 @@ export default function App() {
   const [dnsErrorShown, setDnsErrorShown] = useState(false)
   const [showDnsErrorModal, setShowDnsErrorModal] = useState(false)
 
-
   const [packages, setPackages] = useState<PackageInfo[]>([])
+  // Null means the solve has not returned, which is not nothing to upgrade, so the count falls back to the catalog diff.
+  const [upgradeCandidates, setUpgradeCandidates] = useState<Map<string, UpgradeCandidate> | null>(null)
+
+  const refreshUpgradeCandidates = useCallback(async () => {
+    try {
+      const c = await PackagesService.GetUpgradeCandidates()
+      setUpgradeCandidates(upgradeCandidateMap(c))
+    } catch (err) {
+      debugLog('GetUpgradeCandidates failed:', err)
+      setUpgradeCandidates(null)
+    }
+  }, [])
+
+
+  const { follows } = useFollowedDevs()
+  // Loaded once the index is ready: a device with nothing cached looks the same as an index that has not arrived.
+  const [deviceOutlooks, setDeviceOutlooks] = useState<Map<string, DeviceOutlook>>(new Map())
+
+  const refreshDeviceOutlooks = useCallback(async () => {
+    try {
+      const outlooks = await ConnectionService.GetDeviceOutlooks()
+      setDeviceOutlooks(new Map((outlooks || []).map(o => [o.deviceId, o])))
+    } catch (err) {
+      debugLog('GetDeviceOutlooks failed:', err)
+    }
+  }, [])
+
+  // Empty is not unavailable: the catalog loads asynchronously at startup, so a browse view that opens first must not report it unavailable.
+  const [catalogStatus, setCatalogStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+
+  useEffect(() => {
+    const offLoaded = onEvent('metadata:loaded', () => {
+      refreshDeviceOutlooks()
+      // Once a device is connected the list is filtered for it; the unfiltered catalog would mark every package compatible.
+      const connectedDevice = deviceRef.current
+      const loadPackages = connectedDevice
+        ? Promise.all([DeviceService.GetDeviceInfo(), DeviceService.GetDeviceArchitecture(connectedDevice)])
+            .then(([info, arch]) => PackagesService.GetPackages(connectedDevice, info?.firmware || '', arch))
+        : PackagesService.GetPackages('', '', '')
+      // A deep link waits on this; an empty list would send it to a search for the name.
+      loadPackages
+        .then(pkgs => { if (pkgs?.length) setPackages(pkgs) })
+        .catch(() => {})
+        .finally(() => setCatalogStatus('ready'))
+    })
+    const offError = onEvent('metadata:error', () => setCatalogStatus('error'))
+    PackagesService.CatalogLoadFailed()
+      .then(failed => { if (failed) setCatalogStatus(prev => prev === 'loading' ? 'error' : prev) })
+      .catch(() => {})
+    return () => { offLoaded(); offError() }
+  }, [refreshDeviceOutlooks])
+
+  // RefreshMetadata does not emit metadata:loaded, so the unfiltered list is fetched here; success also recovers a catalog that failed at startup.
+  const refreshBrowseCatalog = useCallback(async () => {
+    await PackagesService.RefreshMetadata()
+    setPackages(await PackagesService.GetPackages('', '', '') || [])
+    setCatalogStatus('ready')
+  }, [])
+
+  // The browse page and the mods tab are never mounted together, so whichever is on screen answers the ref.
+  const openPackageByNameRef = useRef<((name: string) => void) | null>(null)
+  const [deepLinkedPackage, setDeepLinkedPackage] = useState('')
+
+  // Pulled rather than carried on the event: a cold start hands the URL to Go before this webview exists; both paths call TakeDeepLink, which clears it.
+  useEffect(() => {
+    const take = () => {
+      SystemService.TakeDeepLink()
+        .then(link => { if (link?.target === 'package' && link.name) setDeepLinkedPackage(link.name) })
+        .catch(() => {})
+    }
+    take()
+    return onEvent('deeplink:received', take)
+  }, [])
+
+  // A cold start fetches the catalog at the same time, so the link usually arrives first; wait rather than report a package missing.
+  useEffect(() => {
+    if (!deepLinkedPackage || catalogStatus === 'loading') return
+    if (step === 'connect') { setStep('browse'); return }
+    if (step !== 'browse' && !modsLocked) setActiveTab('mods')
+    const openPackage = openPackageByNameRef.current
+    if (!openPackage) return
+    openPackage(deepLinkedPackage)
+    setDeepLinkedPackage('')
+  }, [deepLinkedPackage, catalogStatus, step, activeTab, modsLocked])
+
+  useBackHandler(() => setStep('connect'), step === 'browse')
+
   const [systemTasks, setSystemTasks] = useState<SystemTaskInfo[]>([])
   const [maintenanceCommands, setMaintenanceCommands] = useState<Record<string, MaintenanceCommandInfo[]>>({})
 
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([])
+  // Until the first load lands, an empty list looks like no devices and the connect step would show the add form first.
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false)
   const [connectedDeviceId, setConnectedDeviceId] = useState('')
   const [queueError, setQueueError] = useState<string | null>(null)
-  const [pendingInstallConfirm, setPendingInstallConfirm] = useState<{
-    packages: string[]
-    requested: string[]
-  } | null>(null)
-  const [pendingProviderChoice, setPendingProviderChoice] = useState<{
-    choices: VirtualChoice[]
-    index: number
-    selected: string[]
-    requested: string[]
-  } | null>(null)
-  const [providerSelection, setProviderSelection] = useState<string | null>(null)
+
+  const [commandOutputOpen, setCommandOutputOpen] = useState(false)
+  const [guideRestartError, setGuideRestartError] = useState<{ message: string; detail: string } | null>(null)
+
+  const systemStatus = deriveSystemStatus({
+    installedPackages,
+    maintenanceCommands,
+    systemTasks,
+    vellumInstalled,
+    updateService: updateServiceStatus,
+    xochitlRunning,
+    xoviActive,
+    activeLauncher,
+    currentLauncher,
+    hashtab,
+    osMismatchDetected,
+    osChannel,
+    incompatibleWithLatestOS,
+    reenableStatus,
+    timezone: timezoneMismatch,
+    guide: guideStatus,
+  })
+  const [upgradeQueue, setUpgradeQueue] = useState<Set<string>>(new Set())
+
 
   useEffect(() => {
-    if (pendingProviderChoice === null) {
-      setProviderSelection(null)
-      return
-    }
-    const step = pendingProviderChoice.choices[pendingProviderChoice.index]
-    const recommended = step?.providers.find(p => p.name === step.default && p.compatible)
-    setProviderSelection(recommended?.name ?? null)
-  }, [pendingProviderChoice])
-  const [pendingXoviInfo, setPendingXoviInfo] = useState<InstallSet | null>(null)
-  const [pendingOxideInfo, setPendingOxideInfo] = useState<InstallSet | null>(null)
-  const [launcherctlDecision, setLauncherctlDecision] = useState<'yes' | 'no' | null>(null)
-  const [oxideAckChecked, setOxideAckChecked] = useState(false)
-  const [tripletapDecision, setTripletapDecision] = useState<'yes' | 'no' | null>(null)
-  const [xoviAckChecked, setXoviAckChecked] = useState(false)
-  const [pendingUninstallConfirm, setPendingUninstallConfirm] = useState<{
-    selected: string[]
-    packages: string[]
-    blocked: Record<string, string[]> | null
-    useRecursive: boolean
-    worldDeps?: string[]
-  } | null>(null)
+    if (!upgradeCandidates) return
+    setUpgradeQueue(prev => {
+      const stillOffered = new Set([...prev].filter(name => upgradeCandidates.has(name)))
+      return stillOffered.size === prev.size ? prev : stillOffered
+    })
+  }, [upgradeCandidates])
 
-  const [runningReenable, setRunningReenable] = useState(false)
-  const [upgradesAvailable, setUpgradesAvailable] = useState(false)
-  const [reinstallInProgress, setReinstallInProgress] = useState(false)
+  const [planSolve, setPlanSolve] = useState<PlanSolveFacts>(noPlanSolveFacts)
+  const [planOpen, setPlanOpen] = useState(false)
+  const [planBar, setPlanBar] = useState<PlanBarModel | null>(null)
+  const [osSyncStatus, setOsSyncStatus] = useState<OsSyncStatus | null>(null)
+  const planActionsRef = useRef<PlanActions | null>(null)
+  const touchLayout = useTouchLayout()
 
-  const launcherActive = launcherSelected(activeLauncher)
-  const launcherConfigured = launcherSelected(currentLauncher)
+  useEffect(() => {
+    if (modsLocked && activeTab === 'mods') setActiveTab('system')
+  }, [modsLocked, activeTab])
 
-  const xoviNotRunning = useMemo(() =>
-    installedPackages.has('xovi') && xochitlRunning && !xoviActive && !hashtabMismatch && !hashtabMissing && !launcherConfigured,
-    [installedPackages, xochitlRunning, xoviActive, hashtabMismatch, hashtabMissing, launcherConfigured]
-  )
-
+  const shownPlanBar = planBar && (activeTab === 'mods' || planBar.everyTab) ? planBar : null
+  const planBarClearance = shownPlanBar ? (touchLayout ? '72px' : '64px') : '0px'
+  // Kept after the strip leaves so it slides away showing what it said.
+  const lastStripModel = useRef<PlanBarModel | null>(null)
+  if (shownPlanBar) lastStripModel.current = shownPlanBar
+  const stripModel = shownPlanBar ?? lastStripModel.current
+  const stripShown = !!shownPlanBar && !planOpen
+  const modsStatus = useMemo(() => deriveModsStatus({
+    packages, installedPackages, upgradeCandidates, follows, installQueue, upgradeQueue, uninstallQueue, solve: planSolve,
+  }), [packages, installedPackages, upgradeCandidates, follows, installQueue, upgradeQueue, uninstallQueue, planSolve])
 
   const deviceRef = useRef(device)
   deviceRef.current = device
-
-
+  const installedPackagesRef = useRef(installedPackages)
+  installedPackagesRef.current = installedPackages
 
   const resolvedAppTheme = useMemo((): 'dark' | 'light' => {
     if (theme === 'system') {
@@ -350,8 +304,19 @@ export default function App() {
 
   const rescanAllPackages = async () => {
     try {
-      const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
-      setInstalledPackages(new Map(Object.entries(installedVersions || {})))
+      const installed = await PackagesService.GetInstalledPackagesWithVersions()
+      const versions = new Map<string, string>()
+      const times = new Map<string, number>()
+      for (const [name, val] of Object.entries(installed || {})) {
+        const parts = (val as string).split('|')
+        versions.set(name, parts[0])
+        if (parts[1]) times.set(name, parseInt(parts[1], 10))
+      }
+      const installedBefore = installedPackagesRef.current
+      setInstalledPackages(versions)
+      setInstallTimes(times)
+      setUpgradeCandidates(prev => withoutUninstalled(prev, installedBefore, versions))
+      void refreshUpgradeCandidates()
       return true
     } catch (err) {
       console.error('Failed to rescan package status:', err)
@@ -360,38 +325,46 @@ export default function App() {
   }
 
   const resetOperationStateRef = useRef<() => void>(() => {})
+  const restorePendingPromptRef = useRef<() => Promise<void>>(async () => {})
+  const resetConnectChecksRef = useRef<() => void>(() => {})
   const refreshDeviceStateRef = useRef<(deviceType: string) => Promise<void>>(async () => {})
+  // The connect checks may land before the restore does, so only their absence is waited on; they were cleared when the connection dropped.
   const handleConnectionRestored = useCallback(async (deviceType: string) => {
+    const checks = warningsCheckedRef.current ? Promise.resolve() : waitForConnectChecks()
     resetOperationStateRef.current()
+    void restorePendingPromptRef.current()
     if (deviceType) {
       setDevice(deviceType)
     }
-    try {
+    const reload = (async () => {
       await refreshDeviceStateRef.current(deviceType)
-    } catch (err) {
-      debugLog('Failed to refresh device info on reconnect:', err)
-    }
-    await rescanAllPackages()
+      await rescanAllPackages()
+    })()
+    await Promise.all([reload, checks])
   }, [])
 
   const handleConnectionLost = useCallback(() => {
     resetOperationStateRef.current()
+    resetConnectChecksRef.current()
   }, [])
 
   const {
     connectionStatus,
     setConnectionStatus,
+    restoreSession,
     reconnectAttempt,
     setReconnectAttempt,
     reconnectMaxAttempts,
+    retryPhase,
+    connectionErrorCode,
     connectionError,
-    setConnectionError,
+    connectionErrorDetails,
+    reportConnectionFailure,
     showFilesystemRestoreError,
     isRetryingFilesystemRestore,
-    writeableRootBusy,
-    setWriteableRootBusy,
+    writableRootBusy,
+    setWritableRootBusy,
     handleRetryRestore: handleFilesystemRestoreRetry,
-    handleRebootDevice: handleFilesystemRestoreReboot,
     handleDismissRestoreError: handleFilesystemRestoreDismiss,
   } = useConnectionEvents({
     onConnectionRestored: handleConnectionRestored,
@@ -400,176 +373,209 @@ export default function App() {
     deviceRef,
   })
 
+  // A dropped link usually recovers in a second; a failed connection is terminal, so it shows at once.
+  // Acknowledged per version for the session, not persisted: a reboot into the other partition can land on a different beta.
+  const [betaAcknowledgedVersion, setBetaAcknowledgedVersion] = useState('')
+  const betaModalOpen = warningsChecked && systemStatus.osPrerelease && osChannel?.activeVersion !== betaAcknowledgedVersion
+  const acknowledgeBeta = () => setBetaAcknowledgedVersion(osChannel?.activeVersion ?? '')
+
+  const disconnected = step !== 'connect' && step !== 'browse' && connectionStatus !== 'connected'
+  // The backend message restates the dialog title, so drop that part.
+  const connectionDetail = (connectionError || '').replace(/^connection (failed|lost):\s*/i, '')
+    || 'Could not reach your reMarkable.'
+  // Unsaved connections are disconnected on failure before this point, so a saved id is always present here.
+  const [manualReconnecting, setManualReconnecting] = useState(false)
+  // Disconnect stays available mid-reconnect, so the abandoned attempt must not land on the connect page.
+  const reconnectAbandonedRef = useRef(false)
+  const handleReconnect = async () => {
+    if (!connectedDeviceId) return
+    reconnectAbandonedRef.current = false
+    setManualReconnecting(true)
+    try {
+      const result = await ConnectionService.ConnectToSavedDevice(connectedDeviceId)
+      if (reconnectAbandonedRef.current) return
+      if (result.success) {
+        await restoreSession(result.device || 'unknown')
+      } else {
+        reportConnectionFailure(result.code ? result : result.message)
+      }
+    } catch (err) {
+      if (!reconnectAbandonedRef.current) reportConnectionFailure(err)
+    } finally {
+      setManualReconnecting(false)
+    }
+  }
+
+  const [connectionModalVisible, setConnectionModalVisible] = useState(false)
+  useEffect(() => {
+    if (!disconnected) { setConnectionModalVisible(false); return }
+    if (connectionStatus === 'failed') { setConnectionModalVisible(true); return }
+    const timer = window.setTimeout(() => setConnectionModalVisible(true), 1500)
+    return () => window.clearTimeout(timer)
+  }, [disconnected, connectionStatus])
+
+  const [shellRunning, setShellRunning] = useState(false)
+
+  const [guideAcknowledged, setGuideAcknowledged] = useState(false)
+  useEffect(() => {
+    if (activeTab !== 'system' || !guideStatus?.unseen || guideAcknowledged) return
+    setGuideAcknowledged(true)
+    FilesService.MarkGuideSeen().catch(() => {})
+  }, [activeTab, guideStatus, guideAcknowledged])
+
+  // Package updates are deliberately absent: the Mods tab carries that count.
+  const systemAlert = systemAlertLevel(
+    warningsChecked ? Object.values(systemStatus.rows) : [],
+    { guideNews: !!guideStatus?.unseen && !guideAcknowledged, shellRunning },
+  )
+
+  // Only on a first look at a tablet; moving the user mid-session because a check flipped would be wrong. Info does not qualify.
+  useEffect(() => {
+    if (!warningsChecked || !freshDeviceRef.current || autoSelectedRef.current) return
+    autoSelectedRef.current = true
+    if (pullsFocus(systemAlert)) {
+      setActiveTab('system')
+    }
+  }, [warningsChecked, systemAlert])
+
   const {
-    bootstrapping,
-    setBootstrapping,
-    bootstrapOutput,
-    setBootstrapOutput,
-    bootstrapError,
-    setBootstrapError,
-    bootstrapSuccess,
-    setBootstrapSuccess,
     vellumBrokenInstall,
     setVellumBrokenInstall,
-    vellumCleaning,
-    setVellumCleaning,
-    vellumUninstalling,
-    setVellumUninstalling,
-    vellumUninstallOutput,
-    setVellumUninstallOutput,
-    vellumUninstallError,
-    setVellumUninstallError,
-    vellumUninstallSuccess,
-    setVellumUninstallSuccess,
   } = useVellumEvents({
     setVellumInstalled,
-    setInstalledPackages,
-    setShowSettingsDialog,
-    rescanAllPackages,
   })
 
   const checkDnsProxyError = async (dnsError: boolean) => {
     if (!dnsError || dnsErrorShown) return
-    const currentProxyMode = await window.go.main.App.GetSettings().then(s => s.proxyMode)
+    const currentProxyMode = await SystemService.GetSettings().then(s => s.proxyMode)
     if (!currentProxyMode) {
       setShowDnsErrorModal(true)
       setDnsErrorShown(true)
     }
   }
 
-
-
   const selectedTimezoneRef = useRef(selectedTimezone)
   selectedTimezoneRef.current = selectedTimezone
 
-  const {
-    output,
-    setOutput,
-    currentComponent,
-    progressStatus,
-    progressIndex,
-    setProgressIndex,
-    progressTotal,
-    setProgressTotal,
-    progressPercentage,
-    setProgressPercentage,
-    showProgressModal,
-    setShowProgressModal,
-    progressModalType,
-    setProgressModalType,
-    showRebuildDialog,
-    setShowRebuildDialog,
-    dialogRequest,
-    setDialogRequest,
-    dialogRespondedRef,
-    runningHookTitle,
-    setRunningHookTitle,
-    lastInstallSuccess,
-    setLastInstallSuccess,
-    lastOperationType,
-    setLastOperationType,
-    showStartUIDialog,
-    setShowStartUIDialog,
-  } = useInstallEvents({
-    setInstalling,
-    setUninstalling,
-    setCommandRunning,
-    setInstallQueue,
-    setXochitlRunning,
-    setXoviActive,
-    setActiveLauncher,
-    setCurrentLauncher,
-    setHashtabMismatch,
-    setHashtabMissing,
-    setCompatibilityStatus,
-    checkDnsProxyError,
-    rescanAllPackages,
-    osMismatchDetectedRef,
-  })
-
-  const {
-    maintenanceOutput,
-    setMaintenanceOutput,
-    commandContext,
-    setCommandContext,
-    currentRunningCommand,
-    setCurrentRunningCommand,
-    runningSystemTask,
-    setRunningSystemTask,
-    runningSystemTaskRef,
-    settingTimezone,
-    setSettingTimezone,
-    settingTimezoneRef,
-    manuallyStoppedRef,
-    rescanning,
-    setRescanning,
-  } = useMaintenanceEvents({
-    setOutput,
-    setCommandRunning,
-    setShowProgressModal,
-    setProgressModalType,
-    setDialogRequest,
-    setRunningHookTitle,
-    setInstalling,
-    setHashtabMismatch,
-    setHashtabMissing,
-    setTimezoneMismatch,
-    setDeviceTimezone,
-    setSelectedTimezone,
-    setUpdateServiceStatus,
-    setXochitlRunning,
-    setXoviActive,
-    setActiveLauncher,
-    setCurrentLauncher,
-    setUpgradesAvailable,
-    setOsMismatchDetected,
-    osMismatchDetectedRef,
-    setChecklistLoading,
-    setCompatibilityStatus,
-    setDeviceInfo,
-    setPackages,
-    checkDnsProxyError,
-    rescanAllPackages,
-    deviceRef,
-    selectedTimezoneRef,
-    setActiveTab,
-  })
-
-  const startMaintenanceOperation = (options?: { showModal?: boolean; resetProgress?: boolean }) => {
-    if (options?.showModal !== false) setShowProgressModal(true)
-    setProgressModalType('maintenance')
-    if (options?.resetProgress !== false) setProgressPercentage(0)
-    setCommandRunning(true)
-    setMaintenanceOutput('')
-    setCommandContext('maintenance')
+  // A status the backend could not read rejects; the row keeps what it last showed rather than a default the tablet never reported.
+  const refreshXochitlStatus = async () => {
+    const status = await DeviceService.GetXochitlStatus().catch(() => null)
+    if (!status) return
+    setXochitlRunning(status.running)
+    setXoviActive(status.xoviActive)
+    setActiveLauncher(status.activeLauncher || '')
+    setCurrentLauncher(status.currentLauncher || '')
   }
+
+  const refreshHashtabStatus = async () => {
+    const status = await DeviceService.CheckHashtabVersion().catch(() => null)
+    if (status) setHashtab(status)
+  }
+
+  // The update service can take seconds to settle after a task flips it, so poll until enabled and running agree.
+  const refreshDeviceStatus = async () => {
+    const tzStatus = await DeviceService.GetTimezoneStatus().catch(() => null)
+    let updateStatus = await DeviceService.GetUpdateServiceStatus().catch(() => null)
+    for (let i = 0; i < 6 && updateStatus && updateStatus.enabled !== updateStatus.running; i++) {
+      await new Promise(r => setTimeout(r, 500))
+      updateStatus = await DeviceService.GetUpdateServiceStatus().catch(() => null)
+    }
+    if (updateStatus) setUpdateServiceStatus(updateStatus)
+    await refreshXochitlStatus()
+    await refreshHashtabStatus()
+    if (!tzStatus) return
+    setTimezoneMismatch(tzStatus.needsUpdate ? tzStatus : null)
+    if (tzStatus.deviceTimezone) {
+      setDeviceTimezone(tzStatus.deviceTimezone)
+      if (!selectedTimezoneRef.current) {
+        setSelectedTimezone(tzStatus.savedTimezone || tzStatus.deviceTimezone)
+      }
+    }
+  }
+
+  const refreshAfterPackageChange = async (dnsError: boolean) => {
+    await checkDnsProxyError(dnsError)
+    await rescanAllPackages()
+    if (osMismatchDetectedRef.current) {
+      PackagesService.GetPackageCompatibilityStatus().then(setCompatibilityStatus).catch(() => {})
+    }
+    await refreshHashtabStatus()
+    await refreshXochitlStatus()
+  }
+
+  // An upgrade can move the OS the catalog is filtered against, so device info and the catalog are read before the installed list.
+  const refreshAfterUpgrade = async (ok: boolean, dnsError: boolean) => {
+    if (ok) {
+      try {
+        const info = await DeviceService.GetDeviceInfo()
+        setDeviceInfo(Object.fromEntries(Object.entries(info ?? {}).map(([k, v]) => [k, v ?? ''])))
+        const arch = await DeviceService.GetDeviceArchitecture(deviceRef.current)
+        const filteredPkgs = await PackagesService.GetPackages(deviceRef.current, info?.firmware || '', arch)
+        setPackages(filteredPkgs || [])
+      } catch (err) {
+        debugLog('Failed to refresh device info after upgrade:', err)
+      }
+    }
+    // apk can upgrade some packages before it fails, so a failed run still leaves installed versions to re-read.
+    await rescanAllPackages()
+    await refreshXochitlStatus()
+    await checkDnsProxyError(dnsError)
+  }
+
+  const {
+    operation,
+    hookRun,
+    prompt: operationPrompt,
+    busy: operationBusy,
+    start: startOperation,
+    stop: stopOperation,
+    stopHook,
+    abandon: abandonOperation,
+    respond: respondToOperation,
+    close: closeOperation,
+    reset: resetOperation,
+    restorePendingPrompt,
+  } = useOperation()
+  restorePendingPromptRef.current = restorePendingPrompt
+  // The plan runs its phases outside the operation hook, so it reports its own run here for everything that waits on a tablet command.
+  const [planApplying, setPlanApplying] = useState(false)
+  const commandRunning = operationBusy || planApplying
+  // A vellum run clears itself when it ends, so a failure is kept here for the surface it ran on.
+  const [vellumFailure, setVellumFailure] = useState<{ target: string; message: string; output: string } | null>(null)
+  const [vellumInstalledDialog, setVellumInstalledDialog] = useState<'installed' | 'reinstalled' | null>(null)
+  const [showVellumUninstalled, setShowVellumUninstalled] = useState(false)
+
+  const { transfers, lastFinished: lastTransferFinished, transferError, setTransferError } = useTransferEvents()
 
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        debugLog('[DEBUG] loadInitialData: starting')
-        const [keys, pkgs, tasks, devices, version, settings, agentAvail] = await Promise.all([
-          window.go.main.App.GetDefaultSSHKeys(),
-          window.go.main.App.GetPackages('', '', ''),
-          window.go.main.App.GetSystemTasksInfo(),
-          window.go.main.App.GetSavedDevices(),
-          window.go.main.App.GetAppVersion(),
-          window.go.main.App.GetSettings(),
-          window.go.main.App.IsSSHAgentAvailable().catch(() => false),
+        const [keys, pkgs, tasks, devices, version, settings, agentAvail, capabilities] = await Promise.all([
+          ConnectionService.GetDefaultSSHKeys(),
+          PackagesService.GetPackages('', '', ''),
+          PackagesService.GetSystemTasksInfo(),
+          ConnectionService.GetSavedDevices(),
+          SystemService.GetAppVersion(),
+          SystemService.GetSettings(),
+          ConnectionService.IsSSHAgentAvailable().catch(() => false),
+          SystemService.GetPlatformCapabilities().catch(() => ({ managedKeys: true, localKeyFiles: true, sshAgent: true, updateCheck: true, keyboardResizesView: false, iPad: false, supportUpload: false })),
         ])
-        debugLog('[DEBUG] loadInitialData: got pkgs', pkgs?.length, pkgs)
 
         setAvailableKeys(keys || [])
         setSSHAgentAvailable(!!agentAvail)
+        setCapabilities(capabilities)
 
-        setPackages(pkgs || [])
+        // Asked at mount, this can land after metadata:loaded's list and must not replace it with the empty one.
+        if (pkgs?.length) {
+          setPackages(pkgs)
+          setCatalogStatus('ready')
+        }
         setSystemTasks(tasks || [])
         setSavedDevices(devices || [])
+        refreshDeviceOutlooks()
         setAppVersion(version || 'dev')
-        setTabVisibility(settings?.tabVisibility || { mods: true, maintenance: true, utilities: true })
         setProxyMode(settings?.proxyMode ?? true)
         setSuppressSystemFileWarnings(settings?.suppressSystemFileWarnings ?? false)
-        setSuppressGuideOffer(settings?.suppressGuideOffer ?? false)
         setPreventSleep(settings?.preventSleep ?? true)
         const loadedTheme = settings?.theme || 'system'
         setTheme(loadedTheme)
@@ -580,33 +586,88 @@ export default function App() {
         setCheckForUpdates(shouldCheckUpdates)
         setSSHAgentSocketPath(settings?.sshAgentSocketPath || '')
 
-        if (shouldCheckUpdates) {
-          window.go.main.App.CheckForAppUpdate().then((result) => {
+        SystemService.IsOutsideApplicationsFolder().catch(() => false).then((outside) => {
+          if (outside) {
+            toast.warning('Move reManager to Applications', {
+              description: 'Otherwise macOS may ask for permissions again on every launch.',
+              action: {
+                label: 'Move',
+                onClick: () => SystemService.MoveToApplications().catch((err) => {
+                  toast.error(handleError(err, 'Could not move reManager. Drag it into Applications instead.'))
+                }),
+              },
+              duration: Infinity,
+              closeButton: true,
+            })
+            return
+          }
+          if (!shouldCheckUpdates) return
+          SystemService.CheckForAppUpdate().then((result) => {
             if (result.updateAvailable && result.latestVersion) {
               toast.info(`Update available: ${result.latestVersion}`, {
                 description: `You're running ${result.currentVersion}`,
                 action: {
-                  label: 'View Release',
-                  onClick: () => window.runtime.BrowserOpenURL(result.releaseURL)
+                  label: 'View release',
+                  onClick: () => SystemService.OpenExternalURL(result.releaseURL)
                 },
                 duration: 6000,
               })
             }
           }).catch((err) => {
-            debugLog('[DEBUG] Update check failed:', err)
+            debugLog('Update check failed:', err)
           })
+        })
+
+        const current = await ConnectionService.GetCurrentConnection().catch(() => null)
+        if (current) {
+          setConnectedDeviceId(current.deviceId)
+          setDevice(current.deviceType)
+          const checks = waitForConnectChecks()
+          void ConnectionService.ResendConnectState()
+          await refreshDeviceStateRef.current(current.deviceType)
+          await checks
+          setStep('select')
         }
       } catch (err) {
         debugLog('Could not load initial data:', err)
+      } finally {
+        setInitialDataLoaded(true)
       }
     }
     loadInitialData()
   }, [])
 
   useEffect(() => {
-    window.go.main.App.GetSystemColorScheme().then((scheme: string) => {
-      if (scheme === 'dark' || scheme === 'light') {
-        setSystemPrefersDark(scheme === 'dark')
+    const offSettings = onSyncedChange(SyncKey.SettingsSyncKey, async () => {
+      const settings = await SystemService.GetSettings()
+      setProxyMode(settings.proxyMode)
+      setSuppressSystemFileWarnings(settings.suppressSystemFileWarnings)
+      const syncedTheme = settings.theme || 'system'
+      setTheme(syncedTheme)
+      localStorage.setItem('theme', syncedTheme)
+      setTerminalTheme(settings.terminalTheme || 'match')
+      setEditorTheme(settings.editorTheme || 'match')
+    })
+    const offDevices = onSyncedChange(SyncKey.DevicesSyncKey, async () => {
+      setSavedDevices(await ConnectionService.GetSavedDevices() || [])
+      refreshDeviceOutlooks()
+    })
+    const offDeviceInfo = onSyncedChange(SyncKey.DeviceInfoSyncKey, refreshDeviceOutlooks)
+    return () => {
+      offSettings()
+      offDevices()
+      offDeviceInfo()
+    }
+  }, [refreshDeviceOutlooks])
+
+  useEffect(() => {
+    void applyThemeWithPortal(theme)
+  }, [theme])
+
+  useEffect(() => {
+    SystemService.GetSystemColorScheme().then(scheme => {
+      if (scheme !== ColorScheme.ColorSchemeUnknown) {
+        setSystemPrefersDark(scheme === ColorScheme.ColorSchemeDark)
       }
     }).catch(() => {})
 
@@ -615,12 +676,9 @@ export default function App() {
     mediaQuery.addEventListener('change', handleChange)
 
     let unsubscribeTheme: (() => void) | undefined
-    if (typeof window.runtime !== 'undefined') {
-      unsubscribeTheme = window.runtime.EventsOn('system-theme-changed', (...args: unknown[]) => {
-        const scheme = args[0] as string
-        if (scheme === 'dark' || scheme === 'light') {
-          setSystemPrefersDark(scheme === 'dark')
-        }
+    {
+      unsubscribeTheme = onEvent('system-theme-changed', scheme => {
+        setSystemPrefersDark(scheme === ColorScheme.ColorSchemeDark)
       })
     }
 
@@ -631,140 +689,121 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (activeTab === 'maintenance' && step !== 'connect') {
+    if (activeTab === 'system' && step !== 'connect') {
       fetchUpdateServiceStatus()
     }
   }, [activeTab, step])
 
   useEffect(() => {
-    if (!updateServiceStatus.enabled) {
-      setShowAutoUpdateBanner(false)
-    }
-  }, [updateServiceStatus.enabled])
-
-  useEffect(() => {
     if (connectionStatus !== 'connected' || commandRunning) return
     const interval = window.setInterval(() => {
-      window.go.main.App.GetXochitlStatusQuick().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
+      DeviceService.GetXochitlStatusQuick().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive) }).catch(() => {})
     }, 60000)
     return () => clearInterval(interval)
   }, [connectionStatus, commandRunning])
 
-
-
-  useEffect(() => {
-    if (activeTab === 'mods' && !tabVisibility.mods) {
-      setActiveTab('maintenance')
-    }
-    if (activeTab === 'utilities' && !tabVisibility.utilities) {
-      setActiveTab('maintenance')
-    }
-  }, [tabVisibility.mods, tabVisibility.utilities, activeTab])
-
   const resetOperationState = () => {
     setInstallQueue(new Set())
     setUninstallQueue(new Set())
-    setOutput('')
-    setHashtabMismatch(null)
-    setHashtabMissing(false)
-    setPrerelease(null)
-    setOsMismatchDetected(false)
-    osMismatchDetectedRef.current = false
-    setOsUpgradeDetected(false)
-    setCompatibilityStatus(null)
-    setStoredOsVersion('')
-    setCurrentOsVersion('')
-    setChecklistLoading(false)
-    setWarningsChecked(false)
-    setBootstrapping(false)
-    setBootstrapOutput('')
-    setBootstrapError(null)
-    setVellumUninstalling(false)
-    setVellumUninstallOutput('')
+    setUpgradeQueue(new Set())
+    resetOperation()
+    setVellumFailure(null)
     setVellumBrokenInstall(null)
-    setVellumCleaning(false)
-    setConnectionError(null)
+    reportConnectionFailure(null)
     setReconnectAttempt(0)
-    setWriteableRootBusy(false)
-    setUpgradesAvailable(false)
-    setSettingTimezone(false)
-    settingTimezoneRef.current = false
-    setCommandRunning(false)
-    runningSystemTaskRef.current = null
-    setRunningSystemTask(null)
-    setInstalling(false)
-    setUninstalling(false)
-    setRunningReenable(false)
+    setWritableRootBusy(false)
     setXochitlRunning(true)
   }
   resetOperationStateRef.current = resetOperationState
 
-  const refreshDeviceState = async (deviceType: string) => {
-    const info = await window.go.main.App.GetDeviceInfo()
-    setDeviceInfo(info)
+  const resetConnectChecks = () => {
+    setHashtab(null)
+    setOsChannel(null)
+    setIncompatibleWithLatestOS([])
+    setOsMismatchDetected(false)
+    osMismatchDetectedRef.current = false
+    setCompatibilityStatus(null)
+    setStoredOsVersion('')
+    setCurrentOsVersion('')
+    setReenableStatus(ReenableStatus.$zero)
+    setUpdateServiceStatus({ enabled: false, running: false })
+    setTimezoneMismatch(null)
+    setDeviceTimezone('')
+    setSelectedTimezone('')
+    setXochitlRunning(true)
+    setXoviActive(false)
+    setActiveLauncher('')
+    setCurrentLauncher('')
+    setWarningsChecked(false)
+    warningsCheckedRef.current = false
+  }
+  resetConnectChecksRef.current = resetConnectChecks
 
-    const arch = await window.go.main.App.GetDeviceArchitecture(deviceType)
-    const filteredPkgs = await window.go.main.App.GetPackages(deviceType, info.firmware || '', arch)
-    setPackages(filteredPkgs || [])
+  // A ceiling on the blocking connect checks, not a point to paint anyway: a dozen SSH round trips took 7.3s on a Paper Pro Move over Wi-Fi and older devices are slower.
+  const CONNECT_CHECKS_TIMEOUT_MS = 60000
 
-    const installedResult = await window.go.main.App.GetInstalledPackagesWithOsCheck()
-    debugLog('refreshDeviceState: GetInstalledPackagesWithOsCheck result:', installedResult)
-    const installedVersions = await window.go.main.App.GetInstalledPackagesWithVersions()
-    setInstalledPackages(new Map(Object.entries(installedVersions || {})))
-    if (installedResult.osUpgraded) {
-      debugLog('refreshDeviceState: osUpgradeDetected=true', installedResult.prevVersion, '->', installedResult.newVersion)
-      setOsUpgradeDetected(true)
-      setPrevOsVersion(installedResult.prevVersion)
-      setNewOsVersion(installedResult.newVersion)
+  const waitForConnectChecks = () => new Promise<void>((resolve, reject) => {
+
+    let settled = false
+    const settle = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      unsubscribe?.()
+      fn()
     }
 
-    const maintCmds = await window.go.main.App.GetAllMaintenanceCommands()
-    setMaintenanceCommands(maintCmds || {})
+    const timer = window.setTimeout(
+      () => settle(() => reject(new Error('Your reMarkable did not finish its checks in time.'))),
+      CONNECT_CHECKS_TIMEOUT_MS,
+    )
+    const unsubscribe = onEvent('connect:warnings', () => settle(resolve))
+  })
+
+  // Subscribes before the refresh because the checks run alongside and would land while nothing was listening.
+  const handleConnected = async (deviceType: string, freshDevice: boolean) => {
+    freshDeviceRef.current = freshDevice
+    autoSelectedRef.current = false
+    const checks = waitForConnectChecks()
+    await refreshDeviceState(deviceType)
+    await checks
+  }
+
+  const refreshDeviceState = async (deviceType: string) => {
+    const info = await DeviceService.GetDeviceInfo()
+    setDeviceInfo(Object.fromEntries(Object.entries(info ?? {}).map(([k, v]) => [k, v ?? ''])))
+
+    const arch = await DeviceService.GetDeviceArchitecture(deviceType)
+    const filteredPkgs = await PackagesService.GetPackages(deviceType, info?.firmware || '', arch)
+    setPackages(filteredPkgs || [])
+
+    const installedResult = await PackagesService.GetInstalledPackagesWithOsCheck().catch(() => null)
+    debugLog('refreshDeviceState: GetInstalledPackagesWithOsCheck result:', installedResult)
+    const installed = await PackagesService.GetInstalledPackagesWithVersions().catch(() => null)
+    if (installed) {
+      const versions = new Map<string, string>()
+      const times = new Map<string, number>()
+      for (const [name, val] of Object.entries(installed)) {
+        const parts = (val as string).split('|')
+        versions.set(name, parts[0])
+        if (parts[1]) times.set(name, parseInt(parts[1], 10))
+      }
+      setInstalledPackages(versions)
+      setInstallTimes(times)
+      void refreshUpgradeCandidates()
+    }
+
+    const maintCmds = await PackagesService.GetAllMaintenanceCommands()
+    setMaintenanceCommands(Object.fromEntries(Object.entries(maintCmds || {}).map(([k, v]) => [k, v ?? []])))
   }
   refreshDeviceStateRef.current = refreshDeviceState
 
-
-  useEffect(() => {
-    if (pendingXoviInfo === null) {
-      setTripletapDecision(null)
-      setXoviAckChecked(false)
-    }
-  }, [pendingXoviInfo])
-
-  useEffect(() => {
-    if (pendingOxideInfo === null) {
-      setLauncherctlDecision(null)
-      setOxideAckChecked(false)
-    }
-  }, [pendingOxideInfo])
-
-  const tripletapInstallable = async (pkgs: string[]) => {
-    try {
-      const sim = await window.go.main.App.SimulateInstall([...pkgs, 'tripletap'], device)
-      return !sim.error
-    } catch (err) {
-      console.error('tripletap conflict check failed:', err)
-      return true
-    }
-  }
-
-  const withPick = (set: InstallSet, pick: string): InstallSet => ({
-    resolved: [...set.resolved, pick],
-    requested: [...set.requested, pick],
-  })
-
-  const continueInstall = async (set: InstallSet) => {
-    if (set.resolved.includes('xovi') && !installedPackages.has('xovi') && await tripletapInstallable(set.resolved)) {
-      setPendingXoviInfo(set)
-      return
-    }
-    handleInstallQueue(set)
-  }
-
-
+  // The page resets before the backend answers, so a command stuck on the reMarkable cannot hold the app on a stale page.
   const handleDisconnect = async () => {
-    await window.go.main.App.Disconnect()
+    reconnectAbandonedRef.current = true
+    const disconnecting = ConnectionService.Disconnect()
     resetOperationState()
+    resetConnectChecks()
     setDeviceInfo({})
     setInstalledPackages(new Map())
     setVellumInstalled(null)
@@ -772,48 +811,71 @@ export default function App() {
     setDevice('')
     setConnectedDeviceId('')
     setConnectionStatus('connected')
-    setGuideOffer(null)
-    setGuideInstalling(false)
+    setGuideStatus(null)
+    setGuideAcknowledged(false)
+    setManualReconnecting(false)
 
-    const devices = await window.go.main.App.GetSavedDevices()
+    await disconnecting.catch(() => {})
+    refreshDeviceOutlooks()
+    const devices = await ConnectionService.GetSavedDevices()
     setSavedDevices(devices || [])
   }
 
-  const handleSettingsDialogOpenChange = (open: boolean) => {
-    setShowSettingsDialog(open)
-    if (!open) {
-      setVellumUninstallOutput('')
-      setVellumUninstallError(null)
-      setVellumUninstallSuccess(false)
-    }
+  const settingsValues: SettingsInfo = {
+    proxyMode, suppressSystemFileWarnings, preventSleep,
+    theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath,
   }
 
-  const handleSaveSettings = async (newTabVisibility: Record<string, boolean>, newProxyMode: boolean, newSuppressSystemFileWarnings: boolean, newPreventSleep: boolean, newTheme: string, newTerminalTheme: string, newEditorTheme: string, newCheckForUpdates: boolean, newSSHAgentSocketPath: string) => {
-    const wasCheckForUpdatesOff = !checkForUpdates
-    setTabVisibility(newTabVisibility)
-    setProxyMode(newProxyMode)
-    setSuppressSystemFileWarnings(newSuppressSystemFileWarnings)
-    setPreventSleep(newPreventSleep)
-    setTheme(newTheme)
-    localStorage.setItem('theme', newTheme)
-    await applyThemeWithPortal(newTheme)
-    setTerminalTheme(newTerminalTheme)
-    setEditorTheme(newEditorTheme)
-    setCheckForUpdates(newCheckForUpdates)
-    setSSHAgentSocketPath(newSSHAgentSocketPath)
-    await window.go.main.App.SaveSettings(newTabVisibility, newProxyMode, newSuppressSystemFileWarnings, newPreventSleep, newTheme, newTerminalTheme, newEditorTheme, newCheckForUpdates, newSSHAgentSocketPath)
+  const showSavedSettings = async () => {
+    const saved = await SystemService.GetSettings().catch(() => null)
+    if (!saved) return
+    setProxyMode(saved.proxyMode)
+    setSuppressSystemFileWarnings(saved.suppressSystemFileWarnings)
+    setPreventSleep(saved.preventSleep)
+    setTheme(saved.theme || 'system')
+    localStorage.setItem('theme', saved.theme || 'system')
+    setTerminalTheme(saved.terminalTheme || 'match')
+    setEditorTheme(saved.editorTheme || 'match')
+    setCheckForUpdates(saved.checkForUpdates)
+    setSSHAgentSocketPath(saved.sshAgentSocketPath || '')
+  }
 
-    const agentAvail = await window.go.main.App.IsSSHAgentAvailable().catch(() => false)
-    setSSHAgentAvailable(!!agentAvail)
+  const handleUpdateSettings = async (patch: Partial<SettingsInfo>) => {
+    const turnedOnUpdateCheck = patch.checkForUpdates === true && !checkForUpdates
 
-    if (wasCheckForUpdatesOff && newCheckForUpdates) {
-      window.go.main.App.CheckForAppUpdate().then((result) => {
+    if (patch.proxyMode !== undefined) setProxyMode(patch.proxyMode)
+    if (patch.suppressSystemFileWarnings !== undefined) setSuppressSystemFileWarnings(patch.suppressSystemFileWarnings)
+    if (patch.preventSleep !== undefined) setPreventSleep(patch.preventSleep)
+    if (patch.terminalTheme !== undefined) setTerminalTheme(patch.terminalTheme)
+    if (patch.editorTheme !== undefined) setEditorTheme(patch.editorTheme)
+    if (patch.checkForUpdates !== undefined) setCheckForUpdates(patch.checkForUpdates)
+    if (patch.sshAgentSocketPath !== undefined) setSSHAgentSocketPath(patch.sshAgentSocketPath)
+    if (patch.theme !== undefined) {
+      setTheme(patch.theme)
+      localStorage.setItem('theme', patch.theme)
+    }
+
+    try {
+      await SystemService.UpdateSettings(patch)
+    } catch (err) {
+      toast.error(handleError(err, 'Could not save settings.'))
+      await showSavedSettings()
+      return
+    }
+
+    if (patch.sshAgentSocketPath !== undefined) {
+      const agentAvail = await ConnectionService.IsSSHAgentAvailable().catch(() => false)
+      setSSHAgentAvailable(!!agentAvail)
+    }
+
+    if (turnedOnUpdateCheck) {
+      SystemService.CheckForAppUpdate().then((result) => {
         if (result.updateAvailable && result.latestVersion) {
           toast.info(`Update available: ${result.latestVersion}`, {
             description: `You're running ${result.currentVersion}`,
             action: {
-              label: 'View Release',
-              onClick: () => window.runtime.BrowserOpenURL(result.releaseURL)
+              label: 'View release',
+              onClick: () => SystemService.OpenExternalURL(result.releaseURL)
             },
             duration: 6000,
           })
@@ -824,94 +886,61 @@ export default function App() {
 
   const handleEnableProxyModeFromModal = async () => {
     setProxyMode(true)
-    await window.go.main.App.SaveSettings(tabVisibility, true, suppressSystemFileWarnings, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath)
+    try {
+      await SystemService.UpdateSettings({ proxyMode: true })
+    } catch (err) {
+      toast.error(handleError(err, 'Could not save settings.'))
+      await showSavedSettings()
+    }
     setShowDnsErrorModal(false)
   }
 
-  const handleUninstallVellum = (removeAllPackages: boolean) => {
-    window.go.main.App.UninstallVellum(removeAllPackages)
+  const runVellum = async (target: string, title: string, run: (id: string) => Promise<unknown>) => {
+    setVellumFailure(null)
+    let output = ''
+    const result = await startOperation({
+      kind: 'vellum',
+      target,
+      title,
+      background: true,
+      reportsOwnFailure: true,
+      onOutput: text => { output += text },
+      run,
+    })
+    if (!result.ok && !result.canceled) setVellumFailure({ target, message: result.error ?? '', output })
+    return result
   }
 
-
-  const runInstallSimulation = async (requested: string[]) => {
-    try {
-      const sim = await window.go.main.App.SimulateInstall(requested, device)
-      if (sim.error) {
-        const pair = sim.conflicts?.[0]
-        setQueueError(pair
-          ? `${pair.package} and ${pair.blocks} can't be installed together. Remove one of them from your install queue.`
-          : "The install queue couldn't be resolved.")
-        return
-      }
-      const filteredPackages = sim.packages.filter((name: string) => !installedPackages.has(name))
-      if (filteredPackages.length === 0) {
-        setInstallQueue(new Set())
-      } else {
-        setPendingInstallConfirm({ packages: filteredPackages, requested: sim.requested })
-      }
-    } catch (err) {
-      console.error('SimulateInstall failed:', err)
-      const pkgs = requested.filter((name) => !installedPackages.has(name))
-      if (pkgs.length === 0) {
-        setInstallQueue(new Set())
-      } else {
-        setPendingInstallConfirm({ packages: pkgs, requested: pkgs })
-      }
-    }
+  const handleInstallVellum = async (target: 'install' | 'repair') => {
+    if (commandRunning) return
+    const result = await runVellum(target, target === 'repair' ? 'Repairing Vellum' : 'Installing Vellum', id => PackagesService.BootstrapVellum(id))
+    if (!result.ok) return
+    setVellumInstalled(true)
+    setVellumInstalledDialog(target === 'repair' ? 'reinstalled' : 'installed')
+    void rescanAllPackages()
   }
 
-  const handleInstallQueue = async (set?: InstallSet) => {
-    const queued = Array.from(installQueue).filter((name) => !installedPackages.has(name))
-    const toInstall = set?.resolved ?? queued
-    const toPin = set?.requested ?? queued
+  const handleUninstallVellum = async (removeAllPackages: boolean) => {
+    const result = await runVellum('uninstall', 'Uninstalling Vellum', id => PackagesService.UninstallVellum(id, removeAllPackages))
+    if (!result.ok) return
+    setVellumInstalled(false)
+    setInstalledPackages(new Map())
+    setShowSettingsDialog(false)
+    setShowVellumUninstalled(true)
+  }
 
-    if (toInstall.length === 0) {
-      setInstallQueue(new Set())
+  const handleCleanupVellum = async () => {
+    if (commandRunning) return
+    const result = await runVellum('cleanup', 'Removing the broken Vellum install', id => PackagesService.CleanupBrokenVellum(id))
+    if (!result.ok) {
+      if (!result.canceled) toast.error(handleError(operationFailure(result), 'Could not remove the broken Vellum install.'))
       return
     }
-
-    setRunningHookTitle(null)
-
-    setShowProgressModal(true)
-    setProgressModalType('install')
-    setProgressIndex(0)
-    setProgressTotal(toInstall.length)
-    setProgressPercentage(0)
-    setInstalling(true)
-    setOutput('')
-    setCommandContext('install')
-    setLastOperationType('install')
-
-    await window.go.main.App.InstallPackages(toPin, toInstall, device)
-    setInstallQueue(new Set())
+    setVellumBrokenInstall(null)
+    setVellumInstalled(false)
   }
 
-  const handleUninstallQueue = async (allPackages?: string[]) => {
-    const toUninstall = allPackages || Array.from(uninstallQueue)
-
-    if (toUninstall.length === 0) {
-      setUninstallQueue(new Set())
-      return
-    }
-
-    setRunningHookTitle(null)
-
-    setShowProgressModal(true)
-    setProgressModalType('install')
-    setProgressIndex(0)
-    setProgressTotal(toUninstall.length)
-    setProgressPercentage(0)
-    setUninstalling(true)
-    setMaintenanceOutput('')
-    setCommandContext('maintenance')
-    setLastOperationType('uninstall')
-
-    await window.go.main.App.UninstallPackages(toUninstall, device)
-    setUninstallQueue(new Set())
-  }
-
-
-  const selectPackageForOSRef = useRef<((name: string, targetOS: string, isCompatible?: boolean) => Promise<void>) | null>(null)
+  const selectPackageForOSRef = useRef<SelectPackageForOSFn | null>(null)
 
   const handleSelectPackageForOS = async (name: string, targetOS: string, isCompatible: boolean = true) => {
     if (selectPackageForOSRef.current) {
@@ -919,12 +948,15 @@ export default function App() {
     }
   }
 
-  const handleTabChange = async (value: 'mods' | 'maintenance' | 'utilities') => {
+  const handleTabChange = async (value: 'mods' | 'system') => {
+    if (value === 'mods' && modsLocked) return
     setActiveTab(value)
+    window.scrollTo({ top: 0 })
+    expandTabs()
     if (value === 'mods') {
       if (connectionStatus === 'connected' && packages.length === 0) {
         try {
-          await window.go.main.App.RefreshMetadata()
+          await PackagesService.RefreshMetadata()
           await refreshDeviceStateRef.current(device)
         } catch (err) {
           debugLog('Failed to reload mod catalog:', err)
@@ -934,37 +966,77 @@ export default function App() {
       }
     }
     if (connectionStatus === 'connected' && !commandRunning) {
-      window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive); setActiveLauncher(s.activeLauncher || ''); setCurrentLauncher(s.currentLauncher || '') }).catch(() => {})
+      DeviceService.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive); setActiveLauncher(s.activeLauncher || ''); setCurrentLauncher(s.currentLauncher || '') }).catch(() => {})
     }
   }
 
   const handleRunReenable = async () => {
-    setRunningReenable(true)
-    startMaintenanceOperation()
-
-    await window.go.main.App.RunReenable()
-
-    setRunningReenable(false)
-    setReenableStatus('ok')
-    setRescanning(true)
+    const result = await startOperation({
+      kind: 'reenable',
+      title: 'Re-enabling system partition mods',
+      run: id => PackagesService.RunReenable(id),
+    })
+    if (!result.ok) return
+    setReenableStatus(result.reenable || ReenableStatus.ReenableOK)
     await rescanAllPackages()
-    setRescanning(false)
-    setCommandRunning(false)
-    setCommandContext(null)
-    setOsUpgradeDetected(false)
   }
 
-  const handleRepairVellum = () => {
-    if (bootstrapping) return
-    setReinstallInProgress(true)
-    window.go.main.App.BootstrapVellum()
+  // The rescan runs under the guide's kind so the guide row stays busy through it.
+  const handleInstallGuide = async () => {
+    setSettlingOperation({ kind: 'guide', target: '' })
+    try {
+      await installGuideAndRefreshLibrary()
+    } finally {
+      setSettlingOperation(null)
+    }
+  }
+
+  const installGuideAndRefreshLibrary = async () => {
+    const installed = await startOperation({
+      kind: 'guide',
+      title: 'Install the reManager guide',
+      background: true,
+      reportsOwnFailure: true,
+      run: id => FilesService.InstallUserGuide(id),
+    })
+    if (!installed.ok) {
+      if (!installed.canceled) toast.error(handleError(operationFailure(installed), 'Could not install the reManager guide.'))
+      return
+    }
+    setGuideStatus(prev => prev && { ...prev, installed: true, needsUpdate: false })
+    if (!installedPackages.has('librarian') || !xoviActive) {
+      setShowGuideRestartDialog(true)
+      return
+    }
+    const rescanned = await startOperation({
+      kind: 'guide',
+      target: 'rescan',
+      title: 'Rescan the library',
+      background: true,
+      reportsOwnFailure: true,
+      run: id => ConfigService.RescanLibrary(id),
+    })
+    if (!rescanned.ok) {
+      console.error('Failed to rescan library after guide install:', rescanned.error)
+      setShowGuideRestartDialog(true)
+    }
+  }
+
+  const handleFilesystemRestoreReboot = async () => {
+    const result = await startOperation({
+      kind: 'reboot',
+      title: 'Reboot',
+      background: true,
+      run: id => OSService.RebootDevice(id),
+    })
+    if (result.ok) handleFilesystemRestoreDismiss()
   }
 
   const handleTimezoneChange = async (timezone: string) => {
     setSelectedTimezone(timezone)
     try {
-      await window.go.main.App.SaveDeviceTimezone(timezone)
-      const status = await window.go.main.App.GetTimezoneStatus()
+      await DeviceService.SaveDeviceTimezone(timezone)
+      const status = await DeviceService.GetTimezoneStatus()
       if (status.needsUpdate) {
         setTimezoneMismatch(status)
       } else {
@@ -975,109 +1047,101 @@ export default function App() {
     }
   }
 
-  const handleSetTimezone = () => {
+  const handleSetTimezone = async () => {
     if (!selectedTimezone) return
-    settingTimezoneRef.current = true
-    setSettingTimezone(true)
-    startMaintenanceOperation({ showModal: false, resetProgress: false })
-    window.go.main.App.SetDeviceTimezone(selectedTimezone, device)
+    const result = await startOperation({
+      kind: 'timezone',
+      title: 'Set timezone',
+      background: true,
+      run: id => DeviceService.SetDeviceTimezone(id, selectedTimezone, device),
+    })
+    if (result.ok) {
+      setTimezoneMismatch(null)
+      setDeviceTimezone(result.value || selectedTimezone)
+    }
+    const status = await DeviceService.GetTimezoneStatus().catch(() => null)
+    if (status?.needsUpdate) setTimezoneMismatch(status)
   }
 
-  const handleChecklistUpgrade = async () => {
-    setChecklistLoading(true)
-    startMaintenanceOperation()
+  const handleOsSynced = useCallback(() => {
+    setOsMismatchDetected(false)
+    osMismatchDetectedRef.current = false
+    setCompatibilityStatus(null)
+  }, [setOsMismatchDetected, osMismatchDetectedRef, setCompatibilityStatus])
 
-    await window.go.main.App.RunUpgrade()
-  }
+  const openOSManager = useCallback(() => {
+    setActiveTab('system')
+    setShowSoftwareManager(true)
+  }, [])
 
   const fetchUpdateServiceStatus = async () => {
     try {
-      const status = await window.go.main.App.GetUpdateServiceStatus()
+      const status = await DeviceService.GetUpdateServiceStatus()
       setUpdateServiceStatus(status)
     } catch (err) {
       console.error('Failed to fetch update service status:', err)
     }
   }
 
-  const handleSystemTask = async (taskId: string) => {
-    runningSystemTaskRef.current = taskId
-    setRunningSystemTask(taskId)
-    startMaintenanceOperation({ showModal: false })
+  // The refresh after the run can take seconds; the row keeps showing the run until then rather than flashing the state it started from.
+  const [settlingOperation, setSettlingOperation] = useState<{ kind: OperationKind; target: string } | null>(null)
 
-    await window.go.main.App.RunSystemTask(taskId, device)
+  const handleSystemTask = async (taskId: string) => {
+    setSettlingOperation({ kind: 'system-task', target: taskId })
+    try {
+      await startOperation({
+        kind: 'system-task',
+        target: taskId,
+        title: systemTasks.find(task => task.id === taskId)?.label ?? 'System task',
+        background: true,
+        run: id => PackagesService.RunSystemTask(id, taskId, device),
+      })
+      await refreshDeviceStatus()
+    } finally {
+      setSettlingOperation(null)
+    }
   }
 
   const handleComponentMaintenance = async (componentId: string, commandId: string) => {
-    const cmds = maintenanceCommands[componentId]
-    if (!cmds) return
-
-    const cmd = cmds.find(c => c.id === commandId)
+    const cmd = maintenanceCommands[componentId]?.find(c => c.id === commandId)
     if (!cmd) return
-
-    setRunningHookTitle(null)
-    if (cmd.allowStop) {
-      setCurrentRunningCommand({ componentId, commandId })
+    const target = `${componentId}:${commandId}`
+    setSettlingOperation({ kind: 'command', target })
+    try {
+      await startOperation({
+        kind: 'command',
+        target,
+        title: cmd.progressLabel || cmd.label,
+        expectedSeconds: cmd.expectedSeconds ?? 0,
+        showOutput: !!cmd.showOutput,
+        canStop: cmd.allowStop,
+        // A hook's own run carries the progress, so the command around it stays on its row until the hook starts one.
+        background: !!cmd.hook,
+        run: id => PackagesService.RunMaintenanceCommand(id, componentId, commandId, device),
+      })
+      await refreshDeviceStatus()
+    } finally {
+      setSettlingOperation(null)
     }
-    if (!cmd.hook) {
-      startMaintenanceOperation()
-    } else {
-      setCommandContext('maintenance')
-    }
-
-    await window.go.main.App.RunMaintenanceCommand(componentId, commandId, device)
   }
 
-  const handleStopCommand = async () => {
-    manuallyStoppedRef.current = true
-    await window.go.main.App.StopCommand()
-    setCurrentRunningCommand(null)
-    setCommandRunning(false)
-    setMaintenanceOutput((prev) => prev + '\n=== Command stopped ===\n')
+  const vellumRun = operationBusy && operation?.kind === 'vellum' ? operation : null
+  const vellumSurface = (target: string) => {
+    if (vellumRun?.target === target) return { running: true, stopping: vellumRun.status === 'stopping', output: vellumRun.output, error: null }
+    if (vellumFailure?.target === target) return { running: false, stopping: false, output: vellumFailure.output, error: vellumFailure.message }
+    return null
   }
+  const vellumInstall = vellumSurface('install')
+  const vellumRepair = vellumSurface('repair')
+  const vellumUninstall = vellumSurface('uninstall')
 
-  const handleCancelInstallation = async () => {
-    await window.go.main.App.CancelInstallation()
-    setInstalling(false)
-    setUninstalling(false)
-    setOutput((prev) => prev + '\n=== Cancelled ===\n')
-    await rescanAllPackages()
-  }
+  const operationOnModal = operation && (!operation.background || operation.status === 'failed') ? operation : null
+  const showingProgress = !!hookRun || !!operationOnModal || !!vellumUninstall
 
-  const getModalTitle = () => {
-    if (installing) return 'Installing Components'
-    if (uninstalling) return 'Removing Components'
-    if (commandRunning) return 'Running Maintenance'
-    return 'Operation Complete'
-  }
-
-  const getProgressText = () => {
-    if (progressModalType === 'install') {
-      if (runningHookTitle) {
-        return `${runningHookTitle}...`
-      }
-      if (installing || uninstalling) {
-        let action: string
-        if (uninstalling) {
-          action = 'Removing'
-        } else if (progressStatus === 'downloading' || progressStatus === 'transferring') {
-          action = 'Downloading'
-        } else {
-          action = 'Installing'
-        }
-        return currentComponent
-          ? `${action} ${currentComponent} (${progressIndex + 1} of ${progressTotal})`
-          : `${action} components...`
-      }
-      const action = lastOperationType === 'uninstall' ? 'Removal' : 'Installation'
-      return lastInstallSuccess === false
-        ? `${action} failed`
-        : `${action} complete!`
-    } else if (progressModalType === 'maintenance') {
-      if (rescanning) return 'Refreshing package list...'
-      return commandRunning ? 'Running command...' : 'Command complete!'
-    }
-    return ''
-  }
+  const runningOperation = operationBusy ? operation : settlingOperation
+  const [runningComponentId, runningCommandId] = runningOperation?.kind === 'command'
+    ? runningOperation.target.split(':')
+    : [undefined, undefined]
 
   const appContextValue = useMemo(() => ({
     device,
@@ -1087,1159 +1151,459 @@ export default function App() {
     connectedDeviceId,
     installedPackages,
     setInstalledPackages,
+    installTimes,
     packages,
     setPackages,
     vellumInstalled,
     setVellumInstalled,
     commandRunning,
-    setCommandRunning,
-    installing,
-    uninstalling,
-    writeableRootBusy,
+    runningOperation,
+    startOperation,
+    writableRootBusy,
+    transfers,
+    lastTransferFinished,
+    transferError,
+    setTransferError,
     appVersion,
     resolvedAppTheme,
     resolvedTerminalTheme,
     resolvedEditorTheme,
-    tabVisibility,
     suppressSystemFileWarnings,
     refreshDeviceState,
     rescanAllPackages,
-    startMaintenanceOperation,
     checkDnsProxyError,
+    refreshAfterPackageChange,
+    refreshAfterUpgrade,
   }), [
     device, deviceInfo, connectionStatus, connectionError, connectedDeviceId,
-    installedPackages, packages, vellumInstalled,
-    commandRunning, installing, uninstalling, writeableRootBusy,
+    installedPackages, installTimes, packages, vellumInstalled,
+    commandRunning, runningOperation, startOperation, writableRootBusy,
+    transfers, lastTransferFinished, transferError,
     appVersion, resolvedAppTheme, resolvedTerminalTheme, resolvedEditorTheme,
-    tabVisibility, suppressSystemFileWarnings,
+    suppressSystemFileWarnings,
   ])
 
   return (
     <AppProvider value={appContextValue}>
-    <div className="min-h-screen p-6" style={{ paddingBottom: 'calc(1.5rem + var(--queue-bar-height, 0px))' }}>
-      <div className="space-y-6">
-        <PageHeader
+    <TooltipProvider>
+    {/* Reserved only when the tab bar renders; the connect step has none and cannot scroll past the gap. */}
+    <div
+      className={cn(
+        "screen-edge flex min-h-dvh flex-col p-gutter pl-gutter-left pr-gutter-right touch:pt-[calc(var(--safe-area-top)+8px)] pb-[calc(var(--spacing-gutter)+var(--safe-area-bottom)+var(--plan-bar-clearance))]",
+        step === 'connect' || step === 'browse'
+          ? "max-md:touch:pb-[calc(var(--spacing-gutter)+var(--safe-area-bottom))]"
+          : "max-md:touch:pb-[calc(var(--spacing-gutter)+var(--safe-area-bottom)+var(--spacing-tab-bar-clearance)+var(--plan-bar-clearance))]",
+      )}
+      style={{ '--plan-bar-clearance': step === 'connect' || step === 'browse' ? '0px' : planBarClearance } as React.CSSProperties}
+    >
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-x-0 top-0 z-[60] h-[calc(var(--safe-area-top)+0.75rem)] bg-linear-to-b from-background to-background/0 backdrop-blur [mask-image:linear-gradient(to_bottom,black_55%,transparent)] hidden touch:block"
+      />
+      {/* Manual, so a toast handing focus back to the tab clicked before it does not switch to it. */}
+      <Tabs
+        activationMode="manual"
+        value={activeTab}
+        onValueChange={(v) => handleTabChange(v as 'mods' | 'system')}
+        className="flex flex-1 flex-col gap-3"
+      >
+        {step === 'connect' || step === 'browse' ? null : <PageHeader
           device={device}
           deviceMachine={deviceInfo.machine}
           firmware={deviceInfo.firmware}
-          onSettings={() => setShowSettingsDialog(true)}
+          onSettings={openSettings}
           onDisconnect={handleDisconnect}
-          onSupport={() => setShowSupportBundles(true)}
-        />
+          nav={(
+            <MainTabBar
+              activeTab={activeTab}
+              collapsed={tabsCollapsed && !planOpen}
+              hidden={keyboardVisible}
+              onExpand={expandTabs}
+              modsDot={modsStatus.dot}
+              modsDotBesidePlanBar={modsStatus.dotWithoutPlan}
+              systemAlert={systemAlert}
+              device={device}
+              planBar={shownPlanBar}
+              modsDisabled={modsLocked}
+            />
+          )}
+        />}
 
-        <ConnectPage
+        {initialDataLoaded && <ConnectPage
           step={step}
           setStep={setStep}
           savedDevices={savedDevices}
+          deviceOutlooks={deviceOutlooks}
           setSavedDevices={setSavedDevices}
           setDevice={setDevice}
           deviceInfo={deviceInfo}
           setConnectedDeviceId={setConnectedDeviceId}
-          onConnected={refreshDeviceState}
+          onConnected={handleConnected}
+          onSettings={openSettings}
           initialKeys={availableKeys}
           initialAgentAvailable={sshAgentAvailable}
-        />
+          capabilities={capabilities}
+        />}
 
-        {/* Connection Status Banner */}
-        {step !== 'connect' && connectionStatus !== 'connected' && (
-          <div className="mb-4">
-            <div className={`rounded-lg p-4 flex items-center justify-between gap-4 ${
-              connectionStatus === 'failed'
-                ? 'bg-destructive/10 border border-destructive/20'
-                : 'bg-orange-500/10 border border-orange-500/20'
-            }`}>
-              <div className="flex items-center gap-3">
-                {connectionStatus === 'reconnecting' ? (
-                  <Loader2 className="h-5 w-5 text-orange-500 animate-spin flex-shrink-0" />
-                ) : (
-                  <WifiOff className={`h-5 w-5 flex-shrink-0 ${connectionStatus === 'failed' ? 'text-destructive' : 'text-orange-500'}`} />
+        <Dialog open={connectionModalVisible} onOpenChange={() => {}} closable={false}>
+          <DialogContent>
+            {/* Stays open from the loss through the reload so it reads as one interruption. */}
+            {connectionStatus === 'restoring' ? (
+              <>
+                <DialogHeader severity="info" icon={WifiHigh}>
+                  <DialogTitle>Reconnected</DialogTitle>
+                  <DialogDescription>Loading from your reMarkable</DialogDescription>
+                </DialogHeader>
+                <Progress
+                  indeterminate
+                  className="h-1 bg-muted"
+                  indicatorClassName="bg-[var(--info)]"
+                  aria-label="Loading from your reMarkable"
+                />
+              </>
+            ) : (
+              <>
+                <DialogHeader
+                  severity={connectionStatus === 'failed' ? 'destructive' : 'warning'}
+                  icon={WifiSlash}
+                >
+                  <DialogTitle>
+                  {connectionStatus === 'failed' ? 'Connection failed' : 'Connection lost'}
+                    </DialogTitle>
+                  <DialogDescription>
+                    {connectionStatus === 'failed'
+                      ? connectionDetail
+                      : 'Trying to reconnect. Make sure your reMarkable is awake and on Wi-Fi or USB.'}
+                  </DialogDescription>
+                </DialogHeader>
+                {connectionStatus === 'failed' && <OutputDisclosure output={connectionErrorDetails} />}
+                {connectionStatus !== 'failed' && (
+                  <RetryCountdown attempt={reconnectAttempt || 1} maxAttempts={reconnectMaxAttempts || 5} phase={retryPhase} />
                 )}
-                <span className="text-sm">
-                  {connectionStatus === 'lost' && 'Connection lost. Attempting to reconnect...'}
-                  {connectionStatus === 'reconnecting' && `Reconnecting... (attempt ${reconnectAttempt}/${reconnectMaxAttempts})`}
-                  {connectionStatus === 'failed' && (connectionError || 'Connection failed')}
-                </span>
-              </div>
-              <Button size="sm" onClick={handleDisconnect}>
-                Disconnect
-              </Button>
-            </div>
-          </div>
-        )}
+              </>
+            )}
+              <DialogFooter>
+                <Button variant="outline" onClick={handleDisconnect}>Disconnect</Button>
+                {/* Not offered when the same secret would be rejected again or another reMarkable answered; both need a fresh connect. */}
+                {connectionStatus === 'failed' && connectedDeviceId && connectionErrorCode !== ErrorCode.ErrAuthFailed && connectionErrorCode !== ErrorCode.ErrDeviceChanged && (
+                  <Button onClick={handleReconnect} disabled={manualReconnecting}>
+                    {manualReconnecting && <CircleNotch className="mr-2 h-4 w-4 animate-spin" />}
+                    {manualReconnecting ? 'Reconnecting…' : 'Reconnect'}
+                  </Button>
+                )}
+              </DialogFooter>
+            </DialogContent>
+        </Dialog>
 
-        {step !== 'connect' && (() => {
-          const warningsData = {
-            osUpgrade: osUpgradeDetected ? { prevVersion: prevOsVersion, newVersion: newOsVersion } : undefined,
-            hashtabMismatch: hashtabMismatch ? { hashtabVersion: hashtabMismatch.hashtabVersion, firmwareVersion: hashtabMismatch.firmwareVersion } : undefined,
-            timezoneMismatch: timezoneMismatch ? { deviceTimezone: timezoneMismatch.deviceTimezone, savedTimezone: timezoneMismatch.savedTimezone } : undefined,
-            autoUpdatesEnabled: showAutoUpdateBanner,
-            reenableNeeded: reenableStatus === 'needed',
-            xoviNotRunning,
-            hashtabMissing,
-          }
+        {step !== 'connect' && step !== 'browse' && (() => {
           return (
-            <BannerSwitcher banners={[
-              {
-                id: 'xochitl',
-                priority: 1,
-                severity: 'destructive',
-                icon: AlertCircle,
-                active: warningsChecked && !xochitlRunning && !launcherActive && !commandRunning && !showProgressModal && connectionStatus === 'connected',
-                content: (
-                  <Banner
-                    severity="destructive"
-                    icon={AlertCircle}
-                    title="reMarkable screen may be unresponsive"
-                    actions={
-                      launcherConfigured || installedPackages.has('xovi') ? (
-                        <Button size="sm" onClick={() => setShowStartUIDialog(true)}>
-                          Fix
-                        </Button>
-                      ) : (
-                        <Button size="sm" onClick={() => handleSystemTask('restart-xochitl')}>
-                          Start
-                        </Button>
-                      )
-                    }
-                  >
-                    The xochitl UI service is not running on the reMarkable.
-                  </Banner>
-                ),
-              },
-              {
-                id: 'warnings',
-                priority: 3,
-                severity: 'warning',
-                icon: AlertTriangle,
-                active: warningsChecked && hasActiveWarnings(warningsData),
-                content: (
-                  <ConsolidatedWarningBanner
-                    warnings={warningsData}
-                    onGoToMaintenance={() => setActiveTab('maintenance')}
-                    onDismiss={() => {
-                      setOsUpgradeDetected(false)
-                      setHashtabMismatch(null)
-                      setHashtabMissing(false)
-
-                      setTimezoneMismatch(null)
-                      setShowAutoUpdateBanner(false)
-                      setReenableStatus('')
-                    }}
-                  />
-                ),
-              },
-              {
-                id: 'prerelease',
-                priority: 2,
-                severity: 'warning',
-                icon: Cpu,
-                active: warningsChecked && !!prerelease,
-                content: (
-                  <Banner
-                    severity="warning"
-                    icon={Cpu}
-                    title="Beta OS"
-                    actions={tabVisibility.utilities ? (
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setActiveTab('utilities')
-                          setShowSoftwareManager(true)
-                        }}
-                      >
-                        Open OS Manager
-                      </Button>
-                    ) : undefined}
-                  >
-                    Your reMarkable is on {prerelease?.activeVersion}, newer than the latest stable release ({prerelease?.latestPublic}). reMarkable's <a href="https://support.remarkable.com/s/article/End-user-agreement-for-Opt-In-Beta" className="underline hover:text-foreground" onClick={(e) => { e.preventDefault(); window.runtime.BrowserOpenURL('https://support.remarkable.com/s/article/End-user-agreement-for-Opt-In-Beta') }}>beta program</a> doesn't permit installing third-party software, so packages aren't built for beta releases and you won't receive community support for issues on them. You can downgrade to a stable version in the OS Manager.
-                  </Banner>
-                ),
-              },
-              {
-                id: 'guide',
-                priority: 4,
-                severity: 'info',
-                icon: BookOpen,
-                active: !!guideOffer,
-                content: (
-                  <UserGuideOffer
-                    type={guideOffer ?? 'install'}
-                    installing={guideInstalling}
-                    onInstall={async () => {
-                      setGuideInstalling(true)
-                      try {
-                        await window.go.main.App.InstallUserGuide()
-                        setGuideOffer(null)
-                        if (installedPackages.has('librarian')) {
-                          await window.go.main.App.RescanLibrary()
-                          toast.success('User guide installed on your reMarkable')
-                        } else {
-                          toast.success('User guide installed on your reMarkable')
-                          setShowGuideRestartDialog(true)
-                        }
-                      } catch (err) {
-                        toast.error('Failed to install guide: ' + (err instanceof Error ? err.message : String(err)))
-                      } finally {
-                        setGuideInstalling(false)
-                      }
-                    }}
-                    onDismiss={() => setGuideOffer(null)}
-                    onDismissPermanently={async () => {
-                      setGuideOffer(null)
-                      await window.go.main.App.DismissGuideOffer()
-                    }}
-                  />
-                ),
-              },
-            ]} />
+            <Dialog open={betaModalOpen} onOpenChange={(o) => { if (!o) acknowledgeBeta() }}>
+              <DialogContent>
+                <DialogHeader severity="warning" icon={Warning}>
+                  <DialogTitle>Beta OS</DialogTitle>
+                  <DialogDescription>
+                    Your reMarkable is on {osChannel?.activeVersion}, newer than the latest stable release ({osChannel?.latestPublic}). reMarkable&apos;s <a href="https://support.remarkable.com/s/article/End-user-agreement-for-Opt-In-Beta" className="underline hover:text-foreground" onClick={(e) => { e.preventDefault(); SystemService.OpenExternalURL('https://support.remarkable.com/s/article/End-user-agreement-for-Opt-In-Beta') }}>beta program</a> doesn&apos;t permit installing third-party software, so mods aren&apos;t built for beta releases and you won&apos;t receive community support for issues on them. You can downgrade to a stable version in the OS Manager.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button variant="outline" onClick={acknowledgeBeta}>Got it</Button>
+                  <Button onClick={() => { acknowledgeBeta(); setActiveTab('system'); setShowSoftwareManager(true) }}>
+                    Open OS Manager
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           )
         })()}
 
-        {step !== 'connect' && (
-          <>
-          <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as 'mods' | 'maintenance' | 'utilities')}>
-            <TabsList className={`grid w-full mb-4 grid-cols-${[tabVisibility.mods, true, tabVisibility.utilities].filter(Boolean).length}`}>
-              {tabVisibility.mods && <TabsTrigger value="mods">Mods</TabsTrigger>}
-              <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
-              {tabVisibility.utilities && <TabsTrigger value="utilities">Utilities</TabsTrigger>}
-            </TabsList>
+        {step === 'browse' && (
+          <BrowsePage packages={packages} catalogStatus={catalogStatus} onBack={() => setStep('connect')} onSettings={openSettings} onRefreshCatalog={refreshBrowseCatalog} openPackageByNameRef={openPackageByNameRef} />
+        )}
 
-            {tabVisibility.mods && (
+        {step !== 'connect' && step !== 'browse' && (
+          <>
               <ModsTab
-                warningsChecked={warningsChecked}
+                activeTab={activeTab}
                 osMismatchDetected={osMismatchDetected}
                 storedOsVersion={storedOsVersion}
                 currentOsVersion={currentOsVersion}
-                checklistLoading={checklistLoading}
                 compatibilityStatus={compatibilityStatus}
-                bootstrapping={bootstrapping}
-                bootstrapOutput={bootstrapOutput}
-                bootstrapError={bootstrapError}
+                onOsSynced={handleOsSynced}
+                onOpenOSManager={openOSManager}
+                bootstrapping={!!vellumInstall?.running}
+                bootstrapOutput={vellumInstall?.output ?? ''}
+                bootstrapError={vellumInstall?.error ?? null}
+                onInstallVellum={() => handleInstallVellum('install')}
                 vellumBrokenInstall={vellumBrokenInstall}
-                vellumCleaning={vellumCleaning}
+                vellumCleaning={vellumRun?.target === 'cleanup'}
+                onCleanupVellum={handleCleanupVellum}
                 installQueue={installQueue}
                 setInstallQueue={setInstallQueue}
                 uninstallQueue={uninstallQueue}
                 setUninstallQueue={setUninstallQueue}
+                upgradeQueue={upgradeQueue}
+                setUpgradeQueue={setUpgradeQueue}
+              upgradeCandidates={upgradeCandidates}
                 queueError={queueError}
                 setQueueError={setQueueError}
                 refreshingPackages={refreshingPackages}
                 setRefreshingPackages={setRefreshingPackages}
-                setPendingProviderChoice={setPendingProviderChoice}
-                runInstallSimulation={runInstallSimulation}
-                setPendingUninstallConfirm={setPendingUninstallConfirm}
-                setActiveTab={setActiveTab}
-                handleChecklistUpgrade={handleChecklistUpgrade}
+              setPlanSolve={setPlanSolve}
+              modsStatus={modsStatus}
+              setPlanOpen={setPlanOpen}
+              setPlanApplying={setPlanApplying}
+              setPlanBar={setPlanBar}
+              setModsLocked={setModsLocked}
+              setOsSyncStatus={setOsSyncStatus}
+              planActionsRef={planActionsRef}
                 selectPackageForOSRef={selectPackageForOSRef}
+                openPackageByNameRef={openPackageByNameRef}
               />
-            )}
 
-
-            <MaintenanceTab
-              systemTasks={systemTasks}
+            <SystemTab
+              shellRunning={shellRunning}
+              setShellRunning={setShellRunning}
               maintenanceCommands={maintenanceCommands}
               updateServiceStatus={updateServiceStatus}
               xochitlRunning={xochitlRunning}
-              launcherConfigured={launcherConfigured}
               currentLauncher={currentLauncher}
               xoviActive={xoviActive}
-              hashtabMismatch={hashtabMismatch}
-              hashtabMissing={hashtabMissing}
+              hashtab={hashtab}
+              systemStatus={systemStatus}
+              osChannel={osChannel}
+              osMismatchDetected={osMismatchDetected}
+              compatibilityStatus={compatibilityStatus}
+              active={activeTab === 'system'}
+              osSyncStatus={osSyncStatus}
+              onReviewPackages={() => planActionsRef.current?.open()}
+              onApplyOsSync={() => planActionsRef.current?.applyOsSync()}
               reenableStatus={reenableStatus}
-              upgradesAvailable={upgradesAvailable}
               timezoneMismatch={timezoneMismatch}
               selectedTimezone={selectedTimezone}
               deviceTimezone={deviceTimezone}
-              runningSystemTask={runningSystemTask}
-              currentRunningCommand={currentRunningCommand}
-              settingTimezone={settingTimezone}
-              showStartUIDialog={showStartUIDialog}
-              setShowStartUIDialog={setShowStartUIDialog}
+              runningSystemTask={runningOperation?.kind === 'system-task' ? runningOperation.target : null}
+              currentRunningCommand={runningComponentId && runningCommandId ? { componentId: runningComponentId, commandId: runningCommandId } : null}
+              settingTimezone={runningOperation?.kind === 'timezone'}
               handleSystemTask={handleSystemTask}
               handleComponentMaintenance={handleComponentMaintenance}
               handleRunReenable={handleRunReenable}
               handleTimezoneChange={handleTimezoneChange}
               handleSetTimezone={handleSetTimezone}
               handleSelectPackageForOS={handleSelectPackageForOS}
-              runningReenable={runningReenable}
-              onRepairVellum={handleRepairVellum}
-              bootstrapping={bootstrapping}
+              runningReenable={runningOperation?.kind === 'reenable'}
+              guideStatus={guideStatus}
+              installingGuide={runningOperation?.kind === 'guide'}
+              handleInstallGuide={handleInstallGuide}
+              onRepairVellum={() => handleInstallVellum('repair')}
+              onUninstallVellum={handleUninstallVellum}
+              onSettings={openSettings}
+              onDisconnect={handleDisconnect}
+              showSoftwareManager={showSoftwareManager}
+              onShowSoftwareManagerChange={setShowSoftwareManager}
             />
-
-            {tabVisibility.utilities && (
-              <UtilitiesTab
-                activeTab={activeTab}
-                handleSelectPackageForOS={handleSelectPackageForOS}
-                onSettings={() => setShowSettingsDialog(true)}
-                onDisconnect={handleDisconnect}
-                showSoftwareManager={showSoftwareManager}
-                onShowSoftwareManagerChange={setShowSoftwareManager}
-              />
+            {/* The side sheet leaves the desktop strip in view, so it slides down out of the way while the sheet is open. */}
+            {!touchLayout && stripModel && (
+              <div
+                aria-hidden={!stripShown || undefined}
+                className={cn(
+                  'fixed inset-x-0 bottom-0 z-40 border-t pb-[var(--safe-area-bottom)] bg-background/95 backdrop-blur transition-[translate,background-color] duration-300 ease-out hover:bg-accent/40 supports-[backdrop-filter]:bg-background/80 motion-reduce:transition-none',
+                  stripShown ? 'translate-y-0' : 'pointer-events-none translate-y-full',
+                )}
+              >
+                <PlanBarWash wash={stripModel.wash} />
+                <PlanBarContent model={stripModel} focusable={stripShown} className="py-3 pl-gutter-left pr-gutter-right" />
+              </div>
             )}
-          </Tabs>
-
           </>
         )}
-      </div>
+      </Tabs>
 
-
-      {/* Progress Modal */}
-      <Dialog
-        open={showProgressModal || pendingInstallConfirm !== null || pendingProviderChoice !== null || pendingXoviInfo !== null || pendingOxideInfo !== null || pendingUninstallConfirm !== null}
-        onOpenChange={(open) => {
-          if (!installing && !uninstalling && !commandRunning) {
-            if (!open) {
-              setShowProgressModal(false)
-              setPendingInstallConfirm(null)
-              setPendingProviderChoice(null)
-              setProviderSelection(null)
-              setPendingXoviInfo(null)
-              setPendingOxideInfo(null)
-              setPendingUninstallConfirm(null)
-              setProgressModalType(null)
-              setProgressIndex(0)
-              setProgressTotal(0)
-              setProgressPercentage(0)
-              setOutput('')
-              setMaintenanceOutput('')
-              setLastInstallSuccess(null)
-              setLastOperationType(null)
-              if (connectionStatus === 'connected') {
-                window.go.main.App.GetXochitlStatus().then(s => { setXochitlRunning(s.running); setXoviActive(s.xoviActive); setActiveLauncher(s.activeLauncher || ''); setCurrentLauncher(s.currentLauncher || '') }).catch(() => {})
-              }
-            }
-          }
-        }}
-        closable={false}
-      >
-        <DialogContent className={(showProgressModal || installing || uninstalling || commandRunning) && pendingInstallConfirm === null && pendingUninstallConfirm === null && pendingProviderChoice === null && pendingXoviInfo === null && pendingOxideInfo === null ? "w-[90vw] max-w-none" : undefined}>
-          {/* Provider choice for virtual dependencies (e.g. launcher: appload or oxide) */}
-          {pendingProviderChoice !== null && !installing && !uninstalling && (() => {
-            const step = pendingProviderChoice.choices[pendingProviderChoice.index]
-            const requiredBy = step.requiredBy.join(', ')
-            return (
-              <>
-                <DialogHeader>
-                  {pendingProviderChoice.choices.length > 1 && (
-                    <p className="text-xs text-muted-foreground">
-                      Step {pendingProviderChoice.index + 1} of {pendingProviderChoice.choices.length}
-                    </p>
-                  )}
-                  <DialogTitle>
-                    {requiredBy} require{step.requiredBy.length === 1 ? 's' : ''}{' '}
-                    <span className="font-mono">{step.virtual}</span>
-                  </DialogTitle>
-                  <DialogDescription>
-                    Choose which package to install.
-                  </DialogDescription>
-                </DialogHeader>
-
-                <RadioGroup
-                  value={providerSelection ?? ''}
-                  onValueChange={setProviderSelection}
-                  className="gap-2"
-                >
-                  {step.providers.map((provider) => {
-                    const installed = installedPackages.has(provider.name)
-                    const osRange = formatOsRange(provider)
-                    const nameButton = <span className="text-sm font-semibold">{provider.name}</span>
-                    const details = (
-                      <>
-                        <div className="flex items-center justify-between gap-2 min-h-[24px]">
-                          {nameButton}
-                          <div className="flex items-center gap-2">
-                            {installed && <Check className="h-4 w-4 text-green-600" />}
-                            {provider.name === step.default && (
-                              <Badge variant="outline">Recommended</Badge>
-                            )}
-                          </div>
-                        </div>
-                        {provider.description && (
-                          <p className="text-sm text-muted-foreground mt-1">{provider.description}</p>
-                        )}
-                        {!provider.compatible && (
-                          <p className="text-sm text-destructive mt-1">
-                            {provider.incompatibleReason === 'device'
-                              ? 'Does not support your reMarkable model'
-                              : `Requires OS ${osRange || 'a different version'}`}
-                          </p>
-                        )}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            handleSelectPackageForOS(provider.name, deviceInfo.firmware || currentOsVersion, provider.compatible)
-                          }}
-                          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground mt-2"
-                        >
-                          More info
-                        </button>
-                      </>
-                    )
-
-                    if (!provider.compatible) {
-                      return (
-                        <div key={provider.name} className="block rounded-md border border-dashed p-3 opacity-70">
-                          {details}
-                        </div>
-                      )
-                    }
-
-                    return (
-                      <label
-                        key={provider.name}
-                        htmlFor={`provider-${provider.name}`}
-                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${providerSelection === provider.name ? 'border-primary bg-accent' : ''}`}
-                      >
-                        <RadioGroupItem value={provider.name} id={`provider-${provider.name}`} className="sr-only" />
-                        {details}
-                      </label>
-                    )
-                  })}
-                </RadioGroup>
-
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setPendingProviderChoice(null)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    disabled={providerSelection === null}
-                    onClick={() => {
-                      const selected = [...pendingProviderChoice.selected, providerSelection!]
-                      const next = pendingProviderChoice.index + 1
-                      if (next < pendingProviderChoice.choices.length) {
-                        setPendingProviderChoice({ ...pendingProviderChoice, index: next, selected })
-                      } else {
-                        const requested = [...selected, ...pendingProviderChoice.requested]
-                        setPendingProviderChoice(null)
-                        runInstallSimulation(requested)
-                      }
-                    }}
-                  >
-                    Continue
-                  </Button>
-                </DialogFooter>
-              </>
-            )
-          })()}
-
-          {/* Confirmation step for install */}
-          {pendingInstallConfirm !== null && !installing && !uninstalling && (() => {
-            const requestedSet = new Set(pendingInstallConfirm.requested)
-            const requiredBy: Record<string, string[]> = {}
-            for (const pkgName of pendingInstallConfirm.packages) {
-              if (!requestedSet.has(pkgName)) {
-                const provided = packages.find((p) => p.name === pkgName)?.provides || []
-                for (const reqPkg of pendingInstallConfirm.packages) {
-                  if (reqPkg === pkgName) continue
-                  const pkgInfo = packages.find((p) => p.name === reqPkg)
-                  const satisfies = pkgInfo?.depends?.some(
-                    (dep) => dep === pkgName || provided.includes(dep)
-                  )
-                  if (satisfies) {
-                    if (!requiredBy[pkgName]) requiredBy[pkgName] = []
-                    requiredBy[pkgName].push(reqPkg)
-                  }
-                }
-              }
-            }
-            return (
-              <>
-                <DialogHeader>
-                  <DialogTitle>Install Packages</DialogTitle>
-                  <DialogDescription>
-                    The following {pendingInstallConfirm.packages.length} package{pendingInstallConfirm.packages.length !== 1 ? 's' : ''} will be installed:
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="max-h-[40vh] overflow-y-auto overscroll-y-contain">
-                  <ul className="space-y-1 text-sm">
-                    {[...pendingInstallConfirm.packages].sort().map((name) => (
-                      <li key={name}>
-                        {name}
-                        {requiredBy[name] && (
-                          <span className="text-muted-foreground ml-2">
-                            (required by {requiredBy[name].join(', ')})
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setPendingInstallConfirm(null)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={() => {
-                    const set: InstallSet = {
-                      resolved: pendingInstallConfirm.packages,
-                      requested: pendingInstallConfirm.requested?.length ? pendingInstallConfirm.requested : pendingInstallConfirm.packages,
-                    }
-                    setPendingInstallConfirm(null)
-                    if (set.resolved.includes('oxide') && !installedPackages.has('oxide')) {
-                      setPendingOxideInfo(set)
-                    } else {
-                      continueInstall(set)
-                    }
-                  }}>
-                    Install ({pendingInstallConfirm.packages.length})
-                  </Button>
-                </DialogFooter>
-              </>
-            )
-          })()}
-
-          {/* Pre-install xovi info */}
-          {pendingXoviInfo !== null && !installing && !uninstalling && (() => {
-            const tripletapInstalled = installedPackages.has('tripletap')
-            const tripletapQueued = pendingXoviInfo.resolved.includes('tripletap')
-            const showAckScreen = tripletapQueued || tripletapInstalled
-            return (
-              <>
-                <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2">
-                    <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                    Mods Require Manual Start After Every Reboot
-                  </DialogTitle>
-                  <DialogDescription className="pt-2">
-                    UI mods don't auto-start after reboot. Forcing auto-start can prevent your device from booting.
-                  </DialogDescription>
-                </DialogHeader>
-
-                {!showAckScreen ? (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium">Would you like to install tripletap?</p>
-                    <RadioGroup
-                      value={tripletapDecision ?? ''}
-                      onValueChange={(v) => setTripletapDecision(v as 'yes' | 'no')}
-                      className="gap-2"
-                    >
-                      <label
-                        htmlFor="tt-yes"
-                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${tripletapDecision === 'yes' ? 'border-primary bg-accent' : ''}`}
-                      >
-                        <RadioGroupItem value="yes" id="tt-yes" className="sr-only" />
-                        <div className="flex items-center justify-between gap-2 min-h-[24px]">
-                          <span className="text-sm font-semibold">Yes, install tripletap</span>
-                          <Badge variant="outline">Recommended</Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-1">Triple-press the power button after every boot to start mods.</p>
-                      </label>
-
-                      <label
-                        htmlFor="tt-no"
-                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${tripletapDecision === 'no' ? 'border-primary bg-accent' : ''}`}
-                      >
-                        <RadioGroupItem value="no" id="tt-no" className="sr-only" />
-                        <div className="flex items-center min-h-[24px]">
-                          <span className="text-sm font-semibold">No, I'll start mods from my computer</span>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-1">
-                          Open reManager and run <strong className="font-semibold text-foreground">Start UI with Mods</strong> from Maintenance after every boot, or start via SSH.
-                        </p>
-                      </label>
-                    </RadioGroup>
-
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setPendingXoviInfo(null)}>
-                        Cancel
-                      </Button>
-                      <Button
-                        disabled={tripletapDecision === null}
-                        onClick={() => {
-                          const set = tripletapDecision === 'yes'
-                            ? withPick(pendingXoviInfo, 'tripletap')
-                            : pendingXoviInfo
-                          setPendingXoviInfo(null)
-                          handleInstallQueue(set)
-                        }}
-                      >
-                        Continue
-                      </Button>
-                    </DialogFooter>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium">How to start mods after reboot</p>
-                    <div className="rounded-md border bg-accent p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold">Tripletap</span>
-                        <Badge variant="outline" className="gap-1">
-                          <Check className="h-3 w-3" />
-                          {tripletapInstalled ? 'Installed' : 'Queued for install'}
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground mt-1">Triple-press the power button after every boot to start mods.</p>
-                    </div>
-                    <p className="border-t pt-2.5 text-sm text-muted-foreground">
-                      Can also be started via reManager: Maintenance → Start UI with Mods.
-                    </p>
-
-                    <label className="flex items-start gap-3 rounded-md border bg-muted p-3 cursor-pointer">
-                      <Checkbox
-                        checked={xoviAckChecked}
-                        onCheckedChange={(v) => setXoviAckChecked(v === true)}
-                        className="mt-0.5"
-                      />
-                      <span className="text-sm">I'll start my mods manually after every reboot.</span>
-                    </label>
-
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setPendingXoviInfo(null)}>
-                        Cancel
-                      </Button>
-                      <Button
-                        disabled={!xoviAckChecked}
-                        onClick={() => {
-                          const set = pendingXoviInfo
-                          setPendingXoviInfo(null)
-                          handleInstallQueue(set)
-                        }}
-                      >
-                        Continue
-                      </Button>
-                    </DialogFooter>
-                  </div>
-                )}
-              </>
-            )
-          })()}
-
-          {/* Pre-install oxide info */}
-          {pendingOxideInfo !== null && !installing && !uninstalling && (() => {
-            const switchingInstalled = installedPackages.has('launcherctl-oxide')
-            const switchingQueued = pendingOxideInfo.resolved.includes('launcherctl-oxide')
-            const showAckScreen = switchingQueued || switchingInstalled
-            return (
-              <>
-                <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2">
-                    <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                    Oxide Needs launcherctl to Start
-                  </DialogTitle>
-                  <DialogDescription className="pt-2">
-                    Oxide is a full launcher. It takes over the screen instead of running inside the stock interface.
-                  </DialogDescription>
-                </DialogHeader>
-
-                {!showAckScreen ? (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium">Would you like to install launcherctl?</p>
-                    <RadioGroup
-                      value={launcherctlDecision ?? ''}
-                      onValueChange={(v) => setLauncherctlDecision(v as 'yes' | 'no')}
-                      className="gap-2"
-                    >
-                      <label
-                        htmlFor="lc-yes"
-                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${launcherctlDecision === 'yes' ? 'border-primary bg-accent' : ''}`}
-                      >
-                        <RadioGroupItem value="yes" id="lc-yes" className="sr-only" />
-                        <div className="flex items-center justify-between gap-2 min-h-[24px]">
-                          <span className="text-sm font-semibold">Yes, install launcherctl</span>
-                          <Badge variant="outline">Recommended</Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-1">Switch between oxide, other launchers, and the stock interface from Maintenance.</p>
-                      </label>
-
-                      <label
-                        htmlFor="lc-no"
-                        className={`block rounded-md border p-3 cursor-pointer transition-colors hover:bg-accent ${launcherctlDecision === 'no' ? 'border-primary bg-accent' : ''}`}
-                      >
-                        <RadioGroupItem value="no" id="lc-no" className="sr-only" />
-                        <div className="flex items-center min-h-[24px]">
-                          <span className="text-sm font-semibold">No, just oxide</span>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-1">
-                          Oxide will be installed but won't run.
-                        </p>
-                      </label>
-                    </RadioGroup>
-
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setPendingOxideInfo(null)}>
-                        Cancel
-                      </Button>
-                      <Button
-                        disabled={launcherctlDecision === null}
-                        onClick={() => {
-                          const set = launcherctlDecision === 'yes'
-                            ? withPick(pendingOxideInfo, 'launcherctl-oxide')
-                            : pendingOxideInfo
-                          setPendingOxideInfo(null)
-                          continueInstall(set)
-                        }}
-                      >
-                        Continue
-                      </Button>
-                    </DialogFooter>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium">How to change launchers</p>
-                    <div className="rounded-md border bg-accent p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold">launcherctl</span>
-                        <Badge variant="outline" className="gap-1">
-                          <Check className="h-3 w-3" />
-                          {switchingInstalled ? 'Installed' : 'Queued for install'}
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground mt-1">Switch between oxide, other launchers, and the stock interface.</p>
-                    </div>
-                    <p className="border-t pt-2.5 text-sm text-muted-foreground">
-                      Switch from reManager: Maintenance → launcherctl → Switch.
-                    </p>
-
-                    <label className="flex items-start gap-3 rounded-md border bg-muted p-3 cursor-pointer">
-                      <Checkbox
-                        checked={oxideAckChecked}
-                        onCheckedChange={(v) => setOxideAckChecked(v === true)}
-                        className="mt-0.5"
-                      />
-                      <span className="text-sm">I'll manage my launcher from the Maintenance tab.</span>
-                    </label>
-
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setPendingOxideInfo(null)}>
-                        Cancel
-                      </Button>
-                      <Button
-                        disabled={!oxideAckChecked}
-                        onClick={() => {
-                          const set = pendingOxideInfo
-                          setPendingOxideInfo(null)
-                          continueInstall(set)
-                        }}
-                      >
-                        Continue
-                      </Button>
-                    </DialogFooter>
-                  </div>
-                )}
-              </>
-            )
-          })()}
-
-          {/* Confirmation step for uninstall */}
-          {pendingUninstallConfirm !== null && !installing && !uninstalling && (() => {
-            const worldDeps = pendingUninstallConfirm.worldDeps
-            const dependsOn: Record<string, string[]> = {}
-            if (pendingUninstallConfirm.blocked) {
-              for (const [pkg, dependents] of Object.entries(pendingUninstallConfirm.blocked)) {
-                for (const dep of dependents) {
-                  if (!dependsOn[dep]) dependsOn[dep] = []
-                  dependsOn[dep].push(pkg)
-                }
-              }
-            }
-
-            const selected = pendingUninstallConfirm.selected
-            const additional = pendingUninstallConfirm.packages.filter(pkg => !selected.includes(pkg))
-
-            return (
-              <>
-                <DialogHeader>
-                  <DialogTitle className="flex items-center gap-2">
-                    {(additional.length > 0 || (worldDeps && worldDeps.length > 0)) && (
-                      <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                    )}
-                    Uninstall Packages
-                  </DialogTitle>
-                  <DialogDescription>
-                    The following {pendingUninstallConfirm.packages.length} package{pendingUninstallConfirm.packages.length !== 1 ? 's' : ''} will be removed:
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="max-h-[40vh] overflow-y-auto overscroll-y-contain space-y-4">
-                  {worldDeps && worldDeps.length > 0 ? (
-                    <>
-                      <div>
-                        <ul className="space-y-1 text-sm">
-                          {[...pendingUninstallConfirm.packages].sort().map((name) => (
-                            <li key={name}>{name}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div>
-                        <p className="font-medium text-sm mb-2">Selected for removal:</p>
-                        <ul className="space-y-1 text-sm">
-                          {[...selected].sort().map((name) => (
-                            <li key={name}>{name}</li>
-                          ))}
-                        </ul>
-                      </div>
-
-                      {additional.length > 0 && (
-                        <div>
-                          <p className="font-medium text-sm mb-2">Will also be removed:</p>
-                          <ul className="space-y-1 text-sm">
-                            {[...additional].sort().map((name) => (
-                              <li key={name}>
-                                {name}
-                                {dependsOn[name] && (
-                                  <span className="text-muted-foreground"> (requires {dependsOn[name].join(', ')})</span>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setPendingUninstallConfirm(null)}>
-                    Cancel
-                  </Button>
-                  <Button variant="destructive" onClick={() => {
-                    const selected = pendingUninstallConfirm.selected
-                    setPendingUninstallConfirm(null)
-                    handleUninstallQueue(selected)
-                  }}>
-                    Uninstall ({pendingUninstallConfirm.packages.length})
-                  </Button>
-                </DialogFooter>
-              </>
-            )
-          })()}
-
-          {/* Progress step */}
-          {(showProgressModal || installing || uninstalling || commandRunning) && pendingInstallConfirm === null && pendingUninstallConfirm === null && pendingProviderChoice === null && pendingOxideInfo === null && (
+      <Dialog open={showingProgress} onOpenChange={() => {}} closable={false}>
+        <DialogContent
+          size={commandOutputOpen ? '2xl' : 'default'}
+          className="transition-[max-width] duration-200 ease-out"
+        >
+          {hookRun ? (
             <ProgressModal
-              title={getModalTitle()}
-              progressText={getProgressText()}
-              percentage={progressPercentage}
-              terminalOutput={progressModalType === 'maintenance' ? maintenanceOutput : output}
-              isComplete={!installing && !uninstalling && !commandRunning}
-              onClose={() => {
-                setShowProgressModal(false)
-                setOutput('')
-                setMaintenanceOutput('')
-                setProgressModalType(null)
-                setLastInstallSuccess(null)
-                setLastOperationType(null)
-                setRescanning(false)
-              }}
-              canStop={(installing || uninstalling) || currentRunningCommand !== null}
-              onStop={(installing || uninstalling) ? handleCancelInstallation : handleStopCommand}
+              title={hookRun.title}
+              progressText=""
+              icon={Wrench}
+              expectedSeconds={hookRun.expectedSeconds}
+              runKey={hookRun.operationId}
+              terminalOutput={hookRun.output}
+              isComplete={hookRun.status === 'succeeded' || hookRun.status === 'failed'}
+              failed={hookRun.status === 'failed'}
+              canStop={hookRun.status === 'running'}
+              onStop={stopHook}
+              stopWarning={STOP_PARTWAY_WARNING}
+              stopping={hookRun.status === 'stopping'}
+              onAbandon={abandonOperation}
+              onClose={closeOperation}
               terminalTheme={resolvedTerminalTheme}
-              showProgress={progressModalType === 'install'}
+              onOutputOpenChange={setCommandOutputOpen}
             />
-          )}
+          ) : operationOnModal ? (
+            <ProgressModal
+              title={operationOnModal.title}
+              progressText=""
+              icon={Wrench}
+              expectedSeconds={operationOnModal.expectedSeconds}
+              runKey={operationOnModal.id}
+              terminalOutput={operationOnModal.output}
+              isComplete={operationOnModal.status === 'succeeded' || operationOnModal.status === 'failed'}
+              failed={operationOnModal.status === 'failed'}
+              canStop={operationOnModal.status === 'running'}
+              onStop={stopOperation}
+              stopWarning={operationOnModal.canStop ? undefined : STOP_PARTWAY_WARNING}
+              stopping={operationOnModal.status === 'stopping'}
+              onAbandon={abandonOperation}
+              onClose={closeOperation}
+              terminalTheme={resolvedTerminalTheme}
+              showOutput={operationOnModal.showOutput}
+              onOutputOpenChange={setCommandOutputOpen}
+            />
+          ) : vellumUninstall ? (
+            <ProgressModal
+              title="Uninstalling Vellum"
+              // Names no button on purpose: Repair is gone after a reconnect, so the advice would go stale when needed.
+              progressText={vellumUninstall.running ? 'Removing Vellum…' : 'Uninstall failed. Vellum may be partly removed.'}
+              icon={Package}
+              terminalOutput={vellumUninstall.output}
+              isComplete={!vellumUninstall.running}
+              failed={!vellumUninstall.running}
+              canStop={vellumUninstall.running && !vellumUninstall.stopping}
+              onStop={stopOperation}
+              stopWarning={VELLUM_STOP_WARNING}
+              stopping={vellumUninstall.stopping}
+              onAbandon={abandonOperation}
+              onClose={() => setVellumFailure(null)}
+              terminalTheme={resolvedTerminalTheme}
+              onOutputOpenChange={setCommandOutputOpen}
+            />
+          ) : null}
         </DialogContent>
       </Dialog>
 
-      {/* Hook Dialog (e.g., Rebuild Qt Resources) — must render after Progress Modal so it layers on top */}
-      <Dialog open={showRebuildDialog} onOpenChange={(open) => {
-        setShowRebuildDialog(open)
-        if (!open && !dialogRespondedRef.current) {
-          dialogRespondedRef.current = true
-          manuallyStoppedRef.current = true
-          setDialogRequest(null)
-          window.go.main.App.RespondToDialog('cancel')
-        }
-      }}>
-        <DialogContent>
-          {dialogRequest?.actions && dialogRequest.actions.length > 0 && !dialogRequest.infoOnly && !dialogRequest.confirmText ? (
-            <>
-              {/* Actions-only dialog (e.g., post-command "Start UI with/without Mods") */}
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  {dialogRequest.success && (
-                    <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
-                  )}
-                  {dialogRequest.title}
-                </DialogTitle>
-                <DialogDescription>{dialogRequest.message}</DialogDescription>
-              </DialogHeader>
-              {dialogRequest.note && (
-                <p className="text-sm text-muted-foreground whitespace-pre-line">{dialogRequest.note}</p>
-              )}
-              <div className="flex flex-col gap-2 pt-2">
-                {dialogRequest.actions.map((action) => (
-                  <Button
-                    key={action.id}
-                    variant={action.id === dialogRequest.primaryAction ? 'default' : 'outline'}
-                    className="w-full justify-center gap-2"
-                    onClick={() => {
-                      dialogRespondedRef.current = true
-                      setShowRebuildDialog(false)
-                      setDialogRequest(null)
-                                  window.go.main.App.RespondToDialog(action.id)
-                    }}
-                  >
-                    {action.label}
-                  </Button>
-                ))}
-                <Button
-                  variant="outline"
-                  className="w-full justify-center mt-2"
-                  onClick={() => {
-                    dialogRespondedRef.current = true
-                    manuallyStoppedRef.current = true
-                    setShowRebuildDialog(false)
-                    setDialogRequest(null)
-                    window.go.main.App.RespondToDialog('cancel')
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  {dialogRequest?.infoOnly
-                    ? <Info className="h-5 w-5 text-blue-500" />
-                    : <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                  }
-                  {dialogRequest?.title || 'Confirmation Required'}
-                </DialogTitle>
-                <DialogDescription>
-                  <div className="space-y-3 pt-4">
-                    {dialogRequest?.message?.split('\n\n').map((paragraph, idx) => (
-                      <p key={idx}>{paragraph}</p>
-                    ))}
-                    {dialogRequest?.inProgressMessage && (
-                      <p className="font-semibold text-foreground">{dialogRequest.inProgressMessage}</p>
-                    )}
-                    {dialogRequest?.note && (
-                      <div className="flex items-start gap-2 rounded-lg border p-3 bg-muted/50">
-                        <Info className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
-                        <span className="text-xs text-muted-foreground">
-                          {dialogRequest.note.split('\n').map((line, idx) => (
-                            <span key={idx}>{idx > 0 && <br />}{line}</span>
-                          ))}
-                        </span>
-                      </div>
-                    )}
-                    {dialogRequest?.steps && dialogRequest.steps.length > 0 && (
-                      <>
-                        <p className="font-medium text-foreground">This will:</p>
-                        <ol className="list-decimal list-outside space-y-1 text-sm pl-8">
-                          {dialogRequest.steps.map((step, idx) => (
-                            <li key={idx}>{step}</li>
-                          ))}
-                        </ol>
-                      </>
-                    )}
-                  </div>
-                </DialogDescription>
-              </DialogHeader>
+      <HookDialog
+        open={!!operationPrompt}
+        request={operationPrompt?.request ?? null}
+        onRespond={respondToOperation}
+        onDismiss={() => respondToOperation('cancel')}
+      />
 
-              <DialogFooter>
-                {dialogRequest?.infoOnly ? (
-                  <Button
-                    onClick={() => {
-                      dialogRespondedRef.current = true
-                      setShowRebuildDialog(false)
-                      setDialogRequest(null)
-                      window.go.main.App.RespondToDialog('confirm')
-                    }}
-                  >
-                    {dialogRequest?.confirmText || 'Got it'}
-                  </Button>
-                ) : (
-                  <>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        dialogRespondedRef.current = true
-                        manuallyStoppedRef.current = true
-                        setShowRebuildDialog(false)
-                        setDialogRequest(null)
-                        window.go.main.App.RespondToDialog('cancel')
-                      }}
-                    >
-                      {dialogRequest?.cancelText || 'Cancel'}
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        dialogRespondedRef.current = true
-                        setShowRebuildDialog(false)
-                        setDialogRequest(null)
-                        if (commandContext === 'maintenance') {
-                          startMaintenanceOperation()
-                        }
-                        window.go.main.App.RespondToDialog('confirm')
-                      }}
-                    >
-                      {dialogRequest?.confirmText || 'Proceed'}
-                    </Button>
-                  </>
-                )}
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Guide installed — restart UI prompt */}
       <Dialog open={showGuideRestartDialog} onOpenChange={setShowGuideRestartDialog}>
         <DialogContent>
-          <DialogHeader>
+          <DialogHeader severity="info" icon={ArrowsCounterClockwise}>
             <DialogTitle>Restart reMarkable UI?</DialogTitle>
             <DialogDescription>
-              The user guide has been installed, but it won't appear on the reMarkable until the UI is restarted.
+              The reManager guide is installed. It appears on your reMarkable after the UI restarts.
             </DialogDescription>
           </DialogHeader>
+          {guideRestartError && (
+            <Alert variant="destructive">
+              <WarningCircle className="h-4 w-4" />
+              <AlertDescription>{guideRestartError.message}</AlertDescription>
+            </Alert>
+          )}
+          {guideRestartError && <OutputDisclosure output={guideRestartError.detail} />}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowGuideRestartDialog(false)}>
               Not now
             </Button>
             <Button onClick={async () => {
-              setShowGuideRestartDialog(false)
-              try {
-                if (xoviActive) {
-                  await window.go.main.App.RunMaintenanceCommand('xovi', 'start', device)
-                } else {
-                  await window.go.main.App.RestartXochitl()
-                }
-              } catch (err) {
-                toast.error('Failed to restart UI: ' + (err instanceof Error ? err.message : String(err)))
+              setGuideRestartError(null)
+              const result = await startOperation({
+                kind: 'restart-ui',
+                title: 'Restart the reMarkable UI',
+                background: true,
+                reportsOwnFailure: true,
+                run: id => xoviActive
+                  ? PackagesService.RunMaintenanceCommand(id, 'xovi-extensions', 'start', device)
+                  : ConfigService.RestartXochitl(id),
+              })
+              if (!result.ok) {
+                if (result.canceled) return
+                const failure = operationFailure(result)
+                setGuideRestartError({ message: handleError(failure, 'Could not restart the reMarkable UI.'), detail: errorDetail(failure) })
+                return
               }
-            }}>
+              // Closed only once it worked, so a failure has somewhere to land.
+              setShowGuideRestartDialog(false)
+            }} disabled={connectionStatus !== 'connected' || commandRunning}>
+              {runningOperation?.kind === 'restart-ui' && <CircleNotch className="mr-2 h-4 w-4 animate-spin" />}
               Restart
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-
       <SettingsDialog
         open={showSettingsDialog}
-        onOpenChange={handleSettingsDialogOpenChange}
-        isConnected={!!device}
-        vellumInstalled={vellumInstalled}
-        tabVisibility={tabVisibility}
-        proxyMode={proxyMode}
-        suppressSystemFileWarnings={suppressSystemFileWarnings}
-        preventSleep={preventSleep}
-        theme={theme}
-        terminalTheme={terminalTheme}
-        editorTheme={editorTheme}
-        checkForUpdates={checkForUpdates}
-        suppressGuideOffer={suppressGuideOffer}
-        sshAgentSocketPath={sshAgentSocketPath}
-        onSaveSettings={handleSaveSettings}
-        onToggleGuideOffer={async (enabled) => {
-          if (enabled) {
-            await window.go.main.App.EnableGuideOffer()
-            setSuppressGuideOffer(false)
-            if (device) {
-              const status = await window.go.main.App.CheckUserGuide()
-              if (!status.skipped) {
-                if (!status.installed) {
-                  setGuideOffer('install')
-                } else if (status.needsUpdate) {
-                  setGuideOffer('update')
-                }
-              }
-            }
-          } else {
-            await window.go.main.App.DismissGuideOffer()
-            setSuppressGuideOffer(true)
-            setGuideOffer(null)
-          }
-        }}
-        onUninstallVellum={handleUninstallVellum}
-        uninstalling={vellumUninstalling}
-        uninstallOutput={vellumUninstallOutput}
-        uninstallError={vellumUninstallError}
+        onOpenChange={setShowSettingsDialog}
+        settings={settingsValues}
+        onUpdate={handleUpdateSettings}
+        onOpenSupport={(screen) => { setSupportScreen(screen); setShowSupportBundles(true) }}
+        supportPageOpen={showSupportBundles}
+        connectedDeviceId={connectedDeviceId}
+        capabilities={capabilities}
+        initialSection={settingsSection}
         appVersion={appVersion}
       />
 
       <SupportBundlePage
         open={showSupportBundles}
         onOpenChange={setShowSupportBundles}
+        initialScreen={supportScreen}
         isConnected={!!device}
         savedDevices={savedDevices}
         connectedDeviceId={connectedDeviceId}
+        supportUpload={capabilities.supportUpload}
       />
 
       <Dialog
-        open={reinstallInProgress && (bootstrapping || !!bootstrapError)}
-        closable={!bootstrapping}
+        open={!!vellumRepair}
+        closable={!vellumRepair?.running}
         onOpenChange={(open) => {
-          if (!open) {
-            setReinstallInProgress(false)
-            setBootstrapError(null)
-            setBootstrapOutput('')
-          }
+          if (!open) setVellumFailure(null)
         }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{bootstrapError ? 'Repair Failed' : 'Repairing Vellum...'}</DialogTitle>
-            <DialogDescription>
-              {bootstrapError
-                ? 'The Vellum repair did not complete.'
-                : 'Reinstalling Vellum with the latest version. Your installed mods are preserved.'}
-            </DialogDescription>
-          </DialogHeader>
-
-          {bootstrapping && (
-            <div className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Working...</span>
-            </div>
-          )}
-
-          {bootstrapError && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{bootstrapError}</AlertDescription>
-            </Alert>
-          )}
-
-          {(bootstrapping || bootstrapError) && bootstrapOutput && (
-            <div className="h-[300px] rounded-lg overflow-hidden">
-              <TerminalWithCopy output={bootstrapOutput} theme={resolvedTerminalTheme} />
-            </div>
-          )}
-
-          {bootstrapError && (
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setReinstallInProgress(false)
-                  setBootstrapError(null)
-                  setBootstrapOutput('')
-                }}
-              >
-                Close
-              </Button>
-              <Button onClick={handleRepairVellum}>Retry</Button>
-            </DialogFooter>
-          )}
+        <DialogContent
+          size={commandOutputOpen ? '2xl' : 'default'}
+          className="transition-[max-width] duration-200 ease-out"
+        >
+          {/* Named for the operation, not its outcome; the error takes the subtitle. */}
+          <ProgressModal
+            title="Repairing Vellum"
+            progressText={vellumRepair?.error || 'Reinstalling the latest version of Vellum. Your installed mods are kept.'}
+            terminalOutput={vellumRepair?.output ?? ''}
+            isComplete={!!vellumRepair?.error}
+            failed={!!vellumRepair?.error}
+            icon={Package}
+            terminalTheme={resolvedTerminalTheme}
+            canStop={!!vellumRepair?.running && !vellumRepair.stopping}
+            onStop={stopOperation}
+            stopWarning={VELLUM_STOP_WARNING}
+            stopping={!!vellumRepair?.stopping}
+            onAbandon={abandonOperation}
+            onRetry={() => handleInstallVellum('repair')}
+            retryDisabled={connectionStatus !== 'connected'}
+            onOutputOpenChange={setCommandOutputOpen}
+            onClose={() => setVellumFailure(null)}
+          />
         </DialogContent>
       </Dialog>
 
       <VellumInstallSuccessDialog
-        open={bootstrapSuccess}
-        reinstalled={reinstallInProgress}
+        open={vellumInstalledDialog !== null}
+        reinstalled={vellumInstalledDialog === 'reinstalled'}
         onOpenChange={(open) => {
-          if (!open) {
-            setBootstrapSuccess(false)
-            setBootstrapOutput('')
-            setReinstallInProgress(false)
-          }
+          if (!open) setVellumInstalledDialog(null)
         }}
       />
 
       <VellumUninstallSuccessDialog
-        open={vellumUninstallSuccess}
-        onOpenChange={(open) => {
-          if (!open) {
-            setVellumUninstallSuccess(false)
-            setVellumUninstallOutput('')
-          }
-        }}
+        open={showVellumUninstalled}
+        onOpenChange={setShowVellumUninstalled}
       />
 
       <DnsErrorModal
@@ -2254,10 +1618,12 @@ export default function App() {
         onReboot={handleFilesystemRestoreReboot}
         onDismiss={handleFilesystemRestoreDismiss}
         isRetrying={isRetryingFilesystemRestore}
+        isConnected={connectionStatus === 'connected'}
       />
 
       <Toaster position="bottom-right" richColors />
     </div>
+    </TooltipProvider>
     </AppProvider>
   )
 }

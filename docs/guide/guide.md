@@ -1,6 +1,6 @@
 ## Navigating This Guide
 
-To access the table of contents on your reMarkable:
+To open the table of contents on your reMarkable:
 
 1. Press the page overview button in the toolbar:
 
@@ -12,15 +12,15 @@ To access the table of contents on your reMarkable:
 
 \
 
-To adjust font size or margins, open the **More Tools** menu (three dots) in the toolbar and select **Text Settings**. On the Paper Pro Move, go to **Adjust View** then **Text Settings**.
+To change the font size or margins, open the **More Tools** menu (three dots) in the toolbar. Then select **Text Settings**. On the Paper Pro Move, go to **Adjust View**, then **Text Settings**.
 
 # Introduction
 
-reManager is a desktop application for managing mods and packages on your reMarkable. It gives you a friendly graphical interface for browsing, installing, upgrading, and removing packages — no command line required.
+reManager manages mods on your reMarkable from your computer, phone, or tablet. You can browse, install, upgrade, and remove mods without the command line.
 
 \
 
-reManager works with all reMarkable devices:
+reManager runs on macOS, Windows, Linux, iPhone, iPad, and Android. It works with every reMarkable device:
 
 - reMarkable 1
 - reMarkable 2
@@ -30,25 +30,19 @@ reManager works with all reMarkable devices:
 
 \
 
-This guide will walk you through connecting to your reMarkable, managing packages, and using the built-in utilities.
-
 ## What is Vellum?
 
-Behind the scenes, reManager uses a package manager called **Vellum** to handle mod installation. When you first connect, reManager will offer to set up Vellum on your reMarkable.
+reManager uses a package manager called Vellum to install mods. When you first connect, reManager offers to set up Vellum on your reMarkable.
 
 # Connecting to Your reMarkable
 
-Before you can manage packages, you need to connect reManager to your reMarkable over SSH.
-
 ## Finding Your Connection Details
 
-Your reMarkable reMarkable provides SSH connection details in its settings. On your reMarkable, navigate to **Settings → General → Help → Copyrights and licenses**. You'll find an IP address and password there.
+On your reMarkable, go to **Settings › General › Help › Copyrights and licenses**. This screen shows the IP address and password for SSH. Over USB, the IP address is `10.11.99.1`.
 
-The default IP address when connected via USB is **10.11.99.1**.
+On the Paper Pro, Paper Pro Move, and Paper Pure, turn on developer mode first. The QR code below links to reMarkable's instructions.
 
-\
-
-If you have a Paper Pro, Paper Pro Move, or Paper Pure, you'll need to enable developer mode first. The QR code below is a link to reMarkable's Developer Mode documentation.
+USB and Wi-Fi both work on every platform. Your computer, phone, or tablet can ask for Local Network permission the first time reManager connects. Some Android devices ask you to allow each USB connection.
 
 \
 
@@ -58,420 +52,373 @@ If you have a Paper Pro, Paper Pro Move, or Paper Pure, you'll need to enable de
 
 ## Connecting for the First Time
 
-When you open reManager, you'll see the Add reMarkable screen.
-
 ![The connection panel](images/connection-panel.png)
 
-1. Enter the **IP address** from your reMarkable (the default is `10.11.99.1` for USB connections)
-2. Select your authentication method:
-   - **Password** — type in the password shown on your reMarkable
-   - **SSH Key** — choose a key file from your computer
-   - **SSH Agent** — use an already-running SSH agent (this option only appears if an agent is detected)
-3. Click **Save and Connect** to save these credentials for next time, or **Connect** for a one-time connection
+1. Leave **Remember this reMarkable** on to save it to your list. Turn it off for a one-time connection.
+2. Optional: type a **Name**.
+3. Enter the **IP address**.
+4. In **Sign in with**, select **Password**, **Key**, or **Agent**, and enter the details.
+5. Click **Connect**.
 
-### Using Password Authentication
-
-This is the simplest option. Enter the password from your reMarkable's settings screen. Click the eye icon to show or hide what you've typed.
+reManager keeps saved passwords in your system keychain. To add another reMarkable later, press **Add reMarkable** on the Connect screen.
 
 ### Using an SSH Key
 
-If you've set up SSH key authentication on your reMarkable, select **SSH Key** and choose your key from the dropdown. reManager automatically finds keys in your `~/.ssh/` directory. If your key is stored elsewhere, select **Other...** to browse for it.
+Select **Key** and pick a key. On a computer, the list shows your keys in `~/.ssh/`, and **Other…** picks any key file. If your key has a passphrase, enter it.
 
-If your key is protected with a passphrase, enter it in the **Key Passphrase** field. If it's not encrypted, leave this field empty.
+Phones, tablets, and the Mac App Store build cannot read `~/.ssh`. On those, add the key to reManager first. See [SSH Keys](#ssh-keys).
 
-### Using an SSH Agent
+**Agent** uses the keys in a running SSH agent. It appears only on a computer, and only when the agent has at least one key loaded. The Mac App Store build does not have it. If reManager cannot find your agent, set its path in **Settings › Connection › SSH agent**.
 
-If you use an SSH agent (common on Linux and macOS), select **SSH Agent**. reManager will use whatever keys your agent has loaded. You can configure the agent socket path in Settings if it's not auto-detected.
+### SSH Keys
 
-## Saving and Managing Devices
+To store a key in reManager, open **Settings › Connection › SSH keys** and press **Add a key**. Paste the private key, or choose a file on a computer. reManager does not generate keys. The matching public key must already be in `authorized_keys` on your reMarkable.
 
-When you click **Save and Connect**, your device is saved so you don't have to enter credentials again. You can:
+## Saved reMarkables
 
-- **Edit** a saved device to update its name, address, or credentials
-- **Remove** a saved device you no longer need
-- **Sort** your devices by most recently used or alphabetically
+Saved reMarkables are listed on the Connect screen. You can edit, remove, and sort them. On a narrow screen, **Edit** and **Remove** are in the overflow menu of each row.
 
-You can save and connect to multiple reMarkable tablets.
+A saved reMarkable can show badges before you connect. A package icon means that mod upgrades are available. A blue CPU icon means that an OS update is available. A gray CPU icon means that an OS update is available, but some installed mods do not support it yet. reManager compares the OS version and mods from your last connection with the current catalog and the latest OS release. If the mods or OS on the reMarkable change outside reManager, the badges may be out of date until you connect again.
+
+On Apple devices, iCloud syncs your saved reMarkables, stored keys, most settings, starred mods, and followed developers across your Macs, iPhones, and iPads.
 
 ![Saved devices list](images/saved-devices.png)
 
-# Managing Mods
+## If the Connection Drops
 
-The **Mods** tab is where you can browse available packages and manage what's installed on your reMarkable.
+If reManager loses the connection, it tries to reconnect up to five times. If that fails, press **Disconnect**. For a saved reMarkable, you can also press **Reconnect** to try again. If the password is wrong, or a different reMarkable answers at the address, press **Disconnect** and connect again.
+
+# Managing Mods
 
 ## Browsing Packages
 
-The Mods tab organizes packages into two collapsible sections:
+The **Mods** tab has three sub-tabs:
 
-- **Installed** — packages currently on your reMarkable
-- **Available** — packages you can install
+- **Discover** — browse the catalog
+- **Installed** — mods on your reMarkable
+- **Upgrades** — installed mods that have a newer version
 
 \
 
-You can search for packages by name using the search bar, or filter by category or developer using the dropdown menus. Switch between **Full** and **Compact** view modes depending on how much detail you want to see at a glance.
+At the top of **Discover**, filters narrow the catalog by category, or to your **Starred** mods. **Overview** shows shelves of popular and recently added mods, and new mods from developers that you follow. In a filtered list, you can change the sort order.
 
-Packages may display a **Deprecated** or **Unmaintained** badge. Deprecated packages will be removed in the future. Unmaintained packages are no longer receiving updates and may not be available on newer OS versions.
+To reload the catalog, press the refresh button next to the search field. To browse the catalog without a connection, press **Browse mods** below your list of saved reMarkables.
 
-Click the refresh button to reload the package list from the server.
+In lists and search results, you can switch between a grid and a list. Narrow screens always use the grid.
 
 ![The Mods tab package list](images/mods-tab.png)
 
+### Search
+
+Type in the "Search mods…" field, or press `/` on a computer. Search looks at the name, author, and description of each mod.
+
+### Starred Mods and Followed Developers
+
+To star a mod, press the star on its card or in its details. To add every starred mod that is not installed, open the **Starred** filter and press **Add all**. This helps on another reMarkable, or after you reinstall Vellum.
+
+To follow a developer, press **Follow** on the developer's card or page. Their new mods then appear on the Overview, and the Discover sub-tab counts the ones that you have not seen. Press **Mark seen** on a card to clear it from the count.
+
+### Deprecated and Incompatible Mods
+
+A "Deprecated" mod will leave the catalog. An "Unmaintained" mod gets no more upgrades, and can stop working on newer OS versions.
+
+Incompatible mods collapse into one group at the bottom of a list. Each card shows the reason, such as "Other models" or "Needs OS …".
+
 ## Viewing Package Details
 
-Click on any package to open its details panel. Here you'll find:
+Click a mod to open its details. **Overview** shows the README, and **Changelog** shows the release history. The **Details** panel lists the version, license, supported models and OS versions, dependencies, and conflicts. Click a dependency or conflict to open it.
 
-- **Description** — what the package does
-- **Version** — the current version, with an upgrade indicator if an update is available
-- **Author** — who created it, with a link to the project if available
-- **Categories** — displayed as badges
-- **License** — how the package is licensed
-- **Devices** — which reMarkable models the package works with, shown as badges
-- **OS Version** — which reMarkable OS versions are supported
-- **Dependencies** — other packages this one requires, with their install status
-- **Conflicts** — packages that can't be installed alongside this one
-- **Project URL** — a link to the project page
-- **Readme** — view the package's readme documentation inline
-- **Donate** — a link to support the package developer (opens in your browser)
+The main button is **Add**, **Add upgrade**, or **Remove**. When the mod is already in your changes, the button takes it back out. If the developer has a donation link, the details also have **Donate**.
+
+If an installed mod no longer runs on your OS, the details show "Installed, but no longer compatible", and the main button is **Remove**.
 
 ![Package details panel](images/package-details.png)
 
-## Installing Packages
+### Mod Links
 
-reManager uses a queue system for installing packages. Rather than installing one at a time, you build up a list and install them all at once.
+A `remanager://package/<name>` link on the web catalog opens that mod in reManager, on any platform.
+
+## Making Changes
+
+![Changes ready to apply](images/plan.png)
+
+reManager collects installs, upgrades, and removals, and applies them together.
+
+1. Click **+** on a mod's card, or **Add** in its details. The Changes bar appears.
+2. Add any other changes.
+3. On the Changes bar, press **Show** to review the changes.
+4. Answer any questions. See [Questions Before Apply](#questions-before-apply).
+5. Click **Apply**.
 
 \
 
-1. Browse or search for the package you want
-2. Click **Add** next to the package (or **Add to Queue** in the details panel)
-3. The package appears in the install queue at the bottom of the screen
-4. When you're ready, click **Install Selected** to install everything in the queue
+reManager adds the dependencies that your changes need, and lists them with the label "Dependency". Mods that must be removed for your changes to work show "Also removed". To take a change out, press the **X** on its row. To start over, press **Clear all**.
 
-\
+If two mods conflict, reManager does not apply the changes until you remove one of them. You can stage the conflicting mod for removal in the same set of changes.
 
-You can remove individual items from the queue by clicking the X next to them, or click **Clear Install Queue** to start over.
+### Questions Before Apply
 
-If a package is not compatible with your reMarkable's OS or conflicts with an installed package, the add button will be disabled and you'll see a message explaining why if you hover over the Add button.
+Some mods need an answer before they install. The questions show at the top of the Changes panel, and **Apply** stays disabled until you answer them. Press a question, select an option, and press **Continue**. To change an answer later, press **Change**. The questions are:
+
+- Which mod to use, when more than one mod can satisfy a dependency. Press **More info** to see an option's details.
+- For Oxide, whether to install launcherctl. Oxide needs launcherctl to start.
+- For UI mods, whether to install tripletap. UI mods need a manual start after every reboot, and tripletap starts them when you triple-press the power button.
+
+### While Changes Apply
+
+The Changes bar shows the progress on every tab. To see the output, click the arrow next to "Applying *n* changes". To stop the remaining changes, press **Stop**. After qt-resource-rebuilder installs, reManager asks to build the hashtable, and then offers to start your mods.
+
+On a phone or tablet, reManager tries to keep the changes running when you switch to another app. A notification shows the progress, and tells you if the changes fail or need an answer. When changes start, reManager can ask for permission to send notifications. reManager also keeps the screen awake, because a locked iPhone can drop its USB connection to your reMarkable.
 
 ![Installing packages](images/installing-package.png)
 
-### Choosing Between Packages
+When the changes finish, the Changes bar shows the result. If a change fails, the Changes panel shows the error, and **Retry** runs the changes that did not run.
 
-Some packages require a kind of dependency rather than one specific package. A launcher is one example. When you install one of these, reManager asks which package to use before the install starts.
+## Upgrading Mods
 
-Each option shows a short description. If there's a default, it carries a **Recommended** badge, and **More info** opens the package details. reManager greys out any option that does not work with your reMarkable model or OS version. The reason appears with it. When an install needs more than one choice, the dialog steps through them in order.
+Open the **Upgrades** sub-tab. To stage one upgrade, press its upgrade button. To stage all of them, press **Add all**.
 
-## Upgrading Packages
+## Removing Mods
 
-Use the Vellum **Upgrade** command in the Maintenance tab to check for and install package updates.
+In the **Installed** sub-tab, press the trash icon on a card, or press **Remove** in the details. To uninstall Vellum itself, see [Advanced](#advanced).
 
-## Uninstalling Packages
+# System
 
-Uninstalling also uses a queue:
+The **System** tab shows Status, Tools, and, when Vellum is installed, Advanced.
 
-1. Find the package in the **Installed** section
-2. Click **Remove** next to the package
-3. The package appears in the uninstall queue at the bottom of the screen
-4. Click **Uninstall Selected** to remove everything in the queue
+![System tab](images/maintenance-tab.png)
 
-You can clear the uninstall queue the same way as the install queue.
+## Status
 
-## Warnings
+Each Status row shows one part of your reMarkable. When a row needs attention, it changes color, and its button is the fix. The dot on the System tab shows the color of the most serious row: red for a failure, amber for a warning, and blue for information. The dot is also blue while a Terminal shell runs. If you connect to a different reMarkable and a row is red or amber, reManager opens on the System tab.
 
-When reManager detects issues that need attention, an amber **Action Required** banner appears below the toolbar. It may show one or more of the following:
+- **Automatic OS updates** — a switch. Turn it off while you use mods, so an OS update does not break them.
+- **reMarkable OS** — the current version. **Manage** opens the OS Manager.
+- **reMarkable UI** — **Restart** restarts the reMarkable UI. It is disabled while a launcher is set.
+- **Sleep screen** — choose a PNG for the sleep screen, or reset it.
+- **reManager guide** — install or update this guide on your reMarkable. An update loses the highlights and notes in the old copy.
+- **Launcher** (with launcherctl) — start or stop the launcher.
+- **Mods** (with xovi-extensions) — start, restart, or stop mods. These buttons are disabled while a launcher is set.
+- **Hashtable** (with qt-resource-rebuilder) — rebuild the hashtable when it does not match the OS.
+- **System partition mods** — re-enable mods that an OS update cleared.
+- **Timezone** — set your reMarkable's timezone when it does not match yours.
 
-- **Hashtable not built** — the hashtable required by UI mods hasn't been generated yet. Run **Rebuild Hashtable** from the Maintenance tab.
-- **Hashtable version mismatch** — the hashtable was built for a different OS version than what's currently running. Rebuild it from the Maintenance tab.
-- **Timezone mismatch** — the device timezone differs from your saved preference.
-- **Auto-updates enabled** — automatic OS updates may interfere with mods. Disable them from the Maintenance tab.
-- **Reenable needed** — packages that modify the system partition need to be reenabled.
-- **Mods not running** — mods are installed but the mod framework isn't active. Run **Start UI with Mods** from the Maintenance tab. This warning does not appear when a launcher is selected.
+## After an OS Update
 
-Click **Go to Maintenance** in the banner to jump directly to the Maintenance tab.
+When your reMarkable's OS changes, Status turns into numbered steps that finish the update: Automatic OS updates, Compatibility, System partition mods, Hashtable, Mods, Launcher, and Timezone. Steps for things that you do not have are skipped. Only the next step has a highlighted button.
 
-## OS Change Detected
+In the Compatibility step, press **Review**. The Changes panel lists the mods that do not work on the new OS, and the mods with an upgrade for it. Remove the incompatible mods, or use the OS Manager to go back to an OS that they support. Then press **Apply**, and press **Done** to go back to the steps. If no mod needs a change, the Compatibility button is **Finish** instead. The Mods tab is unavailable until you finish the steps.
 
-When reManager detects that your reMarkable's OS has been updated, an **OS Change Detected** card appears in the Mods tab showing the previous and new OS versions. It lists your installed packages and their compatibility with the new version. Click **Upgrade Packages** to complete the upgrade process.
+## Advanced
 
-# Maintenance
+Advanced has extra commands for Vellum and for some mods.
 
-The **Maintenance** tab provides system-level tools and package-specific commands.
+- **Repair** reinstalls Vellum. Your installed mods stay.
+- **Check OS** shows which of your mods work on an OS version that you type.
+- **Uninstall** removes Vellum, and by default your installed mods too.
 
-## System Tasks
+## Running Commands
 
-A grid of system task buttons is available at the top of the tab:
+Most commands open a progress dialog. Press **Details** to see the output. Some commands cannot cleanly stop, so reManager asks before it stops them.
 
-- **Enable Auto-Updates** / **Disable Auto-Updates** — control automatic reMarkable OS updates. Disabling updates is highly recommended if you install mods. The toggle to disable auto-updates in the reMarkable UI has a known issue on the Paper Pro and Paper Pro Move that makes it revert to enabled after every restart. reManager works around this bug and it will stay disabled if disabled from reManager. 
-- **Restart reMarkable UI** — restart the reMarkable's user interface without rebooting the device. reManager disables this button while a launcher is selected. Use the launcherctl **Switch** command to change launchers or return to the stock interface.
+# Tools
 
-The tab also shows the current auto-update status (enabled or disabled, running or stopped).
-
-![Maintenance tab](images/maintenance-tab.png)
-
-### Timezone
-
-You can view and change your reMarkable's timezone using the timezone dropdown and the **Set Timezone** button. If the detected timezone doesn't match what's configured, the button will be highlighted.
-
-## Package Commands
-
-Some packages provide their own maintenance commands that appear here after installation. These commands are displayed in a grid with their descriptions shown as tooltips.
-
-When you run a command, a progress view shows its output in real time. Some commands can be stopped mid-way if needed.
-
-### Vellum Commands
-
-When Vellum is installed, these commands are available:
-
-- **Reenable** — reenable packages that modify the system partition (required after an OS update)
-- **Upgrade** — check for and install package updates
-- **Repair** — reinstall Vellum with the latest version
-- **Check OS** — check package compatibility with a target OS version
-
-# Utilities
-
-The **Utilities** tab provides a collection of tools displayed as a grid of cards. If you don't see this tab, enable it in Settings.
+Tools are in the System tab: Terminal, File Browser, Configuration, Backup & Restore, and Document Import. The OS Manager opens from the reMarkable OS row in Status. See [OS Manager](#os-manager).
 
 ## Terminal
 
-An interactive SSH shell session on your reMarkable, right inside reManager. When running, the terminal expands to fill the available space. This is useful for advanced users who want to run commands directly.
+Terminal opens an SSH shell on your reMarkable. The buttons at the top right copy the output and stop the shell. If you close the terminal, the shell keeps running, and you can resume it from Tools.
+
+On a touch screen, a key bar above the keyboard adds Ctrl, Esc, Tab, the arrow keys, and common symbols.
 
 ![Interactive terminal](images/terminal.png)
 
 ## File Browser
 
-Browse and transfer files on your reMarkable's filesystem.
+Browse the files on your reMarkable, and transfer files to and from it.
 
 ![File browser](images/file-browser.png)
 
 ### Navigating
 
-- Click folder names to open them
-- Use the breadcrumb path at the top to navigate — each segment is clickable
-- Click the terminal icon to edit the path as a text field
-- Use the up arrow to go to the parent directory
+- Click a folder to open it, or click a part of the path at the top to go back to it
+- Click the terminal icon to type a path
 - Click **Home** to go to `/home/root`
-- Toggle **Show Hidden** / **Hide Hidden** to see files starting with a dot
+- Click **Show hidden files** to show files whose names start with a dot
+- Click a column heading to sort by it
 
-### Sorting Files
+On a narrow screen, hidden files and sorting are in the overflow menu.
 
-Click the column headers to sort by name, size, or modification date. Click again to reverse the sort order.
+### Uploading and Downloading
 
-### Uploading Files
+To upload, press **Upload**, or drag files or folders into the browser on a computer. To download, select **Download** in a row's menu. On a phone or tablet, the share sheet or a save dialog opens when the download is done.
 
-Upload files to your reMarkable in two ways:
-
-- Click **Upload File** or **Upload Folder** in the toolbar
-- Drag and drop files from your computer into the file browser
-
-A progress bar shows upload status, including file count and transfer speed.
-
-### Downloading Files
-
-Click the download action on any file or folder. Folders are downloaded recursively.
+A panel above the file list shows the transfers. To cancel them, press its **X**. An upload replaces files that have the same name without asking.
 
 ### Managing Files
 
-Use the action buttons or right-click context menu to:
+Each row has a menu with its actions. On a computer, you can also right-click a row. To work on more than one row, press **Select**, or long-press a row on a touch screen. Then press **Move** or **Delete**. To move, go to the destination folder and press **Move here**. You cannot move files between the home and system partitions.
 
-- **Rename** a file or folder
-- **Delete** a file or folder (with confirmation)
-- **New Folder** — create a new directory
-- **Copy path** — copy the full path to your clipboard
+To make a folder, press **New folder** in the toolbar.
 
-### Sleep Screen
+To use a PNG as the sleep screen, select **Set as sleep screen** in its menu. To go back to the default, use the Sleep screen row in Status.
 
-You can set any PNG image as your reMarkable's sleep screen using the file action menu. You can also reset to the default sleep screen. The reMarkable's UI will restart to apply the change.
+Before the File Browser changes anything outside `/home/root`, it asks "Modify system files?". You can turn this off in **Settings › Prompts & warnings**.
 
-### System File Warnings
+## Configuration
 
-When you modify files outside `/home/root`, reManager shows a confirmation dialog to make sure you intended to change system files. You can suppress these warnings in Settings if you're experienced with Linux systems.
+Configuration opens `xochitl.conf` in an editor. reManager does not save a file that is not valid INI. Changes take effect after the UI restarts or your reMarkable reboots.
 
-## Configuration Editor
-
-Edit your reMarkable's `xochitl.conf` settings file with syntax highlighting. This is for advanced users who need to modify configuration directly.
+**Backup** saves a copy of `xochitl.conf` on your reMarkable, and **Restore** lists these copies. They are not the full backups from Backup & Restore.
 
 ## Backup and Restore
 
-Backups include documents and reMarkable configuration. Neither packages nor their settings are included.  
+Backups include your documents and configuration. They do not include installed mods or reManager settings.
 
 ### Creating a Backup
 
-1. Click **Backup**
-2. Choose where to save the backup file on your computer
-3. You'll see real-time progress including transfer details
+1. Click **Back up**.
+2. Choose where to save the file. On a phone or tablet, the share sheet opens when the backup is done.
 
 ![Backup progress](images/backup-progress.png)
 
 ### Restoring a Backup
 
-1. Click **Restore**
-2. Select a backup file
-3. Review the confirmation dialog — it shows which device the backup came from and which device you're restoring to
-4. If the backup is from a different device model, you'll see a warning
-5. The restore uploads the data and shows progress
-6. Reboot your reMarkable when complete
+1. Click **Restore** and pick a backup file.
+2. Press **Restore** to confirm. If the backup is from a different reMarkable, the dialog warns you. Your reMarkable is unresponsive until the restore finishes.
+3. If you have a passcode, enter it on your reMarkable.
+
+The restore keeps documents that you added after the backup. reManager restarts the UI itself, so you do not need to reboot.
 
 ## Document Import
 
-Import documents directly to your reMarkable without using the reMarkable cloud.
+Import PDF, EPUB, and rmdoc files to your reMarkable without the reMarkable cloud.
 
 ![Document import](images/document-import.png)
 
-### Supported Formats
+1. Drag files into the import area, or press **Choose files**.
+2. Optional: change the display name. For a PDF, you can also change the page count and the cover page.
+3. Click **Import**.
 
-- **PDF** — with page count override and cover page options
-- **ePub** — e-book files
-- **rmdoc** — reMarkable notebook documents
-
-### Importing Documents
-
-1. Drag and drop files into the import area, or click to browse
-2. Add as many files as you'd like — each appears as a card
-3. For each file you can edit the display name
-4. For PDFs, you can also:
-   - Adjust the page count by clicking the number of pages
-   - Choose the cover page: **First page** or **Last visited**
-5. Check **Restart UI after import** if you want documents to appear immediately (the reMarkable's UI needs to restart to show new documents)
-6. Click **Import** to transfer the files
-
-Each file card shows its status: a spinner while uploading, a green border when done, or an error message if something went wrong.
+**Restart UI after import** is on by default, so the documents appear immediately. If the librarian mod is installed and running, reManager rescans the library instead.
 
 ## OS Manager
 
-View and manage your reMarkable's operating system.
+![OS Manager](images/os-manager.png)
 
-The OS Manager shows your reMarkable's two boot partitions (A and B) with their status:
+The OS Manager shows the two boot partitions and which one runs next. To switch, click the other partition.
 
-- Which partition is currently running
-- Which is set for next boot
-- The OS version on each
+To install a different OS version, pick it from the list and press **Install**. If Vellum is installed, the OS Manager checks your mods against that version first. If some mods are incompatible, you can still press **Install anyway**. Reboot to finish the install.
 
-You can switch which partition will boot next.
+If your reMarkable runs an OS older than 3.11.2.5, install 3.11.2.5 first. Newer versions need it.
 
-You can install a specific OS version by selecting it from the dropdown and clicking **Install**. Package compatibility is checked before installing and you will see a warning if any installed packages won't work with the target version.
-
-After installation or switching partitions, use the **Reboot** button to switch to the new version.
+reManager does not support reMarkable OS beta releases. If your reMarkable runs one, reManager tells you when you connect.
 
 # Settings
 
-Access settings by clicking the gear icon.
+To open Settings, press the gear icon.
+
+![Settings](images/settings.png)
+
+## Connection
+
+- **Download through reManager** — your computer, phone, or tablet downloads mods and sends them to your reMarkable. On by default
+- **Keep your reMarkable awake** — stops your reMarkable from sleeping while reManager is connected. On by default
+- **SSH agent** — **Auto-detect**, or a **Custom path** to your agent socket. Computer only
+- **SSH keys** — keys stored in reManager. See [SSH Keys](#ssh-keys)
 
 ## Appearance
 
-- **Theme** — Light, Dark, or System (matches your computer's theme)
-- **Terminal Theme** — Match reManager, Dark, or Light
-- **Editor Theme** — Match reManager, Dark, or Light
-- **Show Mods Tab** — toggle the Mods tab on or off
-- **Show Utilities Tab** — toggle the Utilities tab on or off
+- **Theme** — **Light**, **Dark**, or **System**
+- **Terminal theme** and **Editor theme** — **Match reManager**, **Dark**, or **Light**
 
-## Behavior
+## Prompts & Warnings
 
-- **Proxy Mode** — download packages through reManager before installing on the reMarkable. Useful if the reMarkable has limited internet connectivity. Defaults to on. 
-- **Prevent Sleep** — keep the device awake while connected by simulating periodic input. Defaults to on. 
-- **Check for Updates** — notify when a new version of reManager is available. Defaults to on.
-- **Offer User Guide** — offer to install or update the user guide on the reMarkable when connecting. Defaults to on.
-- **Suppress Filesystem Warnings** — skip confirmation dialogs when modifying system partition files. Only suppress if you are experienced with Linux systems. Defaults to off.
+- **Warn before changing system files** — the File Browser asks before it changes anything outside `/home/root`. On by default
+- **Notify me about reManager updates** — tells you when a new version of reManager is available. Not on phones and tablets, or in the Microsoft Store and Mac App Store builds, where the store updates reManager
 
-## SSH Agent Socket
+## Storage
 
-- **Auto-detect** — uses the `SSH_AUTH_SOCK` environment variable
-- **Custom socket path** — manually specify the path if auto-detection doesn't find your agent
-
-## Data
-
-- **Delete Command Logs** — clear stored command output logs. Logs are automatically cleaned up after 30 days.
-
-## Uninstall Vellum
-
-When connected and Vellum is installed, you can uninstall it from your reMarkable. A confirmation dialog gives you the option to also remove all installed packages at the same time.
+- **Cached device information** — **Clear** removes the saved information behind the badges on your saved reMarkables
+- **Command logs** — **Delete** removes stored command output. reManager deletes logs after 30 days
 
 # Tips and Troubleshooting
 
+Start with the System tab. Most problems show as a colored row in Status, and the row's button is the fix.
+
 ## Connection Issues
 
-**I can't connect to my reMarkable!**
+### I cannot connect to my reMarkable
 
-- Paper Pro, Paper Pro Move, and Paper Pure users: make sure developer mode is enabled
-- Check that the IP address is correct — USB connections use `10.11.99.1`
-- Make sure your reMarkable is turned on and connected to your computer via USB, or on the same Wi-Fi network if you've enabled ssh-over-wlan 
-- Verify the password matches what's shown in your reMarkable's settings. Passwords are case-sensitive, double-check for characters that look the same (upper-case i & numeral one, etc)
-- Try restarting your reMarkable if the connection was previously working
+- On the Paper Pro, Paper Pro Move, and Paper Pure, make sure developer mode is on
+- On iPhone and iPad, allow Local Network access in **Settings › reManager**
+- Make sure your reMarkable is awake, and connected over USB or to the same Wi-Fi network
+- Check the IP address. Over USB, it is `10.11.99.1`
+- Check the password. Passwords are case-sensitive, and some characters look alike, such as an uppercase I and the number 1
 
-**The connection drops during operations!**
+### reManager says my reMarkable was saved on another device
 
-- Enable **Prevent Sleep** in Settings to stop the reMarkable from sleeping during long operations
-- USB connections are more reliable than Wi-Fi
+The reMarkable synced from another device that used a key that is not available here. Pick a stored SSH key, or add one.
+
+### The connection drops during operations
+
+- Make sure **Keep your reMarkable awake** is on in **Settings › Connection**
+- Use USB if you can. It is more reliable than Wi-Fi
 
 ## Package Issues
 
-**I don't see my mods!**
+### I do not see my mods
 
-- AppLoad apps are accessible via the AppLoad button in the main navigator sidebar
-- The mod framework needs to be started manually after every reboot
-   - Install the tripletap package and triple-press the power button after booting
-   - In the Maintenance tab, run the Start UI with Mods button
-   - reManager disables Start UI with Mods while a launcher is selected. Run the launcherctl Start command instead
-- The hashtable needs to be built for every OS version
-   - Run Rebuild Hashtable in the Maintenance tab
-- Mod is crashing
-   - Run Debug in the Maintenance tab to capture the error
-   - Upload a Support Bundle and submit an issue or use the community chat for support
-- Your launcher is not running
-   - In the Maintenance tab, run the launcherctl Start command
-   - Run the launcherctl Status command to see which launcher is selected
-- reMarkable OS updated
-   - Disable auto-updates via the Maintenance tab
-   - After an OS update, use the **Reenable** command in the Maintenance tab to reenable packages that modify the system partition
+Open the System tab and look for a colored row:
 
-**I installed a launcher but my screen never changes!**
+- Mods is not running: press **Start**
+- Mods is blocked by the hashtable, or the hashtable is not current: press **Rebuild** on the Hashtable row
+- System partition mods were cleared by an OS update: press **Re-enable**, or follow [After an OS Update](#after-an-os-update)
+- The launcher is not running: press **Start**
 
-- A launcher that takes over the screen needs launcherctl to start it
-   - If you declined launcherctl during the install, install the launcherctl configuration for your launcher from the Mods tab
-   - Run the launcherctl Switch command in the Maintenance tab and choose your launcher
+Also check these:
 
-**When will x be added or updated?**
+- AppLoad apps open from the AppLoad button in the sidebar of the main navigator
+- Mods need a manual start after every reboot. Install tripletap and triple-press the power button, or start Mods from the System tab
+- If a mod crashes, run **System › Advanced › xovi-extensions › Debug** to capture the error. Then send a support bundle
 
-- Please do not ask for timelines or ETAs
-   - reManager, Vellum, and the software packaged are maintained by unpaid members of the community with jobs and lives
-   - OS updates typically require changes to UI mods along with testing, which cannot be started until the new OS version is fully released
-- Feel free to open an issue in github.com/vellum-dev/vellum if there's a package that you'd like to see added or is out of date
+### I installed a launcher, but my screen does not change
 
-**A package shows as incompatible?**
+- Oxide needs launcherctl to start. If you declined launcherctl, install it, then press **Start** on the Launcher row
+- To change the launcher, use **System › Advanced › launcherctl › Switch**
 
-- Check the package's supported devices and OS version range in the details panel
-   - **reMarkable OS beta releases are not supported**
-- You may need to upgrade or downgrade your reMarkable's OS
+### When will a mod be added or upgraded?
 
-**Packages conflict with each other?**
+- Please do not ask for timelines or release dates
+   - Unpaid members of the community maintain reManager, Vellum, and the packaged software. They have jobs and lives
+   - OS updates usually need changes to UI mods, and testing. This work cannot start until the new OS version is fully released
+- If a newer version of a packaged project exits, open an issue at github.com/vellum-dev/vellum to flag it
 
-- Some packages can't coexist. The details panel shows which packages conflict.
-- Uninstall the conflicting package before installing the new one.
+### A mod shows as incompatible
+
+- The badge on the card gives the reason. If the mod needs a different OS version, you can switch in the OS Manager
+- reMarkable OS beta releases are not supported
+
+### DNS error
+
+Your reMarkable could not look up a server while it downloaded packages. Press **Download through reManager** in the dialog.
+
+### My reMarkable's shell prints output over SSH
+
+A `.bashrc` that prints output breaks file transfers. reManager shows a fix in the dialog: copy it to the top of `~/.bashrc`, then press **Try again**.
 
 # Getting Help
 
-Click the Support (life buoy ring) icon in the top right of reManager's interface.
+Open **Settings › Get help**.
 
-**Issues with reManager itself** should be reported via reManager's Report a Problem feature, or directly in the github repository: github.com/rmitchellscott/reManager
+**Report a problem** sends a description, and optionally a support bundle, to the reManager developer.
 
-**For general questions or help** use the Community Chat button to open the Discord where many helpful and knowledgeable people (including mod developers) are active
+**Community chat** opens the Discord server. It can make a support bundle first and copy its link for you.
 
-**Package-related issues or package requests** should be submitted to the Vellum package repository: github.com/vellum-dev/vellum
-
-**Issues with the software being packaged** should be submitted to the relevant upstream projects, which are linked in the reManager package details sidebar
+Report package issues at github.com/vellum-dev/vellum. Report problems with a mod itself to its project, which the **Project** row in its details links to.
 
 ## Support Bundles
 
-Support bundles are diagnostic snapshots that help troubleshoot issues. You can generate them from the Support page.
+A support bundle collects diagnostic data about reManager and your reMarkable. To make one, open **Support bundles** and press **New bundle**. Then save it, or upload it to get a link that you can share.
 
-1. If you have multiple saved devices, select which one to generate the bundle for
-2. Review what's included and what's not
-3. Choose **Save Locally** to save the bundle to your computer, or **Upload** to get a shareable URL
-
-Uploaded bundles generate a unique URL you can share with support or the community. The URL is displayed and can be copied to your clipboard.
-
-Previously uploaded bundles are listed with their upload date and expiration status. You can:
-
-- **Copy** the bundle URL to your clipboard
-- **Update** a bundle with fresh diagnostic data from the reMarkable
-- **Delete** a bundle from the server
-
-Uploaded data expires automatically after 30 days.
+To add newer data to an uploaded bundle, press **Update**. The link stays the same. Uploaded bundles expire 30 days after the last upload or update. To delete one from the server sooner, press **Delete**.

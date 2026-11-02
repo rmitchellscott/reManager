@@ -1,55 +1,48 @@
-export interface UserError {
-  code: string;
+import type { ErrorCode } from '@/lib/types';
+
+interface UserError {
+  code: ErrorCode;
   message: string;
   retryable: boolean;
 }
 
-const errorMessages: Record<string, string> = {
-  // Connection errors
+const errorMessages = {
   ERR_AUTH_FAILED:
-    "Authentication failed. Please check your password or SSH key.",
+    "Authentication failed. Check your password or SSH key.",
   ERR_CONNECTION_REFUSED:
-    "Could not connect to reMarkable. Make sure it's powered on, SSH is enabled, and try restarting the reMarkable.",
-  ERR_TIMEOUT: "Connection timed out. The reMarkable may be busy or unreachable.",
+    "Could not connect to your reMarkable. Make sure it's on and SSH is enabled, or try restarting it.",
+  ERR_TIMEOUT: "Connection timed out. Your reMarkable may be busy or unreachable.",
   ERR_NETWORK_UNREACHABLE: "Network unreachable. Check your network connection.",
   ERR_HOST_DOWN:
-    "reMarkable appears to be offline or connection was interrupted.",
+    "Your reMarkable appears to be offline, or the connection was interrupted.",
   ERR_DNS_FAILED:
-    "Could not resolve hostname. Check the address or try using an IP address.",
+    "Could not resolve hostname. Check the address, or use an IP address instead.",
   ERR_SHELL_RC_NOISY:
     "Your reMarkable's shell prints output on SSH, which breaks file transfers. Guard ~/.bashrc so it stays silent in non-interactive sessions.",
-
-  // SSH key errors
-  ERR_KEY_NOT_FOUND: "SSH key file not found. Please select a valid key file.",
+  ERR_KEY_NOT_FOUND: "SSH key file not found. Select a valid key file.",
   ERR_KEY_PASSPHRASE: "Incorrect passphrase for SSH key.",
   ERR_KEY_PARSE_FAILED:
     "Could not read SSH key. The file may be corrupted or in an unsupported format.",
-
-  // File operation errors
-  ERR_FILE_NOT_FOUND: "File or directory not found.",
+  ERR_KEY_NOT_CHOSEN:
+    "This reMarkable was saved on another device. Choose an SSH key to use here.",
+  ERR_FILE_NOT_FOUND: "File or folder not found.",
   ERR_PERMISSION_DENIED:
-    "Permission denied. You may not have access to this resource.",
-  ERR_DISK_FULL: "Not enough storage space on reMarkable.",
-  ERR_PATH_INVALID: "Invalid file path.",
-
-  // Storage/keyring errors
+    "Permission denied.",
+  ERR_DISK_FULL: "Not enough storage space on your reMarkable.",
   ERR_KEYRING_FAILED:
-    "Could not save credentials to system keyring. You may need to re-enter them next time.",
-  ERR_STORAGE_FAILED: "Failed to save data.",
+    "Could not save credentials to the system keychain. You may need to enter them again next time.",
+  ERR_STORAGE_FAILED: "Could not save data.",
+  ERR_DEVICE_NOT_FOUND: "Could not find this reMarkable.",
+  ERR_DEVICE_DETECTION: "Could not detect which reMarkable model this is.",
+  ERR_UNSUPPORTED_DEVICE: "This reMarkable model is not supported.",
+  ERR_DEVICE_CHANGED:
+    "A different reMarkable answered at this address. Connect again to continue with it.",
+  ERR_OPERATION_CANCELED: "Operation was canceled.",
+  ERR_SFTP_FAILED: "File transfer failed.",
+  ERR_UNKNOWN: "Something went wrong. Try again, or restart your reMarkable if it keeps happening.",
+} satisfies Partial<Record<ErrorCode, string>>;
 
-  // Device errors
-  ERR_DEVICE_NOT_FOUND: "reMarkable not found.",
-  ERR_DEVICE_DETECTION: "Could not detect reMarkable type.",
-  ERR_UNSUPPORTED_DEVICE: "This device is not supported.",
-
-  // Operation errors
-  ERR_OPERATION_FAILED: "Operation failed.",
-  ERR_OPERATION_CANCELLED: "Operation was cancelled.",
-  ERR_SFTP_FAILED: "File transfer operation failed.",
-
-  // Fallback
-  ERR_UNKNOWN: "An unexpected error occurred. Try restarting the reMarkable.",
-};
+const messageByCode: Partial<Record<ErrorCode, string>> = errorMessages;
 
 const errorPatterns: Array<{ pattern: RegExp; message: string }> = [
   {
@@ -100,14 +93,24 @@ const errorPatterns: Array<{ pattern: RegExp; message: string }> = [
   },
   {
     pattern: /cancelled|canceled|context canceled/i,
-    message: errorMessages.ERR_OPERATION_CANCELLED,
+    message: errorMessages.ERR_OPERATION_CANCELED,
   },
 ];
 
-export function getUserFriendlyMessage(error: unknown): string {
-  if (typeof error === "object" && error !== null && "code" in error) {
-    const ue = error as UserError;
-    return errorMessages[ue.code] || ue.message || errorMessages.ERR_UNKNOWN;
+function isUserError(value: unknown): value is UserError {
+  return typeof value === "object" && value !== null && typeof (value as { code?: unknown }).code === "string";
+}
+
+function userErrorOf(error: unknown): UserError | null {
+  if (isUserError(error)) return error;
+  const cause = typeof error === "object" && error !== null ? (error as { cause?: unknown }).cause : undefined;
+  return isUserError(cause) ? cause : null;
+}
+
+function recognizedMessage(error: unknown): string | null {
+  const ue = userErrorOf(error);
+  if (ue) {
+    return ue.message || messageByCode[ue.code] || errorMessages.ERR_UNKNOWN;
   }
 
   const errorStr = String(error);
@@ -129,11 +132,22 @@ export function getUserFriendlyMessage(error: unknown): string {
     return errorMessages.ERR_UNKNOWN;
   }
 
-  return errorStr;
+  return null;
 }
 
-export function handleError(error: unknown, context?: string): string {
-  const message = getUserFriendlyMessage(error);
-  console.error(`[${context || "Error"}]`, error);
-  return message;
+function rawText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error);
+}
+
+export function handleError(error: unknown, fallback: string): string {
+  console.error(`[${fallback || "Error"}]`, error);
+  return recognizedMessage(error) ?? fallback;
+}
+
+export function errorDetail(error: unknown): string {
+  return recognizedMessage(error) === null ? rawText(error) : "";
 }

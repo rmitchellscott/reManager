@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and below. Credentials live in EncryptedSharedPreferences, whose
+     master key is held in the Android Keystore and is bound to the device. The
+     key cannot leave it, so a restored copy of this file is undecryptable
+     rather than absent, and the app would read a saved device it can never
+     authenticate. Excluding it makes a restore look like a fresh install for
+     credentials alone, which the user can resolve by entering the password.
+     Settings and the device list still restore. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="wails_secure.xml" />
+</full-backup-content>

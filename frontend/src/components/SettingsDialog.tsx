@@ -1,521 +1,601 @@
-import { useState, useEffect } from 'react'
+import { CaretLeft, CaretRight, CheckCircle, CircleNotch, Trash, X } from '@phosphor-icons/react'
+import { useState, useEffect, useRef } from 'react'
+import { handleError } from '@/lib/errorMessages'
 import { toast } from 'sonner'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Dialog, DialogCloseButton, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, AlertTriangle, AlertCircle, CheckCircle2, Trash2 } from 'lucide-react'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { TerminalWithCopy } from '@/components/TerminalWithCopy'
+import { useMediaQuery, NARROW_VIEWPORT } from '@/hooks/useMediaQuery'
+import { useSwipeToDismiss } from '@/hooks/useSwipeToDismiss'
+import { useBackHandler } from '@/hooks/useBackHandler'
+import { panelAction, PanelGroup, PanelRow, SectionLabel } from '@/components/Panel'
+import { pageTitle } from '@/components/PageHeader'
+import { SupportHome, type SupportScreen } from '@/components/SupportHome'
+import { SSHKeyManager } from '@/components/SSHKeyManager'
+import { SyncKey, type ManagedKey, type PlatformCapabilities, type SettingsInfo } from '@/lib/types'
+import { cn } from '@/lib/utils'
+import { ConnectionService, SupportService, SystemService } from '@bindings/reManager'
+import { onSyncedChange } from '@/lib/syncEvents'
 
 interface SettingsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  isConnected: boolean
-  vellumInstalled: boolean | null
-  tabVisibility: Record<string, boolean>
-  proxyMode: boolean
-  suppressSystemFileWarnings: boolean
-  preventSleep: boolean
-  theme: string
-  terminalTheme: string
-  editorTheme: string
-  checkForUpdates: boolean
-  suppressGuideOffer: boolean
-  sshAgentSocketPath: string
-  onSaveSettings: (tabVisibility: Record<string, boolean>, proxyMode: boolean, suppressSystemFileWarnings: boolean, preventSleep: boolean, theme: string, terminalTheme: string, editorTheme: string, checkForUpdates: boolean, sshAgentSocketPath: string) => void
-  onToggleGuideOffer: (enabled: boolean) => void
-  onUninstallVellum: (removeAllPackages: boolean) => void
-  uninstalling: boolean
-  uninstallOutput: string
-  uninstallError: string | null
+  settings: SettingsInfo
+  onUpdate: (patch: Partial<SettingsInfo>) => void
+  onOpenSupport: (screen: SupportScreen) => void
+  supportPageOpen: boolean
+  connectedDeviceId: string
   appVersion: string
+  capabilities: PlatformCapabilities
+  initialSection?: SettingsSection
 }
+
+export type SettingsSection = 'connection' | 'appearance' | 'prompts' | 'storage' | 'help'
+
+type SectionId = SettingsSection
+
+interface SectionDefinition {
+  id: SectionId
+  label: string
+}
+
+const SECTIONS: SectionDefinition[] = [
+  { id: 'connection', label: 'Connection' },
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'prompts', label: 'Prompts & warnings' },
+  { id: 'storage', label: 'Storage' },
+  { id: 'help', label: 'Get help' },
+]
+
+const THEME_CHOICES = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'System' },
+]
+
+const MATCH_CHOICES = [
+  { value: 'match', label: 'Match reManager' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+]
+
+const switchHitTarget = 'touch:hit-target'
 
 export function SettingsDialog({
   open,
   onOpenChange,
-  isConnected,
-  vellumInstalled,
-  tabVisibility,
-  proxyMode,
-  suppressSystemFileWarnings,
-  preventSleep,
-  theme,
-  terminalTheme,
-  editorTheme,
-  checkForUpdates,
-  suppressGuideOffer,
-  sshAgentSocketPath,
-  onSaveSettings,
-  onToggleGuideOffer,
-  onUninstallVellum,
-  uninstalling,
-  uninstallOutput,
-  uninstallError,
+  settings,
+  onUpdate,
+  onOpenSupport,
+  supportPageOpen,
+  connectedDeviceId,
   appVersion,
+  capabilities,
+  initialSection,
 }: SettingsDialogProps) {
-  const defaultTabVisibility = { mods: true, maintenance: true, utilities: true }
+  const narrow = useMediaQuery(NARROW_VIEWPORT)
 
-  const [localTabVisibility, setLocalTabVisibility] = useState({ ...defaultTabVisibility, ...tabVisibility })
-  const [localProxyMode, setLocalProxyMode] = useState(proxyMode)
-  const [localSuppressSystemFileWarnings, setLocalSuppressSystemFileWarnings] = useState(suppressSystemFileWarnings)
-  const [localPreventSleep, setLocalPreventSleep] = useState(preventSleep)
-  const [localTheme, setLocalTheme] = useState(theme)
-  const [localTerminalTheme, setLocalTerminalTheme] = useState(terminalTheme)
-  const [localEditorTheme, setLocalEditorTheme] = useState(editorTheme)
-  const [localCheckForUpdates, setLocalCheckForUpdates] = useState(checkForUpdates)
-  const [localSuppressGuideOffer, setLocalSuppressGuideOffer] = useState(suppressGuideOffer)
-  const [localSSHAgentSocketPath, setLocalSSHAgentSocketPath] = useState(sshAgentSocketPath)
-  const [agentSocketMode, setAgentSocketMode] = useState<'auto' | 'custom'>(sshAgentSocketPath ? 'custom' : 'auto')
-  const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
-  const [removePackages, setRemovePackages] = useState(true)
+  const [section, setSection] = useState<SectionId | null>(null)
   const [confirmDeleteLogs, setConfirmDeleteLogs] = useState(false)
+  const [confirmClearCache, setConfirmClearCache] = useState(false)
+  const [clearingCache, setClearingCache] = useState(false)
+  const [cachedDevices, setCachedDevices] = useState(0)
+  const [managedKeys, setManagedKeys] = useState<ManagedKey[]>([])
   const [deletingLogs, setDeletingLogs] = useState(false)
+  const [enteringBack, setEnteringBack] = useState(false)
 
-  const resetToProps = () => {
-    setLocalTabVisibility({ ...defaultTabVisibility, ...tabVisibility })
-    setLocalProxyMode(proxyMode)
-    setLocalSuppressSystemFileWarnings(suppressSystemFileWarnings)
-    setLocalPreventSleep(preventSleep)
-    setLocalTheme(theme)
-    setLocalTerminalTheme(terminalTheme)
-    setLocalEditorTheme(editorTheme)
-    setLocalCheckForUpdates(checkForUpdates)
-    setLocalSuppressGuideOffer(suppressGuideOffer)
-    setLocalSSHAgentSocketPath(sshAgentSocketPath)
-    setAgentSocketMode(sshAgentSocketPath ? 'custom' : 'auto')
-  }
+  const [agentSocketMode, setAgentSocketMode] = useState<'auto' | 'custom'>(settings.sshAgentSocketPath ? 'custom' : 'auto')
+  const [agentPathDraft, setAgentPathDraft] = useState(settings.sshAgentSocketPath)
 
-  const hasChanges =
-    localProxyMode !== proxyMode ||
-    localSuppressSystemFileWarnings !== suppressSystemFileWarnings ||
-    localPreventSleep !== preventSleep ||
-    localTheme !== theme ||
-    localTerminalTheme !== terminalTheme ||
-    localEditorTheme !== editorTheme ||
-    localCheckForUpdates !== checkForUpdates ||
-    localSuppressGuideOffer !== suppressGuideOffer ||
-    localSSHAgentSocketPath !== sshAgentSocketPath ||
-    JSON.stringify(localTabVisibility) !== JSON.stringify({ ...defaultTabVisibility, ...tabVisibility })
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const navRefs = useRef<Partial<Record<SectionId, HTMLButtonElement | null>>>({})
+  const lastSection = useRef<SectionId | null>(null)
+
+  // Read via ref so the open-reset effect does not list settings as a dep and throw an open pane back to the list on every commit.
+  const latestSettings = useRef(settings)
+  latestSettings.current = settings
+
+  const latestInitialSection = useRef(initialSection)
+  latestInitialSection.current = initialSection
 
   useEffect(() => {
-    if (open) {
-      resetToProps()
-    }
-  }, [open, tabVisibility, proxyMode, suppressSystemFileWarnings, suppressGuideOffer, preventSleep, theme, terminalTheme, editorTheme, checkForUpdates, sshAgentSocketPath])
+    if (!open || !capabilities.managedKeys) return
+    const load = () => ConnectionService.GetManagedKeys().then(keys => setManagedKeys(keys ?? [])).catch(() => setManagedKeys([]))
+    load()
+    return onSyncedChange(SyncKey.KeysSyncKey, load)
+  }, [open, capabilities.managedKeys])
 
-  const handleCancel = () => {
-    resetToProps()
-    setShowUninstallConfirm(false)
+  useEffect(() => {
+    if (!open) return
+    setSection(latestInitialSection.current ?? null)
     setConfirmDeleteLogs(false)
-    onOpenChange(false)
+    setEnteringBack(false)
+    lastSection.current = latestInitialSection.current ?? null
+    setAgentSocketMode(latestSettings.current.sshAgentSocketPath ? 'custom' : 'auto')
+    setAgentPathDraft(latestSettings.current.sshAgentSocketPath)
+  }, [open])
+
+  const activeSection: SectionId = section ?? 'connection'
+  const activeDefinition = SECTIONS.find(s => s.id === activeSection) as SectionDefinition
+
+  useEffect(() => {
+    if (!open || !narrow) return
+    if (section !== null) {
+      headingRef.current?.focus()
+    } else if (lastSection.current) {
+      navRefs.current[lastSection.current]?.focus()
+    }
+  }, [open, narrow, section])
+
+  const openSection = (id: SectionId) => {
+    lastSection.current = id
+    setEnteringBack(false)
+    setSection(id)
   }
 
-  const handleSave = () => {
-    onSaveSettings(localTabVisibility, localProxyMode, localSuppressSystemFileWarnings, localPreventSleep, localTheme, localTerminalTheme, localEditorTheme, localCheckForUpdates, localSSHAgentSocketPath)
-    if (localSuppressGuideOffer !== suppressGuideOffer) {
-      onToggleGuideOffer(!localSuppressGuideOffer)
+  const backToList = () => {
+    setEnteringBack(true)
+    setSection(null)
+  }
+
+  const { ref: paneRef, swipeHandlers: paneSwipe, touchAction } = useSwipeToDismiss({
+    direction: 'right',
+    onDismiss: backToList,
+    enabled: narrow && section !== null,
+  })
+
+  const { ref: shellRef, swipeHandlers: shellSwipe } = useSwipeToDismiss({
+    direction: 'right',
+    onDismiss: () => onOpenChange(false),
+    enabled: narrow && section === null,
+  })
+
+  useBackHandler(section !== null ? backToList : () => onOpenChange(false), open && narrow)
+
+  useEffect(() => {
+    if (!open) return
+    ConnectionService.CachedDeviceCount()
+      .then(setCachedDevices)
+      .catch(() => setCachedDevices(0))
+  }, [open, clearingCache])
+
+  const handleClearCache = async () => {
+    setClearingCache(true)
+    try {
+      await ConnectionService.ClearDeviceInfoCache()
+      toast('Cached device information cleared', { icon: <CheckCircle className="h-4 w-4" /> })
+      setConfirmClearCache(false)
+    } catch (err) {
+      toast(handleError(err, 'Could not clear cache.'))
+    } finally {
+      setClearingCache(false)
     }
-    onOpenChange(false)
   }
 
   const handleDeleteLogs = async () => {
     setDeletingLogs(true)
     try {
-      await window.go.main.App.DeleteAllLogs()
-      toast('All command logs deleted', { icon: <CheckCircle2 className="h-4 w-4" /> })
+      await SupportService.DeleteAllLogs()
+      toast('All command logs deleted', { icon: <CheckCircle className="h-4 w-4" /> })
       setConfirmDeleteLogs(false)
     } catch (err) {
-      toast('Failed to delete logs: ' + (err instanceof Error ? err.message : String(err)))
+      toast(handleError(err, 'Could not delete logs.'))
     } finally {
       setDeletingLogs(false)
     }
   }
 
-  const handleOpenChange = (newOpen: boolean) => {
-    if (!newOpen) {
-      setShowUninstallConfirm(false)
-      setConfirmDeleteLogs(false)
-      resetToProps()
-    }
-    onOpenChange(newOpen)
+  const commitAgentPath = () => {
+    if (agentPathDraft !== settings.sshAgentSocketPath) onUpdate({ sshAgentSocketPath: agentPathDraft })
   }
 
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="w-[80vw] h-[80vh] max-w-none flex flex-col">
-        <DialogHeader className="flex-shrink-0">
-          <DialogTitle>Settings</DialogTitle>
+  const agentPathField = (
+    <div>
+      <label htmlFor="agent-path" className="text-xs font-medium text-muted-foreground">
+        Socket path
+      </label>
+      <div className="mt-1.5 flex gap-2">
+        <Input
+          id="agent-path"
+          value={agentPathDraft}
+          onChange={(e) => setAgentPathDraft(e.target.value)}
+          onBlur={commitAgentPath}
+          onKeyDown={(e) => { if (e.key === 'Enter') commitAgentPath() }}
+          placeholder="/path/to/agent.sock"
+          className="flex-1"
+        />
+        <Button
+          variant="outline"
+          type="button"
+          className="shrink-0 touch:hit-target"
+          onClick={async () => {
+            const path = await ConnectionService.SelectKeyFile()
+            if (path) {
+              setAgentPathDraft(path)
+              onUpdate({ sshAgentSocketPath: path })
+            }
+          }}
+        >
+          Browse
+        </Button>
+      </div>
+    </div>
+  )
+
+  const renderSection = () => {
+    switch (activeSection) {
+      case 'connection':
+        return (
+          <div className="space-y-5">
+          <PanelGroup controlColumn divided={false}>
+            <PanelRow
+              label="Download through reManager"
+              htmlFor="proxy-mode"
+              detail="Useful if your reMarkable has limited internet connectivity."
+            >
+              <Switch id="proxy-mode" className={switchHitTarget} checked={settings.proxyMode} onCheckedChange={(v) => onUpdate({ proxyMode: v })} />
+            </PanelRow>
+            <PanelRow
+              label="Keep your reMarkable awake"
+              htmlFor="prevent-sleep"
+              detail="Simulates periodic input while connected."
+            >
+              <Switch id="prevent-sleep" className={switchHitTarget} checked={settings.preventSleep} onCheckedChange={(v) => onUpdate({ preventSleep: v })} />
+            </PanelRow>
+            {capabilities.sshAgent && (
+            <PanelRow
+              label="SSH agent"
+              htmlFor="agent-mode"
+              detail={agentSocketMode === 'auto'
+                ? 'Uses the SSH_AUTH_SOCK environment variable.'
+                : 'Point reManager at a specific agent socket.'}
+              expansion={agentSocketMode === 'custom' ? agentPathField : undefined}
+            >
+              <Select
+                value={agentSocketMode}
+                onValueChange={(value) => {
+                  const mode = value as 'auto' | 'custom'
+                  setAgentSocketMode(mode)
+                  if (mode === 'auto') {
+                    setAgentPathDraft('')
+                    onUpdate({ sshAgentSocketPath: '' })
+                  }
+                }}
+              >
+                <SelectTrigger id="agent-mode" className="w-40" aria-describedby="agent-mode-detail">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto-detect</SelectItem>
+                  <SelectItem value="custom">Custom path</SelectItem>
+                </SelectContent>
+              </Select>
+            </PanelRow>
+            )}
+          </PanelGroup>
+
+          {capabilities.managedKeys && (
+            <div className="border-t pt-5">
+              <SectionLabel>SSH keys</SectionLabel>
+              <SSHKeyManager keys={managedKeys} onKeysChange={setManagedKeys} canChooseFile={capabilities.localKeyFiles} />
+            </div>
+          )}
+          </div>
+        )
+
+      case 'appearance':
+        return (
+          <PanelGroup controlColumn divided={false}>
+            <PanelRow label="Theme" htmlFor="theme-select" detail="Applies to reManager itself.">
+              <Select value={settings.theme} onValueChange={(v) => onUpdate({ theme: v })}>
+                <SelectTrigger id="theme-select" className="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {THEME_CHOICES.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </PanelRow>
+            <PanelRow label="Terminal theme" htmlFor="terminal-theme-select" detail="Applies to the terminal and command output.">
+              <Select value={settings.terminalTheme} onValueChange={(v) => onUpdate({ terminalTheme: v })}>
+                <SelectTrigger id="terminal-theme-select" className="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {MATCH_CHOICES.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </PanelRow>
+            <PanelRow label="Editor theme" htmlFor="editor-theme-select" detail="Applies to the file editor.">
+              <Select value={settings.editorTheme} onValueChange={(v) => onUpdate({ editorTheme: v })}>
+                <SelectTrigger id="editor-theme-select" className="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {MATCH_CHOICES.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </PanelRow>
+          </PanelGroup>
+        )
+
+      case 'prompts':
+        return (
+          <PanelGroup controlColumn divided={false}>
+            {/* The stored setting suppresses warnings, so the switch shows its inverse. */}
+            <PanelRow
+              label="Warn before changing system files"
+              htmlFor="warn-sys-files"
+              detail="Only turn this off if you are comfortable with Linux systems."
+            >
+              <Switch
+                id="warn-sys-files"
+                className={switchHitTarget}
+                checked={!settings.suppressSystemFileWarnings}
+                onCheckedChange={(v) => onUpdate({ suppressSystemFileWarnings: !v })}
+              />
+            </PanelRow>
+            {capabilities.updateCheck && (
+              <PanelRow
+                label="Notify me about reManager updates"
+                htmlFor="check-updates"
+                detail="Checks for a new release when reManager starts."
+              >
+                <Switch id="check-updates" className={switchHitTarget} checked={settings.checkForUpdates} onCheckedChange={(v) => onUpdate({ checkForUpdates: v })} />
+              </PanelRow>
+            )}
+          </PanelGroup>
+        )
+
+      case 'storage':
+        return (
+          <div className="space-y-5">
+            <PanelGroup controlColumn>
+              <PanelRow
+                label="Cached device information"
+                detail="Shows what each reMarkable has waiting before you connect."
+
+              >
+                <Button
+                  className={panelAction}
+                  variant="outline"
+                  disabled={cachedDevices === 0}
+                  onClick={() => setConfirmClearCache(true)}
+                >
+                  Clear
+                </Button>
+              </PanelRow>
+              <PanelRow label="Command logs" detail="Cleaned up automatically after 30 days.">
+                <Button className={panelAction} variant="outline" onClick={() => setConfirmDeleteLogs(true)}>
+                  Delete
+                </Button>
+              </PanelRow>
+            </PanelGroup>
+          </div>
+        )
+      case 'help':
+        return (
+          <div className="space-y-5">
+            <SupportHome
+              active={activeSection === 'help'}
+              supportPageOpen={supportPageOpen}
+              connectedDeviceId={connectedDeviceId}
+              supportUpload={capabilities.supportUpload}
+              onOpen={onOpenSupport}
+            />
+          </div>
+        )
+    }
+  }
+
+  const clearCacheDialog = (
+    <Dialog open={confirmClearCache} onOpenChange={(open) => !open && setConfirmClearCache(false)}>
+      <DialogContent>
+        <DialogHeader severity="destructive" icon={Trash}>
+          <DialogTitle>Clear cached device information?</DialogTitle>
           <DialogDescription>
-            Configure reManager preferences
+            reManager forgets what each reMarkable has installed until the next time you connect
+            to it.
           </DialogDescription>
         </DialogHeader>
-
-        <div className="space-y-6 flex-1 overflow-y-auto">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Appearance</CardTitle>
-              <CardDescription className="text-xs">
-                Customize the look of reManager
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="theme-select" className="font-normal">Theme</Label>
-                <Select value={localTheme} onValueChange={setLocalTheme}>
-                  <SelectTrigger id="theme-select" className="w-40">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="light">Light</SelectItem>
-                    <SelectItem value="dark">Dark</SelectItem>
-                    <SelectItem value="system">System</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="terminal-theme-select" className="font-normal">Terminal Theme</Label>
-                <Select value={localTerminalTheme} onValueChange={setLocalTerminalTheme}>
-                  <SelectTrigger id="terminal-theme-select" className="w-40">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="match">Match reManager</SelectItem>
-                    <SelectItem value="dark">Dark</SelectItem>
-                    <SelectItem value="light">Light</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="editor-theme-select" className="font-normal">Editor Theme</Label>
-                <Select value={localEditorTheme} onValueChange={setLocalEditorTheme}>
-                  <SelectTrigger id="editor-theme-select" className="w-40">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="match">Match reManager</SelectItem>
-                    <SelectItem value="dark">Dark</SelectItem>
-                    <SelectItem value="light">Light</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="tab-mods" className="font-normal">Show Mods Tab</Label>
-                <Switch
-                  id="tab-mods"
-                  checked={localTabVisibility.mods}
-                  onCheckedChange={(v) => setLocalTabVisibility({ ...localTabVisibility, mods: v })}
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="tab-utilities" className="font-normal">Show Utilities Tab</Label>
-                <Switch
-                  id="tab-utilities"
-                  checked={localTabVisibility.utilities}
-                  onCheckedChange={(v) => setLocalTabVisibility({ ...localTabVisibility, utilities: v })}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Behavior</CardTitle>
-              <CardDescription className="text-xs">
-                Configure how reManager operates
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <Label htmlFor="proxy-mode" className="font-normal">Proxy Mode</Label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Download packages through reManager before installing on the reMarkable.
-                    Useful if the reMarkable has limited internet connectivity.
-                  </p>
-                </div>
-                <Switch
-                  id="proxy-mode"
-                  checked={localProxyMode}
-                  onCheckedChange={setLocalProxyMode}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <Label htmlFor="prevent-sleep" className="font-normal">Prevent Sleep</Label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Keep the device awake while connected by simulating periodic input.
-                  </p>
-                </div>
-                <Switch
-                  id="prevent-sleep"
-                  checked={localPreventSleep}
-                  onCheckedChange={setLocalPreventSleep}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <Label htmlFor="check-updates" className="font-normal">Check for Updates</Label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Notify when a new version of reManager is available.
-                  </p>
-                </div>
-                <Switch
-                  id="check-updates"
-                  checked={localCheckForUpdates}
-                  onCheckedChange={setLocalCheckForUpdates}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <Label htmlFor="offer-guide" className="font-normal">Offer User Guide</Label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Offer to install or update the user guide on the reMarkable when connecting.
-                  </p>
-                </div>
-                <Switch
-                  id="offer-guide"
-                  checked={!localSuppressGuideOffer}
-                  onCheckedChange={(checked) => setLocalSuppressGuideOffer(!checked)}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <Label htmlFor="suppress-sys-warnings" className="font-normal">Suppress Filesystem Warnings</Label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Skip confirmation dialogs when modifying system partition files.
-                    Only suppress if you are experienced with Linux systems.
-                  </p>
-                </div>
-                <Switch
-                  id="suppress-sys-warnings"
-                  checked={localSuppressSystemFileWarnings}
-                  onCheckedChange={setLocalSuppressSystemFileWarnings}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">SSH Agent Socket</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <RadioGroup
-                  value={agentSocketMode}
-                  onValueChange={(value) => {
-                    setAgentSocketMode(value as 'auto' | 'custom')
-                    if (value === 'auto') setLocalSSHAgentSocketPath('')
-                  }}
-                  className="space-y-1"
-                >
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <RadioGroupItem value="auto" id="agent-auto" />
-                      <Label htmlFor="agent-auto" className="cursor-pointer font-normal">
-                        Auto-detect
-                      </Label>
-                    </div>
-                    {agentSocketMode === 'auto' && (
-                      <p className="text-xs text-muted-foreground ml-6 mt-0.5">
-                        Uses the SSH_AUTH_SOCK environment variable.
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <RadioGroupItem value="custom" id="agent-custom" />
-                      <Label htmlFor="agent-custom" className="cursor-pointer font-normal">
-                        Custom socket path
-                      </Label>
-                    </div>
-                    {agentSocketMode === 'custom' && (
-                      <div className="flex gap-2 ml-6 mt-1">
-                        <Input
-                          value={localSSHAgentSocketPath}
-                          onChange={(e) => setLocalSSHAgentSocketPath(e.target.value)}
-                          placeholder="/path/to/agent.sock"
-                          className="flex-1"
-                        />
-                        <Button
-                          variant="outline"
-                          type="button"
-                          onClick={async () => {
-                            const path = await window.go.main.App.SelectKeyFile()
-                            if (path) setLocalSSHAgentSocketPath(path)
-                          }}
-                        >
-                          Browse
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </RadioGroup>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Data</CardTitle>
-              <CardDescription className="text-xs">
-                Command logs are automatically cleaned up after 30 days
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {!confirmDeleteLogs ? (
-                <Button
-                  variant="outline"
-                  onClick={() => setConfirmDeleteLogs(true)}
-                  className="w-full"
-                >
-                  <Trash2 className="h-4 w-4 mr-1.5" />
-                  Delete Command Logs
-                </Button>
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2 text-sm text-destructive">
-                    <AlertTriangle className="h-4 w-4" />
-                    <span>This will permanently delete all command logs</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => setConfirmDeleteLogs(false)}
-                      className="flex-1"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      onClick={handleDeleteLogs}
-                      disabled={deletingLogs}
-                      className="flex-1"
-                    >
-                      {deletingLogs ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : null}
-                      Delete
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {isConnected && vellumInstalled && (
-            <Card className="border-destructive/50">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Uninstall</CardTitle>
-                <CardDescription className="text-xs">
-                  Remove the Vellum package manager from your reMarkable.
-                  <br />
-                  reManager will no longer be able to install or manage packages unless Vellum is reinstalled.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {uninstalling && (
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span className="text-sm">Uninstalling Vellum...</span>
-                  </div>
-                )}
-
-                {uninstallError && (
-                  <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>Uninstall failed: {uninstallError}</AlertDescription>
-                  </Alert>
-                )}
-
-                {(uninstalling || uninstallError) && uninstallOutput && (
-                  <div className="h-[200px] rounded-lg overflow-hidden">
-                    <TerminalWithCopy output={uninstallOutput} />
-                  </div>
-                )}
-
-                {uninstallError && (
-                  <Button
-                    variant="outline"
-                    onClick={() => onUninstallVellum(removePackages)}
-                    className="w-full"
-                  >
-                    Retry Uninstall
-                  </Button>
-                )}
-
-                {!uninstalling && !uninstallError && !showUninstallConfirm && (
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowUninstallConfirm(true)}
-                    className="w-full"
-                  >
-                    Uninstall Vellum
-                  </Button>
-                )}
-
-                {!uninstalling && !uninstallError && showUninstallConfirm && (
-                  <>
-                    <div className="flex items-center gap-2 text-sm text-destructive">
-                      <AlertTriangle className="h-4 w-4" />
-                      <span>This will remove Vellum from the device</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="remove-pkgs" className="font-normal text-sm">
-                        Also remove all installed packages
-                      </Label>
-                      <Switch
-                        id="remove-pkgs"
-                        checked={removePackages}
-                        onCheckedChange={setRemovePackages}
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => setShowUninstallConfirm(false)}
-                        className="flex-1"
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        onClick={() => onUninstallVellum(removePackages)}
-                        className="flex-1"
-                      >
-                        Confirm Uninstall
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          )}
-        </div>
-
-        <DialogFooter className="flex-shrink-0 mt-4">
-          <Button variant="outline" onClick={handleCancel}>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirmClearCache(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={!hasChanges}>
-            Save
+          <Button variant="destructive" onClick={handleClearCache} disabled={clearingCache}>
+            {clearingCache && <CircleNotch className="mr-1.5 h-4 w-4 animate-spin" />}
+            Clear
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 
-        <div className="flex-shrink-0 text-sm text-muted-foreground text-center pt-2">
-          <span>reManager {appVersion}</span>
-          <span className="mx-2">·</span>
-          <button
-            onClick={() => window.runtime.BrowserOpenURL('https://github.com/rmitchellscott/remanager')}
-            className="hover:underline"
-          >
-            GitHub
-          </button>
+  const deleteLogsDialog = (
+    <Dialog open={confirmDeleteLogs} onOpenChange={(open) => !open && setConfirmDeleteLogs(false)}>
+      <DialogContent>
+        <DialogHeader severity="destructive" icon={Trash}>
+          <DialogTitle>Delete all command logs?</DialogTitle>
+          <DialogDescription>
+            Support bundles are built from these logs, so a bundle made afterward will carry
+            nothing from before now.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirmDeleteLogs(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={handleDeleteLogs} disabled={deletingLogs}>
+            {deletingLogs && <CircleNotch className="mr-1.5 h-4 w-4 animate-spin" />}
+            Delete
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
+  const showList = narrow && section === null
+
+  useEffect(() => {
+    if (!open || !narrow) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onOpenChange(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, narrow, onOpenChange])
+
+  const closeButton = (
+    <Button
+      variant="ghost"
+      size="xs"
+      className="-mr-2 touch:hit-target"
+      onClick={() => onOpenChange(false)}
+      aria-label="Close settings"
+    >
+      <X className="h-4 w-4" />
+    </Button>
+  )
+
+  const navRowClass = 'flex w-full items-center gap-3 text-left text-sm font-medium transition-colors touch:hit-target'
+
+  const navList = narrow ? (
+    <nav className="-ml-gutter-left -mr-gutter-right" aria-label="Settings sections">
+      {SECTIONS.map(s => (
+        <button
+          key={s.id}
+          ref={(el) => { navRefs.current[s.id] = el }}
+          type="button"
+          onClick={() => openSection(s.id)}
+          className={cn(navRowClass, 'justify-between pl-gutter-left pr-gutter-right py-3 hover:bg-accent active:bg-accent')}
+        >
+          <span className="truncate">{s.label}</span>
+          <CaretRight className="h-4 w-4 shrink-0 opacity-50" aria-hidden />
+        </button>
+      ))}
+    </nav>
+  ) : (
+    <nav className="space-y-0.5" aria-label="Settings sections">
+      {SECTIONS.map(s => (
+        <button
+          key={s.id}
+          type="button"
+          onClick={() => setSection(s.id)}
+          aria-current={activeSection === s.id ? 'page' : undefined}
+          className={cn(
+            navRowClass,
+            'rounded-md px-3 py-2',
+            // --accent equals --muted here, so an accent fill on the sidebar would vanish; the active row takes the content surface instead.
+            activeSection === s.id
+              ? 'bg-card text-foreground shadow-sm'
+              : 'text-muted-foreground hover:bg-card/60 hover:text-foreground',
+          )}
+        >
+          {s.label}
+        </button>
+      ))}
+    </nav>
+  )
+
+  const footer = (stacked: boolean) => (
+    <div className={cn(
+      'flex shrink-0 text-xs text-muted-foreground',
+      stacked ? 'flex-col items-start gap-0.5' : 'items-center justify-center gap-2',
+    )}>
+      <span>reManager {appVersion}</span>
+      {!stacked && <span aria-hidden>·</span>}
+      <button
+        onClick={() => SystemService.OpenExternalURL('https://github.com/rmitchellscott/remanager')}
+        className="hover:text-foreground hover:underline"
+      >
+        GitHub
+      </button>
+      {!stacked && <span aria-hidden>·</span>}
+      <button
+        onClick={() => SystemService.OpenExternalURL('https://remanager.io/privacy')}
+        className="hover:text-foreground hover:underline"
+      >
+        Privacy policy
+      </button>
+    </div>
+  )
+
+  if (narrow) {
+    if (!open) return null
+    return (
+      <div
+        ref={shellRef}
+        {...shellSwipe}
+        className="screen-edge fixed inset-0 z-50 flex touch-pan-y flex-col bg-background duration-150 animate-in fade-in-0"
+      >
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b pl-gutter-left pr-gutter-right pb-3 pt-[calc(var(--safe-area-top)+12px)]">
+          <div className="flex min-w-0 items-center gap-1">
+            {section !== null && (
+              <button
+                type="button"
+                onClick={backToList}
+                aria-label="Back to settings"
+                className="-ml-2 shrink-0 rounded-md text-muted-foreground touch:hit-target hover:text-foreground"
+              >
+                <CaretLeft className="h-5 w-5" aria-hidden />
+              </button>
+            )}
+            <h2 ref={headingRef} tabIndex={-1} className={cn(pageTitle, 'truncate outline-none')}>
+              {section === null ? 'Settings' : activeDefinition.label}
+            </h2>
+          </div>
+          {closeButton}
         </div>
+
+        <div
+          key={section ?? 'list'}
+          ref={paneRef}
+          {...paneSwipe}
+          className={cn(
+            'min-h-0 flex-1 overflow-y-auto pl-gutter-left pr-gutter-right pb-4 duration-200 animate-in fade-in-0',
+            enteringBack ? 'slide-in-from-left-4' : 'slide-in-from-right-4',
+            section === null ? 'pt-2' : 'pt-4 pb-[calc(var(--safe-area-bottom)+16px)]',
+            touchAction,
+          )}
+        >
+          {showList ? navList : renderSection()}
+        </div>
+
+        {section === null && (
+          <div className="pl-gutter-left pr-gutter-right pb-[calc(var(--safe-area-bottom)+12px)]">
+            {footer(false)}
+          </div>
+        )}
+
+        {clearCacheDialog}
+      {deleteLogsDialog}
+      </div>
+    )
+  }
+
+  // Width lives on Dialog's own box; DialogContent size only caps the inner one, so a size above max-w-lg overflows the wrapper rather than widening it.
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} className="max-w-3xl">
+      <DialogContent size="xl" className="h-[min(74dvh,640px)] flex-row gap-0 overflow-hidden p-0">
+        <aside className="flex w-52 shrink-0 flex-col bg-muted px-3 pb-3 pt-4">
+          {/* Radix requires a DialogTitle for the dialog's accessible name, even though it is hidden here. */}
+          <DialogHeader className="sr-only">
+            <DialogTitle>Settings</DialogTitle>
+          </DialogHeader>
+
+          {navList}
+
+          <div className="mt-auto px-3 pt-4">{footer(true)}</div>
+        </aside>
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="shrink-0 pl-6 pr-10 pb-3 pt-5">
+            <h2 className="truncate text-lg font-semibold tracking-tight">{activeDefinition.label}</h2>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-1 pb-6">
+            {renderSection()}
+          </div>
+        </div>
+        <DialogCloseButton onClick={() => onOpenChange(false)} aria-label="Close settings" />
       </DialogContent>
 
+      {clearCacheDialog}
+      {deleteLogsDialog}
     </Dialog>
   )
 }

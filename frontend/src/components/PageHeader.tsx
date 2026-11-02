@@ -1,57 +1,71 @@
+import { Eject, Gear } from '@phosphor-icons/react'
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
-import { Settings, Unplug, LifeBuoy } from 'lucide-react'
-
+import { cn } from '@/lib/utils'
 interface PageHeaderProps {
   device: string
   deviceMachine?: string
   firmware?: string
   onSettings: () => void
   onDisconnect: () => void
-  onSupport?: () => void
+  nav?: ReactNode
+  narrowTitle?: string
+  subtitle?: string
+  exitLabel?: string
 }
 
-export function PageHeader({ device, deviceMachine, firmware, onSettings, onDisconnect, onSupport }: PageHeaderProps) {
+const iconButton = 'max-md:h-[40px] max-md:w-[40px] max-md:p-0 md:h-[36px] md:px-[12px]'
+const iconGlyph = 'h-[16px] w-[16px]'
+
+export const pageTitle = 'text-[24px] font-bold leading-[32px] md:text-[30px] md:leading-[36px]'
+
+export function PageHeader({ device, deviceMachine, firmware, onSettings, onDisconnect, nav, narrowTitle, subtitle, exitLabel }: PageHeaderProps) {
+  const connected = Boolean(device && firmware)
+  const subtitleText = subtitle || (connected ? deviceMachine || device : '')
+  const exitText = exitLabel || 'Disconnect'
+
   return (
-    <div className="flex items-center justify-between">
-      <div>
-        <h1 className="text-3xl font-bold text-foreground">reManager</h1>
-        <p className="text-muted-foreground">Manage packages on your reMarkable</p>
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className={cn(pageTitle, 'text-foreground')}>
+            <span className="hidden md:inline">reManager</span>
+            <span className="md:hidden">
+              {narrowTitle || (connected ? deviceMachine || device : 'reManager')}
+            </span>
+          </h1>
+          {subtitleText && (
+            <p className="hidden truncate text-[14px] leading-[20px] text-muted-foreground md:block">
+              {subtitleText}
+            </p>
+          )}
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-1 text-sm md:gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="sm" className={iconButton} onClick={() => onSettings()} aria-label="Settings">
+                <Gear className={iconGlyph} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Settings</TooltipContent>
+          </Tooltip>
+          {(device || exitLabel) && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm" className={iconButton} onClick={onDisconnect} aria-label={exitText}>
+                  <Eject className={iconGlyph} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{exitText}</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </div>
-      <div className="flex items-center gap-2 text-sm">
-        {device && firmware && (
-          <span className="text-muted-foreground">
-            {deviceMachine || device} ({firmware})
-          </span>
-        )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm" onClick={onSettings}>
-              <Settings className="h-4 w-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Settings</TooltipContent>
-        </Tooltip>
-        {onSupport && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="sm" onClick={onSupport}>
-                <LifeBuoy className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Support</TooltipContent>
-          </Tooltip>
-        )}
-        {device && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="sm" onClick={onDisconnect}>
-                <Unplug className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Disconnect</TooltipContent>
-          </Tooltip>
-        )}
+
+      <div className="flex items-center justify-between gap-3 md:mt-3 md:grid md:grid-cols-[1fr_auto_1fr]">
+        <div className="hidden md:block" />
+        <div className="md:justify-self-center">{nav}</div>
       </div>
     </div>
   )

@@ -3,38 +3,48 @@ package backup
 import (
 	"archive/tar"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"strings"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
 type Manager struct {
-	Ctx        context.Context
-	SftpClient *sftp.Client
 	SSHClient  *ssh.Client
-	CancelCh   chan struct{}
+	CancelCh   <-chan struct{}
 	ProgressFn func(Progress)
 	DeviceName string
 	DeviceID   string
+	MachineID  string
 }
 
 type BackupMetadata struct {
 	DeviceName string `json:"deviceName"`
 	DeviceID   string `json:"deviceId"`
+	MachineID  string `json:"machineId,omitempty"`
 	CreatedAt  string `json:"createdAt"`
 	Version    string `json:"version"`
 }
 
+type Phase string
+
+const (
+	PhaseScanning    Phase = "scanning"
+	PhaseDownloading Phase = "downloading"
+	PhaseUploading   Phase = "uploading"
+	PhaseComplete    Phase = "complete"
+	PhaseStoppingUI  Phase = "stopping-ui"
+	PhaseStartingUI  Phase = "starting-ui"
+)
+
 type Progress struct {
-	Phase      string  `json:"phase"`
+	Phase      Phase   `json:"phase"`
 	FilePath   string  `json:"filePath"`
 	FilesDone  int     `json:"filesDone"`
 	FilesTotal int     `json:"filesTotal"`
@@ -44,13 +54,7 @@ type Progress struct {
 	Message    string  `json:"message"`
 }
 
-func (m *Manager) Cancel() {
-	if m.CancelCh != nil {
-		close(m.CancelCh)
-	}
-}
-
-func (m *Manager) isCancelled() bool {
+func (m *Manager) isCanceled() bool {
 	select {
 	case <-m.CancelCh:
 		return true
@@ -87,31 +91,30 @@ func (m *Manager) countRemoteFiles(sources []string) (int, error) {
 	return count, nil
 }
 
-func (m *Manager) CreateBackup(destPath string, sources []string) error {
+// A backup that does not finish removes its archive, so a canceled or failed run never leaves a well-formed file that holds only part of the tablet.
+func (m *Manager) CreateBackup(destPath string, sources []string) (err error) {
 	m.emitProgress(Progress{
-		Phase:      "scanning",
-		Message:    "Scanning files on device...",
+		Phase:      PhaseScanning,
+		Message:    "Scanning files on your reMarkable…",
 		Percentage: 0,
 	})
 
-	// First pass: count files on device
 	totalFiles, err := m.countRemoteFiles(sources)
 	if err != nil {
 		return fmt.Errorf("failed to scan files: %w", err)
 	}
 
-	if m.isCancelled() {
-		return fmt.Errorf("operation cancelled")
+	if m.isCanceled() {
+		return fmt.Errorf("operation canceled")
 	}
 
 	m.emitProgress(Progress{
-		Phase:      "scanning",
+		Phase:      PhaseScanning,
 		Message:    fmt.Sprintf("Found %d files", totalFiles),
 		FilesTotal: totalFiles,
 		Percentage: 0,
 	})
 
-	// Build tar command to run on device with gzip compression
 	cmd := fmt.Sprintf("tar -czf - %s", strings.Join(sources, " "))
 
 	session, err := m.SSHClient.NewSession()
@@ -130,18 +133,22 @@ func (m *Manager) CreateBackup(destPath string, sources []string) error {
 	}
 
 	m.emitProgress(Progress{
-		Phase:      "downloading",
-		Message:    "Downloading from device...",
+		Phase:      PhaseDownloading,
+		Message:    "Downloading from your reMarkable…",
 		FilesTotal: totalFiles,
 		Percentage: 0,
 	})
 
-	// Create local zstd archive
 	archiveFile, err := os.Create(destPath)
 	if err != nil {
 		return fmt.Errorf("failed to create archive: %w", err)
 	}
-	defer archiveFile.Close()
+	defer func() {
+		if err != nil {
+			archiveFile.Close()
+			os.Remove(destPath)
+		}
+	}()
 
 	zstdWriter, err := zstd.NewWriter(archiveFile, zstd.WithEncoderLevel(zstd.SpeedDefault))
 	if err != nil {
@@ -152,10 +159,10 @@ func (m *Manager) CreateBackup(destPath string, sources []string) error {
 	tarWriter := tar.NewWriter(zstdWriter)
 	defer tarWriter.Close()
 
-	// Write metadata as first entry in archive
 	metadata := BackupMetadata{
 		DeviceName: m.DeviceName,
 		DeviceID:   m.DeviceID,
+		MachineID:  m.MachineID,
 		CreatedAt:  time.Now().Format(time.RFC3339),
 		Version:    "1",
 	}
@@ -173,7 +180,6 @@ func (m *Manager) CreateBackup(destPath string, sources []string) error {
 		return fmt.Errorf("failed to write metadata: %w", err)
 	}
 
-	// Read compressed tar from device
 	gzipReader, err := gzip.NewReader(stdout)
 	if err != nil {
 		return fmt.Errorf("failed to create gzip reader: %w", err)
@@ -187,9 +193,9 @@ func (m *Manager) CreateBackup(destPath string, sources []string) error {
 	var filesDone int
 
 	for {
-		if m.isCancelled() {
+		if m.isCanceled() {
 			session.Signal(ssh.SIGTERM)
-			return fmt.Errorf("operation cancelled")
+			return fmt.Errorf("operation canceled")
 		}
 
 		header, err := tarReader.Next()
@@ -200,21 +206,10 @@ func (m *Manager) CreateBackup(destPath string, sources []string) error {
 			return fmt.Errorf("failed to read tar entry: %w", err)
 		}
 
-		// Remap paths to archive format
-		// /home/root/.local/share/remarkable/xochitl/... → remarkable/documents/...
-		// /home/root/.config/remarkable/... → remarkable/configs/...
-		if strings.HasPrefix(header.Name, "/home/root/.local/share/remarkable/xochitl/") {
-			header.Name = "remarkable/documents/" + strings.TrimPrefix(header.Name, "/home/root/.local/share/remarkable/xochitl/")
-		} else if strings.HasPrefix(header.Name, "/home/root/.config/remarkable/") {
-			header.Name = "remarkable/configs/" + strings.TrimPrefix(header.Name, "/home/root/.config/remarkable/")
-		}
-
-		// Write header to output tar
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return fmt.Errorf("failed to write tar header: %w", err)
 		}
 
-		// Copy file data if not a directory
 		if !header.FileInfo().IsDir() {
 			written, err := io.Copy(tarWriter, tarReader)
 			if err != nil {
@@ -224,13 +219,12 @@ func (m *Manager) CreateBackup(destPath string, sources []string) error {
 			bytesDone += written
 			filesDone++
 
-			// Calculate progress: 5% for scan, 95% for download
 			progress := (float64(filesDone) / float64(totalFiles)) * 100.0
 			if progress > 100 {
 				progress = 100
 			}
 			m.emitProgress(Progress{
-				Phase:      "downloading",
+				Phase:      PhaseDownloading,
 				FilesDone:  filesDone,
 				FilesTotal: totalFiles,
 				BytesDone:  bytesDone,
@@ -240,17 +234,23 @@ func (m *Manager) CreateBackup(destPath string, sources []string) error {
 		}
 	}
 
-	tarWriter.Close()
-	zstdWriter.Close()
-	archiveFile.Close()
+	if err := tarWriter.Close(); err != nil {
+		return fmt.Errorf("failed to finish archive: %w", err)
+	}
+	if err := zstdWriter.Close(); err != nil {
+		return fmt.Errorf("failed to compress archive: %w", err)
+	}
+	if err := archiveFile.Close(); err != nil {
+		return fmt.Errorf("failed to write archive: %w", err)
+	}
 
 	if err := session.Wait(); err != nil {
 		return fmt.Errorf("tar command failed: %w", err)
 	}
 
 	m.emitProgress(Progress{
-		Phase:      "complete",
-		Message:    "Backup complete!",
+		Phase:      PhaseComplete,
+		Message:    "Backup complete",
 		FilesDone:  filesDone,
 		FilesTotal: totalFiles,
 		BytesDone:  bytesDone,
@@ -262,29 +262,27 @@ func (m *Manager) CreateBackup(destPath string, sources []string) error {
 
 func (m *Manager) RestoreBackup(archivePath string) error {
 	m.emitProgress(Progress{
-		Phase:      "scanning",
-		Message:    "Scanning backup archive...",
+		Phase:      PhaseScanning,
+		Message:    "Scanning backup archive…",
 		Percentage: 0,
 	})
 
-	// First pass: count files in archive
 	totalFiles, err := m.countArchiveFiles(archivePath)
 	if err != nil {
 		return fmt.Errorf("failed to scan archive: %w", err)
 	}
 
-	if m.isCancelled() {
-		return fmt.Errorf("operation cancelled")
+	if m.isCanceled() {
+		return fmt.Errorf("operation canceled")
 	}
 
 	m.emitProgress(Progress{
-		Phase:      "scanning",
+		Phase:      PhaseScanning,
 		Message:    fmt.Sprintf("Found %d files", totalFiles),
 		FilesTotal: totalFiles,
 		Percentage: 0,
 	})
 
-	// Second pass: actual restore
 	archiveFile, err := os.Open(archivePath)
 	if err != nil {
 		return fmt.Errorf("failed to open archive: %w", err)
@@ -311,8 +309,8 @@ func (m *Manager) RestoreBackup(archivePath string) error {
 	}
 
 	m.emitProgress(Progress{
-		Phase:      "uploading",
-		Message:    "Uploading to device...",
+		Phase:      PhaseUploading,
+		Message:    "Uploading to your reMarkable…",
 		FilesTotal: totalFiles,
 		Percentage: 0,
 	})
@@ -333,9 +331,9 @@ func (m *Manager) RestoreBackup(archivePath string) error {
 	var filesDone int
 
 	for {
-		if m.isCancelled() {
+		if m.isCanceled() {
 			session.Signal(ssh.SIGTERM)
-			return fmt.Errorf("operation cancelled")
+			return fmt.Errorf("operation canceled")
 		}
 
 		header, err := tarReader.Next()
@@ -350,7 +348,11 @@ func (m *Manager) RestoreBackup(archivePath string) error {
 			continue
 		}
 
-		header.Name = m.mapArchivePathToDevicePath(header.Name)
+		target, err := m.restoreTarget(header)
+		if err != nil {
+			return err
+		}
+		header.Name = target
 
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return fmt.Errorf("failed to write tar header: %w", err)
@@ -370,7 +372,7 @@ func (m *Manager) RestoreBackup(archivePath string) error {
 				progress = 100
 			}
 			m.emitProgress(Progress{
-				Phase:      "uploading",
+				Phase:      PhaseUploading,
 				FilesDone:  filesDone,
 				FilesTotal: totalFiles,
 				BytesDone:  bytesDone,
@@ -388,14 +390,13 @@ func (m *Manager) RestoreBackup(archivePath string) error {
 	}
 	stdin.Close()
 
-	// Wait for remote command to finish
 	if err := session.Wait(); err != nil {
 		return fmt.Errorf("tar extract failed: %w", err)
 	}
 
 	m.emitProgress(Progress{
-		Phase:      "complete",
-		Message:    "Restore complete! Please reboot your device for changes to take effect.",
+		Phase:      PhaseComplete,
+		Message:    "Restore complete.",
 		FilesDone:  filesDone,
 		FilesTotal: totalFiles,
 		BytesDone:  bytesDone,
@@ -429,7 +430,13 @@ func (m *Manager) countArchiveFiles(archivePath string) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("failed to read tar entry: %w", err)
 		}
-		if !header.FileInfo().IsDir() && header.Name != "remarkable/BACKUP_INFO.json" {
+		if header.Name == "remarkable/BACKUP_INFO.json" {
+			continue
+		}
+		if _, err := m.restoreTarget(header); err != nil {
+			return 0, err
+		}
+		if !header.FileInfo().IsDir() {
 			count++
 		}
 	}
@@ -437,19 +444,23 @@ func (m *Manager) countArchiveFiles(archivePath string) (int, error) {
 	return count, nil
 }
 
-func (m *Manager) mapArchivePathToDevicePath(archivePath string) string {
-	// Archive has: "remarkable/documents/..." or "remarkable/configs/..."
-	// Need to map to: "/home/root/.local/share/remarkable/xochitl/..." etc
+var restorableRoots = []string{
+	"/home/root/.local/share/remarkable/xochitl",
+	"/home/root/.config/remarkable",
+}
 
-	if strings.HasPrefix(archivePath, "remarkable/documents/") {
-		return "/home/root/.local/share/remarkable/xochitl/" +
-			strings.TrimPrefix(archivePath, "remarkable/documents/")
+func (m *Manager) restoreTarget(header *tar.Header) (string, error) {
+	mode := header.FileInfo().Mode()
+	if header.Typeflag == tar.TypeLink || (!mode.IsRegular() && !mode.IsDir()) {
+		return "", fmt.Errorf("backup entry %q is not a file or folder", header.Name)
 	}
-	if strings.HasPrefix(archivePath, "remarkable/configs/") {
-		return "/home/root/.config/remarkable/" +
-			strings.TrimPrefix(archivePath, "remarkable/configs/")
+	target := path.Clean("/" + header.Name)
+	for _, root := range restorableRoots {
+		if target == root || strings.HasPrefix(target, root+"/") {
+			return strings.TrimPrefix(target, "/"), nil
+		}
 	}
-	return archivePath
+	return "", fmt.Errorf("backup entry %q is outside the reMarkable's documents and settings", header.Name)
 }
 
 func ReadBackupMetadata(archivePath string) (*BackupMetadata, error) {

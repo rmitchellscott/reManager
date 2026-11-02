@@ -222,6 +222,41 @@ func TestFindConflictsSkipsPresentPackages(t *testing.T) {
 	}
 }
 
+func deepConflictStore() *MetadataStore {
+	pm := PackagesMetadata{
+		Packages: map[string]map[string]PackageVersion{
+			"tripletap":         {"1.1.0-r0": {Depends: []string{"xovi"}, Conflicts: []string{"launcherctl"}, Arch: []string{"aarch64"}}},
+			"xovi":              {"0.3.3-r2": {Arch: []string{"aarch64"}}},
+			"launcherctl":       {"3.1-r1": {Depends: []string{"liboxide"}, Conflicts: []string{"tripletap"}, Arch: []string{"aarch64"}}},
+			"liboxide":          {"3.1-r1": {Arch: []string{"aarch64"}}},
+			"launcherctl-oxide": {"3.1-r1": {Depends: []string{"launcherctl"}, Arch: []string{"aarch64"}}},
+			"unrelated":         {"1.0-r0": {Depends: []string{"xovi"}, Arch: []string{"aarch64"}}},
+		},
+	}
+	return &MetadataStore{packages: pm, providers: buildProviderIndex(&pm), loaded: true}
+}
+
+func TestFindConflictsFollowsTheCandidatesDependencies(t *testing.T) {
+	m := deepConflictStore()
+
+	conflicts := m.FindConflicts(map[string]string{"tripletap": "1.1.0-r0", "xovi": "0.3.3-r2"}, nil, "", "", "aarch64")
+	if c := conflicts["launcherctl-oxide"]; c.ConflictsWith != "tripletap" || c.Queued {
+		t.Errorf("launcherctl-oxide brings in launcherctl, so it should conflict with installed tripletap, got %+v", c)
+	}
+	if c, found := conflicts["unrelated"]; found {
+		t.Errorf("a shared dependency is not a conflict, got %+v", c)
+	}
+}
+
+func TestFindConflictsFollowsTheQueuesDependencies(t *testing.T) {
+	m := deepConflictStore()
+
+	conflicts := m.FindConflicts(nil, []string{"launcherctl-oxide"}, "", "", "aarch64")
+	if c := conflicts["tripletap"]; c.ConflictsWith != "launcherctl-oxide" || !c.Queued {
+		t.Errorf("tripletap should conflict with the queued entry that brings launcherctl in, got %+v", c)
+	}
+}
+
 func TestResolutionFailureExtractsConflict(t *testing.T) {
 	err := fmt.Errorf(`ERROR: unable to select packages:
   tripletap-1.1.0-r0:
@@ -314,6 +349,45 @@ func TestAttributeConflictToQueueMapsDependencyToItsQueueEntry(t *testing.T) {
 	}
 	if byEntry["launcherctl-oxide"].Package != "launcherctl" {
 		t.Errorf("launcherctl should map to launcherctl-oxide, got %+v", byEntry["launcherctl-oxide"])
+	}
+}
+
+func TestAttributeConflictToQueueFollowsDeepDependencies(t *testing.T) {
+	pm := PackagesMetadata{
+		Packages: map[string]map[string]PackageVersion{
+			"tripletap":   {"1.1.0-r0": {Arch: []string{"aarch64"}}},
+			"launcherctl": {"3.1-r1": {Arch: []string{"aarch64"}}},
+			"middle":      {"1.0-r0": {Depends: []string{"launcherctl"}, Arch: []string{"aarch64"}}},
+			"top":         {"1.0-r0": {Depends: []string{"middle"}, Arch: []string{"aarch64"}}},
+		},
+	}
+	m := &MetadataStore{packages: pm, providers: buildProviderIndex(&pm), loaded: true}
+
+	conflicts := []ResolutionConflict{{Package: "tripletap", Breaks: "launcherctl"}}
+	entries := m.AttributeConflictsToQueue(conflicts, []string{"top", "tripletap"}, "", "", "aarch64")
+
+	byEntry := map[string]QueueConflictEntry{}
+	for _, e := range entries {
+		byEntry[e.QueueEntry] = e
+	}
+	if got := byEntry["top"]; got.Package != "launcherctl" || got.Blocks != "tripletap" {
+		t.Errorf("launcherctl two levels down should map to top, got %+v (all %+v)", got, entries)
+	}
+}
+
+func TestAttributeConflictToQueuePrefersTheNearestEntry(t *testing.T) {
+	pm := PackagesMetadata{
+		Packages: map[string]map[string]PackageVersion{
+			"shared": {"1.0-r0": {Arch: []string{"aarch64"}}},
+			"middle": {"1.0-r0": {Depends: []string{"shared"}, Arch: []string{"aarch64"}}},
+			"far":    {"1.0-r0": {Depends: []string{"middle"}, Arch: []string{"aarch64"}}},
+			"near":   {"1.0-r0": {Depends: []string{"shared"}, Arch: []string{"aarch64"}}},
+		},
+	}
+	m := &MetadataStore{packages: pm, providers: buildProviderIndex(&pm), loaded: true}
+
+	if got := m.queueEntryProviding("shared", []string{"far", "near"}, "", "", "aarch64"); got != "near" {
+		t.Errorf("owner = %q, want near", got)
 	}
 }
 

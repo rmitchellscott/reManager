@@ -1,0 +1,17 @@
+--- a/pkg/application/mobile_features_android.go
++++ b/pkg/application/mobile_features_android.go
+@@ -162,6 +162,14 @@
+ 	return nil
+ }
+ 
++// BindSocketToLocalNetwork binds an unconnected socket to the network whose
++// subnet directly contains the address, when that is not the default network.
++// JSON: {"fd","address"}. Returns an empty string or the error message.
++func (androidManager) BindSocketToLocalNetwork(jsonPayload string) string {
++	s, _ := androidBridgeStringString("bindSocketToLocalNetwork", jsonPayload)
++	return s
++}
++
+ // --- Phase D: sensors & hardware ---------------------------------------------
+ 
+ // Haptic plays a haptic pattern (impact-light/medium/heavy, success,

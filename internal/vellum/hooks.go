@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"reManager/internal/component"
+	"reManager/internal/executor"
 )
 
 type HookFunc func(ctx component.CommandContext) (*component.HookExecutionResult, error)
@@ -62,8 +63,9 @@ func LauncherSelectDialog(ctx component.CommandContext) (*component.HookExecutio
 	if installed == 0 {
 		return &component.HookExecutionResult{
 			DialogConfig: &component.DialogConfig{
-				Title:       "No Launchers Installed",
-				Message:     "Launchers let apps run on your reMarkable. Install one from the Mods tab to choose between them here.",
+				Title:       "No launchers installed",
+				Severity:    component.DialogInfo,
+				Subtitle:    "Launchers let apps run on your reMarkable. Install one from the Mods tab to choose between them here.",
 				InfoOnly:    true,
 				ConfirmText: "OK",
 			},
@@ -96,24 +98,25 @@ func LauncherSelectDialog(ctx component.CommandContext) (*component.HookExecutio
 		})
 	}
 
-	message := "Choose which launcher starts on your reMarkable."
+	var state string
 	switch {
 	case current == "" || current == StockLauncher:
-		message = "No launcher is selected. " + message
+		state = "No launcher is selected."
 	case active == current:
-		message = fmt.Sprintf("%s is running. %s", current, message)
+		state = fmt.Sprintf("%s is running.", current)
 	case active == "":
-		message = fmt.Sprintf("%s is selected but not running. %s", current, message)
+		state = fmt.Sprintf("%s is selected but not running.", current)
 	default:
-		message = fmt.Sprintf("%s is selected and %s is running. %s", current, active, message)
+		state = fmt.Sprintf("%s is selected and %s is running.", current, active)
 	}
-
 	return &component.HookExecutionResult{
 		DialogConfig: &component.DialogConfig{
-			Title:   "Switch Launcher",
-			Message: message,
-			Note:    "Switching restarts your reMarkable's interface.",
-			Actions: actions,
+			Title:    "Switch launcher",
+			Severity: component.DialogInfo,
+			Subtitle: "Restarts the reMarkable UI.",
+			Message:  state,
+			Actions:  actions,
+			Choices:  true,
 		},
 	}, nil
 }
@@ -166,54 +169,63 @@ func launcherState(ctx component.CommandContext) (current, active string) {
 	return ParseLauncherName(sections[0]), ParseLauncherName(sections[1])
 }
 
+const RebuildHashtableSeconds = 65
+
 func RebuildHashtableDialog(ctx component.CommandContext) (*component.HookExecutionResult, error) {
 	current, active := launcherState(ctx)
 
 	script := "/home/root/xovi/rebuild_hashtable"
 	postCommand := &component.DialogConfig{
-		Title:         "Setup Complete",
+		Title:         "Hashtable rebuilt",
+		Severity:      component.DialogSuccess,
 		Success:       true,
 		PrimaryAction: "start_with_mods",
-		Message:       "The hashtable has been rebuilt. The reMarkable interface is currently stopped. How would you like to start it?",
+		CancelText:    "Not now",
+		Subtitle:      "The hashtable has been rebuilt.",
+		Message:       "The reMarkable UI is stopped. How would you like to start it?",
 		Actions: []component.DialogAction{
 			{
 				Id:    "start_with_mods",
-				Label: "Start UI with Mods",
+				Label: "Start with mods",
 				Type:  "run_command",
-				Value: "/home/root/xovi/start",
+				Value: executor.WithXochitlStartReset("/home/root/xovi/start"),
 			},
 			{
 				Id:    "start_without_mods",
-				Label: "Start UI without Mods",
+				Label: "Start without mods",
 				Type:  "run_command",
-				Value: "systemctl start xochitl",
+				Value: executor.WithXochitlStartReset("systemctl start xochitl"),
 			},
 		},
 	}
 
 	switch {
 	case LauncherSelected(active):
-		script = fmt.Sprintf("%[1]s stop-launcher; %[2]s; rc=$?; %[1]s start-launcher; exit $rc",
-			LauncherctlBin, script)
+		script = fmt.Sprintf("%[1]s stop-launcher; %[2]s; rc=$?; %[3]s; exit $rc",
+			LauncherctlBin, script, executor.WithXochitlStartReset(LauncherctlBin+" start-launcher"))
 		postCommand = &component.DialogConfig{
-			Title:       "Setup Complete",
+			Title:       "Hashtable rebuilt",
+			Severity:    component.DialogSuccess,
 			Success:     true,
 			InfoOnly:    true,
 			ConfirmText: "OK",
-			Message:     fmt.Sprintf("The hashtable has been rebuilt and %s restarted.", active),
+			Subtitle:    fmt.Sprintf("The hashtable has been rebuilt and %s restarted.", active),
 		}
 	case LauncherSelected(current):
 		postCommand = &component.DialogConfig{
-			Title:         "Setup Complete",
+			Title:         "Hashtable rebuilt",
+			Severity:      component.DialogSuccess,
 			Success:       true,
 			PrimaryAction: "start_launcher",
-			Message:       fmt.Sprintf("The hashtable has been rebuilt. The reMarkable interface is currently stopped. Start %s to bring it back.", current),
+			CancelText:    "Not now",
+			Subtitle:      "The hashtable has been rebuilt.",
+			Message:       fmt.Sprintf("The reMarkable UI is stopped. Start %s to bring it back.", current),
 			Actions: []component.DialogAction{
 				{
 					Id:    "start_launcher",
 					Label: fmt.Sprintf("Start %s", current),
 					Type:  "run_command",
-					Value: LauncherctlBin + " start-launcher",
+					Value: executor.WithXochitlStartReset(LauncherctlBin + " start-launcher"),
 				},
 			},
 		}
@@ -221,9 +233,12 @@ func RebuildHashtableDialog(ctx component.CommandContext) (*component.HookExecut
 
 	return &component.HookExecutionResult{
 		DialogConfig: &component.DialogConfig{
-			Title:             "Rebuild Hashtable",
-			Message:           "The hashtable is a map mods use to identify interface components. It's separate from system files and required for UI mods.\n\nBuilding takes about a minute and your reMarkable's interface will restart.",
-			Note:              "You'll need to rebuild after each OS update.\nYou can rebuild the hashtable from the Maintenance tab.",
+			Title:             "Rebuild hashtable",
+			Severity:          component.DialogWarning,
+			ExpectedSeconds:   RebuildHashtableSeconds,
+			Subtitle:          "Takes about a minute and restarts the reMarkable UI.",
+			Message:           "The hashtable is a map mods use to identify interface components. It's separate from system files and required for UI mods.",
+			Note:              "You'll need to rebuild after each OS update.\nYou can rebuild the hashtable from the System tab.",
 			ConfirmText:       "Rebuild",
 			CancelText:        "Cancel",
 			InProgressMessage: "If you have a passcode, enter it on your reMarkable.",
@@ -231,7 +246,7 @@ func RebuildHashtableDialog(ctx component.CommandContext) (*component.HookExecut
 		},
 		Command: &component.CommandResult{
 			Script:      script,
-			Description: "Rebuild Qt resource hashtable",
+			Description: "Rebuild the Qt resource hashtable (needed after OS updates)",
 		},
 	}, nil
 }
