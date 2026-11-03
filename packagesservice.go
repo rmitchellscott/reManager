@@ -154,6 +154,7 @@ type InstallSimulationResult struct {
 	Error              string                      `json:"error,omitempty"`
 	Conflicts          []vellum.QueueConflictEntry `json:"conflicts,omitempty"`
 	UnresolvedVirtuals []string                    `json:"unresolvedVirtuals,omitempty"`
+	Upgrades           map[string]UpgradeCandidate `json:"upgrades,omitempty"`
 }
 
 type UninstallSimulationResult struct {
@@ -972,7 +973,7 @@ func (s *PackagesService) SimulateInstall(packageNames []string, removals []stri
 	toSimulate := s.withPreferredProviders(packageNames, deviceType)
 
 	start := time.Now()
-	allPackages, err := vc.SimulateAddWithout(toSimulate, removals)
+	simulation, err := vc.SimulateAddWithout(toSimulate, removals)
 	debug.Printf("[DEBUG] SimulateAdd: %d package(s) in %v\n", len(toSimulate), time.Since(start))
 	if err != nil {
 		debug.Printf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
@@ -996,11 +997,18 @@ func (s *PackagesService) SimulateInstall(packageNames []string, removals []stri
 		return result, nil
 	}
 
-	if len(allPackages) == 0 {
+	if len(simulation.Packages) == 0 {
 		return &InstallSimulationResult{Packages: []string{}, Requested: packageNames}, nil
 	}
 
-	return &InstallSimulationResult{Packages: allPackages, Requested: packageNames}, nil
+	result := &InstallSimulationResult{Packages: simulation.Packages, Requested: packageNames}
+	if len(simulation.VersionChanges) > 0 {
+		result.Upgrades = make(map[string]UpgradeCandidate, len(simulation.VersionChanges))
+		for _, change := range simulation.VersionChanges {
+			result.Upgrades[change.Name] = UpgradeCandidate{From: change.From, To: change.To}
+		}
+	}
+	return result, nil
 }
 
 func (s *PackagesService) withPreferredProviders(packageNames []string, deviceType string) []string {
