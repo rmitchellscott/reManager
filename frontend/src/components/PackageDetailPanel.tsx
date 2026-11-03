@@ -378,19 +378,21 @@ export function PackageDetailPanel({
 
         {showActions && (
           <>
-            <div className="mt-3 flex flex-col gap-2 sm:hidden">
-              <div className="flex gap-2">
-                {showPrimary && primaryButton('flex-1')}
-                {starButton('h-10 w-10 shrink-0')}
-              </div>
-              {(showSecondaryRemove || pkg.donateUrl) && (
+            {showPrimary && (
+              <div className="mt-3 flex flex-col gap-2 sm:hidden">
                 <div className="flex gap-2">
-                  {showSecondaryRemove && removeButton('flex-1')}
-                  {donateButton('flex-1')}
+                  {primaryButton('flex-1')}
+                  {starButton('h-10 w-10 shrink-0')}
                 </div>
-              )}
-            </div>
-            <div className="mt-3 hidden gap-2 sm:flex md:hidden">
+                {(showSecondaryRemove || pkg.donateUrl) && (
+                  <div className="flex gap-2">
+                    {showSecondaryRemove && removeButton('flex-1')}
+                    {donateButton('flex-1')}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className={cn('mt-3 gap-2 md:hidden', showPrimary ? 'hidden sm:flex' : 'flex')}>
               {donateButton('flex-1 min-w-0')}
               {showPrimary && showSecondaryRemove && removeButton('flex-1 min-w-0')}
               {showPrimary ? primaryButton('flex-1 min-w-0') : showSecondaryRemove && removeButton('flex-1 min-w-0')}
