@@ -463,30 +463,40 @@ func (c *Client) SimulateAdd(packages ...string) ([]string, error) {
 	if len(packages) == 0 {
 		return nil, nil
 	}
-	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, executor.QuoteArgs(packages))
-	output, err := c.executor.ExecuteWithOutput(cmd)
+	output, err := c.simulateAddOutput(packages)
 	if err != nil {
-		if output != "" {
-			return nil, fmt.Errorf("%s", strings.TrimSpace(output))
-		}
 		return nil, err
 	}
 	return parseSimulationOutput(output), nil
 }
 
-// Solves an add as if the removed packages were gone: each is passed as an apk "!name" constraint, and the purge that implies is left out of the result.
-func (c *Client) SimulateAddWithout(packages []string, removed []string) ([]string, error) {
-	if len(removed) == 0 {
-		return c.SimulateAdd(packages...)
+func (c *Client) simulateAddOutput(args []string) (string, error) {
+	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, executor.QuoteArgs(args))
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		if output != "" {
+			return "", fmt.Errorf("%s", strings.TrimSpace(output))
+		}
+		return "", err
 	}
+	return output, nil
+}
+
+type AddSimulation struct {
+	Packages       []string
+	VersionChanges []VersionChange
+}
+
+// Solves an add as if the removed packages were gone: each is passed as an apk "!name" constraint, and the purge that implies is left out of the result.
+func (c *Client) SimulateAddWithout(packages []string, removed []string) (*AddSimulation, error) {
 	if len(packages) == 0 {
-		return nil, nil
+		return &AddSimulation{}, nil
 	}
 	args := append([]string{}, packages...)
 	for _, name := range removed {
 		args = append(args, "!"+name)
 	}
-	simulated, err := c.SimulateAdd(args...)
+	output, err := c.simulateAddOutput(args)
 	if err != nil {
 		return nil, err
 	}
@@ -494,13 +504,13 @@ func (c *Client) SimulateAddWithout(packages []string, removed []string) ([]stri
 	for _, name := range removed {
 		isRemoved[name] = true
 	}
-	kept := simulated[:0]
-	for _, name := range simulated {
+	simulation := &AddSimulation{VersionChanges: parseVersionChanges(output)}
+	for _, name := range parseSimulationOutput(output) {
 		if !isRemoved[name] {
-			kept = append(kept, name)
+			simulation.Packages = append(simulation.Packages, name)
 		}
 	}
-	return kept, nil
+	return simulation, nil
 }
 
 // Same transaction as SimulateAddWithout, returning only what it would purge: each removed package plus whatever nothing left in world still needs.
@@ -671,6 +681,24 @@ func parseSimulationOutput(output string) []string {
 type SimulatedPackage struct {
 	Name    string
 	Version string
+}
+
+type VersionChange struct {
+	Name string
+	From string
+	To   string
+}
+
+var versionChangeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Upgrading|Downgrading)\s+([^\s]+)\s+\(([^\s)]+)\s+->\s+([^\s)]+)\)`)
+
+func parseVersionChanges(output string) []VersionChange {
+	var changes []VersionChange
+	for _, line := range strings.Split(output, "\n") {
+		if matches := versionChangeLineRegex.FindStringSubmatch(line); len(matches) >= 4 {
+			changes = append(changes, VersionChange{Name: matches[1], From: matches[2], To: matches[3]})
+		}
+	}
+	return changes
 }
 
 // Purging lines are left out: a purged package is not downloaded, installed or given its install hooks.
