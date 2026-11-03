@@ -1,13 +1,20 @@
+import { CaretDown, CaretUp, CircleNotch, Plus, UploadSimple, X } from '@phosphor-icons/react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
-import { Upload, Loader2, X, Plus, ChevronUp, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { hasTouchPointer } from '@/hooks/useMediaQuery'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { formatBytes } from '@/lib/format'
+import { handleError } from '@/lib/errorMessages'
+import { FilesService } from '@bindings/reManager'
+import { onEvent, type EventData } from '@/lib/events'
+import { useAppContext } from '@/contexts/AppContext'
+import { operationFailure } from '@/lib/operations'
+import { InstallStatus } from '@/lib/types'
 
 interface StagedFile {
   id: string
@@ -27,13 +34,16 @@ interface ImportPDFDialogProps {
   open: boolean
   isConnected: boolean
   hasLibrarian: boolean
+  xoviActive: boolean
   onOpenChange: (open: boolean) => void
 }
 
-export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange }: ImportPDFDialogProps) {
+export function ImportPDFDialog({ open, isConnected, hasLibrarian, xoviActive, onOpenChange }: ImportPDFDialogProps) {
+  const { commandRunning, runningOperation, startOperation } = useAppContext()
+  const canRescanLibrary = hasLibrarian && xoviActive
   const [files, setFiles] = useState<StagedFile[]>([])
   const [restartXochitl, setRestartXochitl] = useState(true)
-  const [importing, setImporting] = useState(false)
+  const importing = runningOperation?.kind === 'import'
   const [isDragging, setIsDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const nameInputRefs = useRef<Map<string, HTMLInputElement>>(new Map())
@@ -42,7 +52,6 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
     if (open) {
       setFiles([])
       setRestartXochitl(true)
-      setImporting(false)
       setIsDragging(false)
       setError(null)
     }
@@ -54,7 +63,7 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
       return lower.endsWith('.pdf') || lower.endsWith('.epub') || lower.endsWith('.rmdoc')
     })
     if (validPaths.length === 0) {
-      setError('Please select PDF, ePub, or rmdoc files.')
+      setError('Select PDF, EPUB, or rmdoc files.')
       return
     }
     setError(null)
@@ -62,7 +71,7 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
     const newFiles: StagedFile[] = []
     for (const p of validPaths) {
       try {
-        const info = await window.go.main.App.GetImportFileInfo(p)
+        const info = await FilesService.GetImportFileInfo(p)
         const filename = p.replace(/\\/g, '/').split('/').pop() ?? p
         const isRmdoc = info.fileType === 'rmdoc'
         newFiles.push({
@@ -80,7 +89,8 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
           status: 'staged',
         })
       } catch (err) {
-        setError(`Failed to read ${p}: ${err}`)
+        const filename = p.replace(/\\/g, '/').split('/').pop() ?? p
+        setError(handleError(err, `Could not read ${filename}.`))
       }
     }
     if (newFiles.length > 0) {
@@ -110,10 +120,9 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
       setIsDragging(false)
     }
 
-    const handleFileDrop = (...args: unknown[]) => {
+    const handleFileDrop = (paths: EventData<'files:dropped'>) => {
       dragCounter = 0
       setIsDragging(false)
-      const paths = args[2] as string[]
       if (!paths || paths.length === 0) return
       addPaths(paths)
     }
@@ -122,7 +131,7 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
     window.addEventListener('dragleave', handleDragLeave)
     window.addEventListener('dragover', handleDragOver)
     window.addEventListener('drop', handleDrop)
-    const unsub = window.runtime.EventsOn('wails:file-drop', handleFileDrop)
+    const unsub = onEvent('files:dropped', handleFileDrop)
 
     return () => {
       window.removeEventListener('dragenter', handleDragEnter)
@@ -133,20 +142,21 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
     }
   }, [open, addPaths])
 
+  const handleImportRef = useRef<() => Promise<void>>(async () => {})
   useEffect(() => {
     if (!open) return
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && files.length > 0 && !importing) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && files.length > 0 && !commandRunning) {
         e.preventDefault()
-        handleImport()
+        handleImportRef.current()
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [open, files, importing])
+  }, [open, files, commandRunning])
 
   const handleBrowse = async () => {
-    const paths = await window.go.main.App.SelectImportFiles()
+    const paths = await FilesService.SelectImportFiles()
     if (paths && paths.length > 0) addPaths(paths)
   }
 
@@ -158,68 +168,63 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
     setFiles((prev) => prev.filter((f) => f.id !== id))
   }
 
+  const isImportable = (file: StagedFile) => file.status !== 'done' && !!file.editedName.trim()
+
   const handleImport = async () => {
-    const toImport = files.filter((f) => f.editedName.trim())
+    const toImport = files.filter(isImportable)
     if (toImport.length === 0) return
 
-    setImporting(true)
     setError(null)
     let succeeded = 0
     let failed = 0
 
-    for (const file of toImport) {
-      updateFile(file.id, { status: 'uploading' })
-      try {
-        if (file.fileType === 'rmdoc') {
-          await window.go.main.App.ImportRmdocFromPath(
-            file.path,
-            file.editedName.trim(),
-            false,
-          )
-        } else if (file.fileType === 'epub') {
-          await window.go.main.App.ImportEpubFromPath(
-            file.path,
-            file.editedName.trim(),
-            false,
-          )
-        } else {
-          const coverPageNumber = file.coverPage === 'first' ? 0 : -1
-          await window.go.main.App.ImportPDFFromPath(
-            file.path,
-            file.editedName.trim(),
-            false,
-            file.pageCountOverride ?? 0,
-            coverPageNumber,
-          )
+    const result = await startOperation({
+      kind: 'import',
+      title: 'Import documents',
+      background: true,
+      reportsOwnFailure: true,
+      onProgress: progress => {
+        const file = toImport[progress.index]
+        if (!file) return
+        if (progress.status === InstallStatus.InstallImporting) {
+          updateFile(file.id, { status: 'uploading', error: undefined })
+        } else if (progress.status === InstallStatus.InstallCompleted) {
+          updateFile(file.id, { status: 'done' })
+          succeeded++
+        } else if (progress.status === InstallStatus.InstallError) {
+          updateFile(file.id, { status: 'error', error: handleError(progress.message, 'Could not import this file.') })
+          failed++
         }
-        updateFile(file.id, { status: 'done' })
-        succeeded++
-      } catch (err) {
-        updateFile(file.id, { status: 'error', error: String(err) })
-        failed++
-      }
-    }
+      },
+      run: id => FilesService.ImportDocuments(
+        id,
+        toImport.map(file => ({
+          path: file.path,
+          visibleName: file.editedName.trim(),
+          pageCountOverride: file.fileType === 'pdf' ? file.pageCountOverride ?? 0 : 0,
+          coverPageNumber: file.fileType === 'pdf' ? (file.coverPage === 'first' ? 0 : -1) : null,
+        })),
+        canRescanLibrary,
+        !canRescanLibrary && restartXochitl,
+      ),
+    })
 
-    if ((hasLibrarian || restartXochitl) && succeeded > 0) {
-      try {
-        if (hasLibrarian) {
-          await window.go.main.App.RescanLibrary()
-        } else {
-          await window.go.main.App.RestartXochitl()
-        }
-      } catch (err) {
-        setError(`Import complete but failed to ${hasLibrarian ? 'rescan library' : 'restart UI'}: ${err}`)
-      }
-    }
-
-    if (failed === 0) {
-      toast.success(`${succeeded} document${succeeded !== 1 ? 's' : ''} imported successfully`)
+    if (result.ok) {
+      toast.success(`${succeeded} document${succeeded !== 1 ? 's' : ''} imported`)
       onOpenChange(false)
+      return
+    }
+    if (result.canceled) return
+    if (failed > 0) {
+      setError(`${failed} of ${toImport.length} import${toImport.length !== 1 ? 's' : ''} failed.`)
+    } else if (succeeded > 0) {
+      setError(handleError(operationFailure(result), canRescanLibrary ? 'Imported, but could not rescan the library.' : 'Imported, but could not restart the reMarkable UI.'))
     } else {
-      toast.error(`${failed} of ${toImport.length} import${toImport.length !== 1 ? 's' : ''} failed`)
-      setImporting(false)
+      setError(handleError(operationFailure(result), 'Could not import the documents.'))
     }
   }
+
+  handleImportRef.current = handleImport
 
   const handleClose = () => { if (!importing) onOpenChange(false) }
 
@@ -227,16 +232,17 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
-      <DialogContent className="w-[92vw] sm:w-[70vw] max-w-4xl max-h-[85vh] flex flex-col">
+      <DialogContent size="2xl">
         <DialogHeader>
           <DialogTitle>Document Import</DialogTitle>
-          <p className="text-xs text-muted-foreground">
-            Upload documents to your reMarkable. Drag and drop or browse to add files.
-          </p>
+          <DialogDescription>
+            {hasTouchPointer
+              ? 'Upload PDF, EPUB, or rmdoc files to your reMarkable.'
+              : 'Upload PDF, EPUB, or rmdoc files to your reMarkable. Drag and drop or browse to add files.'}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col gap-2">
-          {/* Drop zone */}
           <div
             className={[
               'border-2 border-dashed rounded-lg text-center select-none transition-colors shrink-0',
@@ -254,14 +260,25 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
               </div>
             ) : (
               <>
-                <Upload className={`h-7 w-7 mx-auto mb-1 ${isDragging ? 'text-primary' : 'text-muted-foreground'}`} />
-                <p className="text-sm font-medium">{isDragging ? 'Drop to stage' : 'Drop files here'}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">or click to browse</p>
+                <UploadSimple className={`h-7 w-7 mx-auto mb-1 ${isDragging ? 'text-primary' : 'text-muted-foreground'}`} />
+                {hasTouchPointer ? (
+                  <p className="text-sm font-medium">Choose files</p>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium">{isDragging ? 'Drop to stage' : 'Drop files here'}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">or browse</p>
+                  </>
+                )}
               </>
             )}
           </div>
 
-          {/* File card grid */}
+          {hasFiles && (
+            <p className="text-xs text-muted-foreground">
+              {files.length} file{files.length !== 1 ? 's' : ''} selected
+            </p>
+          )}
+
           {hasFiles && (
             <div className="overflow-y-auto flex-1 min-h-0 max-h-[40vh]">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -283,51 +300,47 @@ export function ImportPDFDialog({ open, isConnected, hasLibrarian, onOpenChange 
           )}
         </div>
 
-        {/* Global settings */}
         {hasFiles && (
           <div className="border-t pt-3 mt-3">
             <div className="flex items-center gap-2">
               <Checkbox
                 id="pdfRestart"
-                checked={hasLibrarian || restartXochitl}
+                checked={canRescanLibrary || restartXochitl}
                 onCheckedChange={(v: boolean | 'indeterminate') => setRestartXochitl(!!v)}
-                disabled={importing || hasLibrarian}
+                disabled={importing || canRescanLibrary}
               />
-              <Label htmlFor="pdfRestart" className={`font-normal text-sm ${hasLibrarian ? '' : 'cursor-pointer'}`}>
-                {hasLibrarian ? 'Rescan library after import' : 'Restart UI after import'}
+              <Label htmlFor="pdfRestart" className={`font-normal text-sm ${canRescanLibrary ? '' : 'cursor-pointer'}`}>
+                {canRescanLibrary ? 'Rescan library after import' : 'Restart UI after import'}
               </Label>
             </div>
             <p className="text-xs text-muted-foreground mt-1 ml-6">
-              {hasLibrarian
-                ? 'The librarian package will rescan the library without restarting the UI.'
-                : <>Documents won't appear until the UI is restarted.<br />Install the librarian package to import without restarting.</>}
+              {canRescanLibrary
+                ? 'The librarian mod rescans the library without restarting the UI.'
+                : hasLibrarian
+                  ? <>Documents appear after the UI restarts.<br />Start mods to import without restarting.</>
+                  : <>Documents appear after the UI restarts.<br />Install the librarian mod to import without restarting.</>}
             </p>
           </div>
         )}
 
         {error && <p className="text-sm text-destructive">{error}</p>}
 
-        <DialogFooter className="flex items-center justify-between sm:justify-between">
-          <div className="text-xs text-muted-foreground">
-            {hasFiles && `${files.length} file${files.length !== 1 ? 's' : ''} selected`}
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={handleClose} disabled={importing}>
-              Cancel
+        <DialogFooter>
+          <Button variant="outline" onClick={handleClose} disabled={importing}>
+            Cancel
+          </Button>
+          {hasFiles && (
+            <Button onClick={handleImport} disabled={commandRunning || !files.some(isImportable) || !isConnected}>
+              {importing ? (
+                <>
+                  <CircleNotch className="mr-2 h-4 w-4 animate-spin" />
+                  Importing…
+                </>
+              ) : (
+                'Import'
+              )}
             </Button>
-            {hasFiles && (
-              <Button onClick={handleImport} disabled={importing || files.every((f) => !f.editedName.trim()) || !isConnected}>
-                {importing ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Importing…
-                  </>
-                ) : (
-                  'Import'
-                )}
-              </Button>
-            )}
-          </div>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -392,7 +405,7 @@ function FileCard({
           ref={nameInputRef}
           type="text"
           spellCheck={false}
-          className="flex-1 min-w-0 bg-transparent border border-transparent rounded px-1 py-0.5 text-[13px] font-medium leading-[22px] outline-none hover:border-border hover:bg-muted focus:border-ring focus:bg-muted"
+          className="flex-1 min-w-0 bg-transparent border border-transparent rounded px-1 py-0.5 text-sm touch:no-focus-zoom font-medium leading-[1.375rem] outline-none hover:border-border hover:bg-muted focus:border-ring focus:bg-muted"
           value={file.editedName}
           onChange={(e) => onUpdate({ editedName: e.target.value })}
           disabled={importing}
@@ -400,23 +413,24 @@ function FileCard({
         {!importing && (
           <button
             onClick={onRemove}
+            aria-label="Remove file"
             className="inline-flex items-center justify-center w-6 h-6 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 shrink-0"
           >
             <X className="h-3.5 w-3.5" />
           </button>
         )}
-        {file.status === 'uploading' && <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />}
+        {file.status === 'uploading' && <CircleNotch className="h-4 w-4 animate-spin text-primary shrink-0" />}
       </div>
       <div className="flex items-center gap-1.5 px-3 pb-2 pt-0.5">
-        <span className="text-[11px] text-muted-foreground">{formatBytes(file.size)}</span>
-        <span className="text-[11px] text-muted-foreground">&middot;</span>
+        <span className="text-xs text-muted-foreground">{formatBytes(file.size)}</span>
+        <span className="text-xs text-muted-foreground">&middot;</span>
 
         {file.fileType === 'pdf' ? (
           <Popover open={pagePopoverOpen} onOpenChange={setPagePopoverOpen}>
             <PopoverTrigger asChild>
               <button
                 onClick={openPagePopover}
-                className={`text-[11px] rounded px-0.5 border-b border-dashed border-transparent hover:border-muted-foreground ${
+                className={`text-xs rounded px-0.5 border-b border-dashed border-transparent hover:border-muted-foreground ${
                   isOverridden ? 'text-foreground font-medium' : 'text-muted-foreground'
                 }`}
               >
@@ -424,11 +438,11 @@ function FileCard({
               </button>
             </PopoverTrigger>
             <PopoverContent className="w-[200px] p-3" align="start">
-              <p className="text-[13px] font-medium mb-2">Page count override</p>
+              <p className="text-sm font-medium mb-2">Page count override</p>
               <div className="flex items-center">
                 <input
                   type="text"
-                  className="flex-1 h-9 min-w-0 border border-input rounded-l-md px-2.5 text-sm bg-transparent outline-none focus:border-ring focus:ring-2 focus:ring-ring/25 placeholder:text-muted-foreground"
+                  className="flex-1 h-9 min-w-0 border border-input rounded-l-md px-2.5 text-sm touch:no-focus-zoom bg-transparent outline-none focus:border-ring focus:ring-2 focus:ring-ring/25 placeholder:text-muted-foreground"
                   placeholder={`${file.pageCount} (auto-detected)`}
                   value={pageInputValue}
                   onChange={(e) => setPageInputValue(e.target.value.replace(/[^0-9]/g, ''))}
@@ -442,32 +456,34 @@ function FileCard({
                 <div className="flex flex-col shrink-0">
                   <button
                     onClick={() => stepPage(1)}
+                    aria-label="Increase page count"
                     className="flex items-center justify-center w-7 h-[18px] border border-input border-l-0 rounded-tr-md hover:bg-muted"
                   >
-                    <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
+                    <CaretUp className="h-3.5 w-3.5 text-muted-foreground" />
                   </button>
                   <button
                     onClick={() => stepPage(-1)}
+                    aria-label="Decrease page count"
                     className="flex items-center justify-center w-7 h-[18px] border border-input border-l-0 border-t-0 rounded-br-md hover:bg-muted"
                   >
-                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    <CaretDown className="h-3.5 w-3.5 text-muted-foreground" />
                   </button>
                 </div>
               </div>
               <div className="flex justify-end gap-1.5 mt-2.5">
-                <Button variant="outline" size="sm" className="h-8 text-[13px]" onClick={resetPageOverride}>
+                <Button variant="outline" size="sm" className="h-8 text-sm" onClick={resetPageOverride}>
                   Reset
                 </Button>
-                <Button size="sm" className="h-8 text-[13px]" onClick={applyPageOverride}>
+                <Button size="sm" className="h-8 text-sm" onClick={applyPageOverride}>
                   Apply
                 </Button>
               </div>
             </PopoverContent>
           </Popover>
         ) : file.fileType === 'epub' ? (
-          <span className="text-[11px] text-muted-foreground">ePub</span>
+          <span className="text-xs text-muted-foreground">EPUB</span>
         ) : (
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             {effectivePages} page{effectivePages !== 1 ? 's' : ''}
           </span>
         )}
@@ -480,7 +496,7 @@ function FileCard({
             onValueChange={(v: 'first' | 'none') => onUpdate({ coverPage: v })}
             disabled={importing}
           >
-            <SelectTrigger className="h-auto w-auto gap-1 border-border bg-transparent px-2 py-0.5 text-[11px] text-muted-foreground [&>svg]:h-2.5 [&>svg]:w-2.5">
+            <SelectTrigger className="h-auto w-auto gap-1 border-border bg-transparent px-2 py-0.5 text-xs text-muted-foreground [&>svg]:h-2.5 [&>svg]:w-2.5">
               <span className="font-medium">Cover:</span>
               <SelectValue />
             </SelectTrigger>
@@ -490,17 +506,17 @@ function FileCard({
             </SelectContent>
           </Select>
         ) : file.fileType === 'epub' ? (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-            ePub
+          <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+            EPUB
           </span>
         ) : (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+          <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
             Notebook
           </span>
         )}
       </div>
       {file.status === 'error' && file.error && (
-        <p className="text-[11px] text-destructive px-3 pb-2 truncate">{file.error}</p>
+        <p className="text-xs text-destructive px-3 pb-2 truncate">{file.error}</p>
       )}
     </div>
   )

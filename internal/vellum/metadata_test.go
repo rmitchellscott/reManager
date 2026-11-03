@@ -17,6 +17,12 @@ func testStore() *MetadataStore {
 			"tilem": {
 				"0.1.4-r3": {Depends: []string{"curl", "launcher"}, Arch: []string{"aarch64"}},
 			},
+			"wrapper": {
+				"1.0-r0": {Depends: []string{"koreader"}, Arch: []string{"aarch64"}},
+			},
+			"appload-extension": {
+				"1.0-r0": {Depends: []string{"appload"}, Arch: []string{"aarch64"}},
+			},
 			"solo": {
 				"1.0-r0": {Depends: []string{"only-thing"}, Arch: []string{"aarch64"}},
 			},
@@ -88,6 +94,29 @@ func TestResolveVirtualChoicesSatisfied(t *testing.T) {
 	}
 	if choices := m.ResolveVirtualChoices([]string{"koreader", "appload"}, nil, "", "", "aarch64"); len(choices) != 0 {
 		t.Errorf("queued provider should suppress the prompt, got %+v", choices)
+	}
+}
+
+func TestResolveVirtualChoicesSatisfiedByDependency(t *testing.T) {
+	m := testStore()
+
+	for _, requested := range [][]string{{"koreader", "appload-extension"}, {"appload-extension", "koreader"}} {
+		if choices := m.ResolveVirtualChoices(requested, nil, "", "", "aarch64"); len(choices) != 0 {
+			t.Errorf("a provider pulled in as a dependency should suppress the prompt for %v, got %+v", requested, choices)
+		}
+	}
+}
+
+func TestResolveVirtualChoicesNamesTheRequestedPackage(t *testing.T) {
+	m := testStore()
+
+	choices := m.ResolveVirtualChoices([]string{"wrapper", "tilem"}, nil, "", "", "aarch64")
+	if len(choices) != 1 {
+		t.Fatalf("expected the launcher choice, got %+v", choices)
+	}
+	got := choices[0].RequiredBy
+	if len(got) != 2 || got[0] != "wrapper" || got[1] != "tilem" {
+		t.Errorf("requiredBy = %v, want [wrapper tilem]: the requested packages, not koreader", got)
 	}
 }
 
@@ -170,5 +199,26 @@ func TestBuildProviderIndexIgnoresRealPackages(t *testing.T) {
 	}
 	if providers := buildProviderIndex(&pm)["launcherctl"]; providers != nil {
 		t.Errorf("a real package is not virtual, got providers %v", providers)
+	}
+}
+
+func TestLatestVersionComparesNumerically(t *testing.T) {
+	pm := PackagesMetadata{
+		Packages: map[string]map[string]PackageVersion{
+			"xovi": {
+				"1.9.0-r0":  {Pkgdesc: "old"},
+				"1.10.0-r0": {Pkgdesc: "new"},
+			},
+		},
+	}
+	m := &MetadataStore{packages: pm, loaded: true}
+
+	if pkg := m.GetPackage("xovi"); pkg == nil || pkg.Version != "1.10.0-r0" {
+		t.Errorf("GetPackage latest = %+v, want 1.10.0-r0", pkg)
+	}
+	for _, pkg := range m.GetAllPackages() {
+		if pkg.Name == "xovi" && pkg.Version != "1.10.0-r0" {
+			t.Errorf("GetAllPackages latest = %s, want 1.10.0-r0", pkg.Version)
+		}
 	}
 }

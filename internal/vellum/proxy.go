@@ -34,7 +34,6 @@ type Proxy struct {
 }
 
 func NewProxy(client *Client, sshClient *ssh.Client, arch string) *Proxy {
-	// Map architecture names to vellum repo format
 	repoArch := arch
 	if arch == "arm32" {
 		repoArch = "armv7"
@@ -59,13 +58,11 @@ type ProxyProgress struct {
 	Message string
 }
 
-// ProxyDownloadWithProgress downloads packages with structured progress reporting.
 func (p *Proxy) ProxyDownloadWithProgress(ctx context.Context, packages []string, onProgress func(ProxyProgress)) ([]string, error) {
 	return p.proxyDownloadInternal(ctx, packages, onProgress)
 }
 
-// ProxyDownload downloads APKINDEX and packages, uploads them to device cache.
-// Returns the list of all package names that will be installed (including dependencies).
+// Returns every package the install adds, dependencies included.
 func (p *Proxy) ProxyDownload(ctx context.Context, packages []string, onProgress func(string)) ([]string, error) {
 	return p.proxyDownloadInternal(ctx, packages, func(progress ProxyProgress) {
 		onProgress(progress.Message)
@@ -74,7 +71,7 @@ func (p *Proxy) ProxyDownload(ctx context.Context, packages []string, onProgress
 
 func (p *Proxy) proxyDownloadInternal(ctx context.Context, packages []string, onProgress func(ProxyProgress)) ([]string, error) {
 	debug.Printf("[DEBUG] ProxyDownload called with packages: %v\n", packages)
-	onProgress(ProxyProgress{Phase: "index", Message: "Downloading package index..."})
+	onProgress(ProxyProgress{Phase: "index", Message: "Downloading package index…"})
 
 	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
 	debug.Printf("[DEBUG] ProxyDownload downloading APKINDEX from: %s\n", apkindexURL)
@@ -85,7 +82,6 @@ func (p *Proxy) proxyDownloadInternal(ctx context.Context, packages []string, on
 	}
 	debug.Printf("[DEBUG] ProxyDownload APKINDEX downloaded, size: %d bytes\n", len(apkindexData))
 
-	// Parse APKINDEX to get C: fields
 	checksums, err := parseAPKINDEX(apkindexData)
 	if err != nil {
 		debug.Printf("[DEBUG] ProxyDownload APKINDEX parse failed: %v\n", err)
@@ -96,15 +92,21 @@ func (p *Proxy) proxyDownloadInternal(ctx context.Context, packages []string, on
 	apkindexCacheName := computeAPKINDEXCacheName(apkindexURL)
 	remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, apkindexCacheName)
 	debug.Printf("[DEBUG] ProxyDownload uploading APKINDEX to: %s\n", remotePath)
-	onProgress(ProxyProgress{Phase: "index", Message: fmt.Sprintf("Transferring %s...", apkindexCacheName)})
+	onProgress(ProxyProgress{Phase: "index", Message: "Transferring the package index…"})
 
-	if err := p.uploadToDevice(apkindexData, remotePath); err != nil {
+	sftpClient, err := p.openSFTP()
+	if err != nil {
+		return nil, err
+	}
+	defer sftpClient.Close()
+
+	if err := writeFileAtomically(sftpClient, remotePath, apkindexData); err != nil {
 		debug.Printf("[DEBUG] ProxyDownload APKINDEX upload failed: %v\n", err)
 		return nil, fmt.Errorf("failed to upload APKINDEX: %w", err)
 	}
 	debug.Printf("[DEBUG] ProxyDownload APKINDEX uploaded successfully\n")
 
-	onProgress(ProxyProgress{Phase: "resolving", Message: "Resolving dependencies..."})
+	onProgress(ProxyProgress{Phase: "resolving", Message: "Resolving dependencies…"})
 	debug.Printf("[DEBUG] ProxyDownload calling SimulateAddWithVersions with: %v\n", packages)
 	toInstall, err := p.client.SimulateAddWithVersions(packages...)
 	if err != nil {
@@ -140,7 +142,7 @@ func (p *Proxy) proxyDownloadInternal(ctx context.Context, packages []string, on
 			Current: i + 1,
 			Total:   len(pkgs),
 			Package: pkg.name,
-			Message: fmt.Sprintf("Downloading %s (%d/%d)...", pkg.name, i+1, len(pkgs)),
+			Message: fmt.Sprintf("Downloading %s (%d/%d)…", pkg.name, i+1, len(pkgs)),
 		})
 
 		pkgData, err := downloadFile(ctx, pkg.url)
@@ -168,10 +170,10 @@ func (p *Proxy) proxyDownloadInternal(ctx context.Context, packages []string, on
 			Current: i + 1,
 			Total:   len(pkgs),
 			Package: pkg.name,
-			Message: fmt.Sprintf("Transferring %s (%d/%d)...", pkg.name, i+1, len(pkgs)),
+			Message: fmt.Sprintf("Transferring %s (%d/%d)…", pkg.name, i+1, len(pkgs)),
 		})
 
-		if err := p.uploadToDevice(pkgData, remotePath); err != nil {
+		if err := writeFileAtomically(sftpClient, remotePath, pkgData); err != nil {
 			debug.Printf("[DEBUG] ProxyDownload upload failed for %s: %v\n", pkg.name, err)
 			return nil, fmt.Errorf("failed to upload %s: %w", pkg.name, err)
 		}
@@ -179,7 +181,7 @@ func (p *Proxy) proxyDownloadInternal(ctx context.Context, packages []string, on
 	}
 
 	debug.Printf("[DEBUG] ProxyDownload completed successfully\n")
-	onProgress(ProxyProgress{Phase: "complete", Total: len(pkgs), Current: len(pkgs), Message: "All packages downloaded and cached"})
+	onProgress(ProxyProgress{Phase: "complete", Total: len(pkgs), Current: len(pkgs), Message: "All packages downloaded"})
 
 	var names []string
 	for _, pkg := range toInstall {
@@ -188,26 +190,41 @@ func (p *Proxy) proxyDownloadInternal(ctx context.Context, packages []string, on
 	return names, nil
 }
 
-func (p *Proxy) uploadToDevice(data []byte, remotePath string) error {
+// Each SFTP client is an sftp-server process on the reMarkable, so a run opens one and sends every file through it.
+func (p *Proxy) openSFTP() (*sftp.Client, error) {
 	sftpClient, err := sftp.NewClient(p.sshClient)
 	if err != nil {
-		return fmt.Errorf("failed to create SFTP client: %w", err)
+		return nil, fmt.Errorf("failed to create SFTP client: %w", err)
 	}
-	defer sftpClient.Close()
+	return sftpClient, nil
+}
 
+// apk may be reading the index or a cached package while this runs, so data goes to a temp name and replaces the file in one rename; an interrupted upload leaves the old file whole.
+func writeFileAtomically(sftpClient *sftp.Client, remotePath string, data []byte) error {
 	dir := path.Dir(remotePath)
 	if err := sftpClient.MkdirAll(dir); err != nil {
 		return fmt.Errorf("failed to create remote directory %s: %w", dir, err)
 	}
 
-	f, err := sftpClient.Create(remotePath)
+	tempPath := remotePath + ".tmp"
+	f, err := sftpClient.Create(tempPath)
 	if err != nil {
-		return fmt.Errorf("failed to create remote file %s: %w", remotePath, err)
+		return fmt.Errorf("failed to create remote file %s: %w", tempPath, err)
 	}
-	defer f.Close()
-
-	_, err = f.Write(data)
-	return err
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		sftpClient.Remove(tempPath)
+		return fmt.Errorf("failed to write %s: %w", remotePath, err)
+	}
+	if err := f.Close(); err != nil {
+		sftpClient.Remove(tempPath)
+		return fmt.Errorf("failed to write %s: %w", remotePath, err)
+	}
+	if err := sftpClient.PosixRename(tempPath, remotePath); err != nil {
+		sftpClient.Remove(tempPath)
+		return fmt.Errorf("failed to replace %s: %w", remotePath, err)
+	}
+	return nil
 }
 
 func downloadFile(ctx context.Context, url string) ([]byte, error) {
@@ -224,7 +241,6 @@ func downloadFile(ctx context.Context, url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// parseAPKINDEX extracts package name → C: field mapping from APKINDEX.tar.gz
 func parseAPKINDEX(data []byte) (map[string]string, error) {
 	checksums := make(map[string]string)
 
@@ -280,10 +296,10 @@ func parseAPKINDEX(data []byte) (map[string]string, error) {
 	return checksums, nil
 }
 
-// ProxyUpgradeDownload downloads APKINDEX, resolves upgradable packages, and uploads them to device cache.
-func (p *Proxy) ProxyUpgradeDownload(ctx context.Context, onProgress func(ProxyProgress)) error {
+// Names scope the download to a queued subset; the solve below expands them, so dependencies the solver adds are downloaded too.
+func (p *Proxy) ProxyUpgradeDownload(ctx context.Context, onProgress func(ProxyProgress), packages ...string) error {
 	debug.Printf("[DEBUG] ProxyUpgradeDownload called\n")
-	onProgress(ProxyProgress{Phase: "index", Message: "Downloading package index..."})
+	onProgress(ProxyProgress{Phase: "index", Message: "Downloading package index…"})
 
 	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
 	apkindexData, err := downloadFile(ctx, apkindexURL)
@@ -298,14 +314,20 @@ func (p *Proxy) ProxyUpgradeDownload(ctx context.Context, onProgress func(ProxyP
 
 	apkindexCacheName := computeAPKINDEXCacheName(apkindexURL)
 	remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, apkindexCacheName)
-	onProgress(ProxyProgress{Phase: "index", Message: fmt.Sprintf("Transferring %s...", apkindexCacheName)})
+	onProgress(ProxyProgress{Phase: "index", Message: "Transferring the package index…"})
 
-	if err := p.uploadToDevice(apkindexData, remotePath); err != nil {
+	sftpClient, err := p.openSFTP()
+	if err != nil {
+		return err
+	}
+	defer sftpClient.Close()
+
+	if err := writeFileAtomically(sftpClient, remotePath, apkindexData); err != nil {
 		return fmt.Errorf("failed to upload APKINDEX: %w", err)
 	}
 
-	onProgress(ProxyProgress{Phase: "resolving", Message: "Checking for upgradable packages..."})
-	toUpgrade, err := p.client.SimulateUpgradeWithVersions()
+	onProgress(ProxyProgress{Phase: "resolving", Message: "Checking for upgrades…"})
+	toUpgrade, err := p.client.SimulateUpgradeWithVersions(packages...)
 	if err != nil {
 		return fmt.Errorf("failed to simulate upgrade: %w", err)
 	}
@@ -336,7 +358,7 @@ func (p *Proxy) ProxyUpgradeDownload(ctx context.Context, onProgress func(ProxyP
 			Current: i + 1,
 			Total:   len(pinnedPkgs),
 			Package: pkg.name,
-			Message: fmt.Sprintf("Downloading %s (%d/%d)...", pkg.name, i+1, len(pinnedPkgs)),
+			Message: fmt.Sprintf("Downloading %s (%d/%d)…", pkg.name, i+1, len(pinnedPkgs)),
 		})
 
 		pkgData, err := downloadFile(ctx, pkg.url)
@@ -360,22 +382,21 @@ func (p *Proxy) ProxyUpgradeDownload(ctx context.Context, onProgress func(ProxyP
 			Current: i + 1,
 			Total:   len(pinnedPkgs),
 			Package: pkg.name,
-			Message: fmt.Sprintf("Transferring %s (%d/%d)...", pkg.name, i+1, len(pinnedPkgs)),
+			Message: fmt.Sprintf("Transferring %s (%d/%d)…", pkg.name, i+1, len(pinnedPkgs)),
 		})
 
-		if err := p.uploadToDevice(pkgData, pkgRemotePath); err != nil {
+		if err := writeFileAtomically(sftpClient, pkgRemotePath, pkgData); err != nil {
 			return fmt.Errorf("failed to upload %s: %w", pkg.name, err)
 		}
 	}
 
-	onProgress(ProxyProgress{Phase: "complete", Total: len(pinnedPkgs), Current: len(pinnedPkgs), Message: "All upgrade packages downloaded and cached"})
+	onProgress(ProxyProgress{Phase: "complete", Total: len(pinnedPkgs), Current: len(pinnedPkgs), Message: "All upgrades downloaded"})
 	return nil
 }
 
-// UploadAPKINDEX downloads the APKINDEX and uploads it to device cache.
-// This should be called before vellum update to ensure the index is available.
+// Runs before vellum update so the index is already in the device cache.
 func (p *Proxy) UploadAPKINDEX(ctx context.Context, onProgress func(string)) error {
-	onProgress("Downloading package index...")
+	onProgress("Downloading package index…")
 
 	apkindexURL := fmt.Sprintf("%s/%s/APKINDEX.tar.gz", VellumRepoBaseURL, p.arch)
 	apkindexData, err := downloadFile(ctx, apkindexURL)
@@ -385,24 +406,27 @@ func (p *Proxy) UploadAPKINDEX(ctx context.Context, onProgress func(string)) err
 
 	apkindexCacheName := computeAPKINDEXCacheName(apkindexURL)
 	remotePath := fmt.Sprintf("%s/%s", VellumCacheDir, apkindexCacheName)
-	onProgress(fmt.Sprintf("Transferring %s...", apkindexCacheName))
+	onProgress("Transferring the package index…")
 
-	if err := p.uploadToDevice(apkindexData, remotePath); err != nil {
+	sftpClient, err := p.openSFTP()
+	if err != nil {
+		return err
+	}
+	defer sftpClient.Close()
+
+	if err := writeFileAtomically(sftpClient, remotePath, apkindexData); err != nil {
 		return fmt.Errorf("failed to upload APKINDEX: %w", err)
 	}
 
 	return nil
 }
 
-// computeAPKINDEXCacheName returns the cache filename for APKINDEX
-// Format: APKINDEX.{sha256(url)[:8]}.tar.gz
 func computeAPKINDEXCacheName(url string) string {
 	hash := sha256.Sum256([]byte(url))
 	hash8 := hex.EncodeToString(hash[:])[:8]
 	return fmt.Sprintf("APKINDEX.%s.tar.gz", hash8)
 }
 
-// computePackageHash computes the 8-char hash from C: field
 // C: field format: Q1{base64} where base64 is SHA1 of package content
 func computePackageHash(cField string) string {
 	if strings.HasPrefix(cField, "Q1") {
@@ -416,4 +440,3 @@ func computePackageHash(cField string) string {
 
 	return hex.EncodeToString(decoded)[:8]
 }
-

@@ -1,0 +1,37 @@
+--- a/pkg/application/webview_window_ios.m
++++ b/pkg/application/webview_window_ios.m
+@@ -274,6 +274,34 @@
+     // The page pads itself with env(safe-area-inset-*) instead, and the
+     // floating tab bar depends on reaching the bottom edge.
+     self.webView.frame = self.view.bounds;
++    [self clearWindowControls];
++}
++// iPadOS 26 draws the window's close, minimize and tile controls over the
++// top-left of the content, and the plain safe area does not account for them.
++// Growing the safe area by the band the controls occupy makes the page's
++// env(safe-area-inset-top) clear them.
++- (void)clearWindowControls {
++    if (@available(iOS 26.0, *)) {
++        UIEdgeInsets clearOfControls = [self.view edgeInsetsForLayoutRegion:
++            [UIViewLayoutRegion safeAreaLayoutRegionWithCornerAdaptation:UIViewLayoutRegionAdaptivityAxisVertical]];
++        CGFloat safeTopWithoutExtra = self.view.safeAreaInsets.top - self.additionalSafeAreaInsets.top;
++        CGFloat controlsBand = MAX(0, clearOfControls.top - safeTopWithoutExtra);
++        if (self.additionalSafeAreaInsets.top != controlsBand) {
++            self.additionalSafeAreaInsets = UIEdgeInsetsMake(controlsBand, 0, 0, 0);
++        }
++    }
++}
++// Once the band is in the safe area, the controls region only echoes it back,
++// so the band can grow but never shrink. The first layout of a resize also
++// reads the region of the old size, which grows it wrongly, for example from
++// full screen into Slide Over. Dropping the band when the resize settles lets
++// the next layout measure it again from the new size.
++- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
++    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
++    [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
++        self.additionalSafeAreaInsets = UIEdgeInsetsZero;
++        [self.view setNeedsLayout];
++    }];
+ }
+ // Orientation lock and status-bar appearance are driven by global state set
+ // from Go (see mobile_features_ios.m). These overrides feed UIKit the current

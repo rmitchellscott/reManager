@@ -1,36 +1,33 @@
-import { useState, useEffect, useCallback } from 'react'
+import { ArrowsClockwise, Bug, Chat, Check, CheckCircle, CircleNotch, Copy, Package, Trash, Warning, WarningCircle } from '@phosphor-icons/react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Input } from '@/components/ui/input'
-import { Copy, Check, Plus, Trash2, RefreshCw, Loader2, AlertCircle, AlertTriangle, CheckCircle2, MessageSquare, Package } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Label } from '@/components/ui/label'
 import { SupportBundleDialog } from '@/components/SupportBundleDialog'
 import { formatDate } from '@/lib/format'
-
-interface BundleRecord {
-  id: string
-  remoteId: string
-  url: string
-  deviceName: string
-  deviceId: string
-  uploadedAt: number
-  lastAppended?: number
-  expiresAt?: number
-}
+import { errorDetail, handleError } from '@/lib/errorMessages'
+import { OutputDisclosure } from '@/components/OutputDisclosure'
+import type { SupportScreen } from '@/components/SupportHome'
+import { SupportService, SystemService } from '@bindings/reManager'
+import type { BundleRecord } from '@/lib/types'
+import { operationFailure, runOperation } from '@/lib/operations'
 
 interface SupportBundlePageProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  initialScreen: SupportScreen
   isConnected: boolean
   savedDevices: { id: string; name: string }[]
   connectedDeviceId: string
+  supportUpload: boolean
 }
 
-type Screen = 'main' | 'report' | 'report-sent' | 'chat' | 'bundles'
+type Screen = SupportScreen | 'report-sent'
 
 function expiryText(expiresAt: number): { text: string; expired: boolean } {
   const now = Date.now() / 1000
@@ -41,12 +38,20 @@ function expiryText(expiresAt: number): { text: string; expired: boolean } {
   return { text: `Expires in ${days} days`, expired: false }
 }
 
-export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevices, connectedDeviceId }: SupportBundlePageProps) {
-  const [screen, setScreen] = useState<Screen>('main')
+export function SupportBundlePage({ open, onOpenChange, initialScreen, isConnected, savedDevices, connectedDeviceId, supportUpload }: SupportBundlePageProps) {
+  const [screen, setScreen] = useState<Screen>(initialScreen)
+  // Synced during render, not an effect: an effect lands after the first paint, so the dialog would show the previous screen for a frame and visibly resize.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) setScreen(initialScreen)
+  }
   const [bundles, setBundles] = useState<BundleRecord[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [appendingId, setAppendingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<{ message: string; detail: string } | null>(null)
+  const [appendError, setAppendError] = useState<{ remoteId: string; message: string; detail: string } | null>(null)
   const [confirmDeleteBundle, setConfirmDeleteBundle] = useState<BundleRecord | null>(null)
   const [showNewBundle, setShowNewBundle] = useState(false)
 
@@ -57,6 +62,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
   const [reportBundleURL, setReportBundleURL] = useState('')
   const [reportDeviceId, setReportDeviceId] = useState('')
   const [reportSubmitting, setReportSubmitting] = useState(false)
+  const [reportError, setReportError] = useState<{ message: string; detail: string } | null>(null)
   const [showReportBundleDialog, setShowReportBundleDialog] = useState(false)
 
 
@@ -64,14 +70,13 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
   const [chatBundleURL, setChatBundleURL] = useState('')
 
   const loadBundles = useCallback(async () => {
-    const records = await window.go.main.App.GetBundleHistory()
+    const records = await SupportService.GetBundleHistory()
     setBundles(records || [])
   }, [])
 
   useEffect(() => {
     if (open) {
       loadBundles()
-      setScreen('main')
       setConfirmDeleteBundle(null)
       setReportDescription('')
       setReportEmail('')
@@ -79,49 +84,37 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
       setReportDeviceId(connectedDeviceId || '')
       setChatBundleURL('')
     }
-  }, [open, loadBundles])
-
-  const handleAppendComplete = useCallback(() => {
-    setAppendingId(null)
-    loadBundles()
-    toast.success('Bundle updated successfully')
-  }, [loadBundles])
-
-  const handleAppendError = useCallback((...args: unknown[]) => {
-    setAppendingId(null)
-    const data = args[0] as { message: string }
-    toast.error(data.message)
-  }, [])
-
-  useEffect(() => {
-    if (!open) return
-    const unsub1 = window.runtime.EventsOn('support-bundle:append-complete', handleAppendComplete)
-    const unsub2 = window.runtime.EventsOn('support-bundle:append-error', handleAppendError)
-    return () => {
-      unsub1()
-      unsub2()
-    }
-  }, [open, handleAppendComplete, handleAppendError])
+  }, [open, initialScreen, loadBundles])
 
   const handleCopy = (remoteId: string, url: string) => {
-    window.go.main.App.CopyToClipboard(url)
+    SupportService.CopyToClipboard(url)
     setCopiedId(remoteId)
     setTimeout(() => setCopiedId(null), 2000)
   }
 
-  const handleAppend = (remoteId: string) => {
+  const handleAppend = async (remoteId: string) => {
     setAppendingId(remoteId)
-    window.go.main.App.AppendSupportBundle(remoteId, connectedDeviceId)
+    const result = await runOperation(id => SupportService.AppendSupportBundle(id, remoteId, connectedDeviceId))
+    setAppendingId(null)
+    if (result.ok) {
+      loadBundles()
+      toast.success('Bundle updated')
+      return
+    }
+    if (result.canceled) return
+    const failure = operationFailure(result)
+    setAppendError({ remoteId, message: handleError(failure, 'Could not update this bundle.'), detail: errorDetail(failure) })
   }
 
   const handleDelete = async (remoteId: string) => {
     setDeletingId(remoteId)
     try {
-      await window.go.main.App.DeleteSupportBundle(remoteId)
+      setDeleteError(null)
+      await SupportService.DeleteSupportBundle(remoteId)
       setConfirmDeleteBundle(null)
       loadBundles()
     } catch (err) {
-      toast.error('Failed to delete bundle: ' + (err instanceof Error ? err.message : String(err)))
+      setDeleteError({ message: handleError(err, 'Could not delete the bundle.'), detail: errorDetail(err) })
     } finally {
       setDeletingId(null)
     }
@@ -133,57 +126,44 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
   }
 
 
-  const handleReportBundleComplete = useCallback((...args: unknown[]) => {
-    const data = args[0] as { url: string }
-    setReportBundleURL(data.url)
+  const handleReportBundleUploaded = (url: string) => {
+    setReportBundleURL(url)
     setShowReportBundleDialog(false)
     loadBundles()
-  }, [loadBundles])
-
-  useEffect(() => {
-    if (!showReportBundleDialog) return
-    const unsub = window.runtime.EventsOn('support-bundle:upload-complete', handleReportBundleComplete)
-    return () => { unsub() }
-  }, [showReportBundleDialog, handleReportBundleComplete])
+  }
 
   const handleSubmitReport = async () => {
     if (!reportDescription.trim()) return
     setReportSubmitting(true)
     try {
-      await window.go.main.App.SubmitProblemReport(
+      await SupportService.SubmitProblemReport(
         reportDescription.trim(),
         reportEmail.trim(),
         reportBundleURL,
         reportDeviceId,
       )
+      setReportError(null)
       setScreen('report-sent')
     } catch (err) {
-      toast.error('Failed to submit report: ' + (err instanceof Error ? err.message : String(err)))
+      setReportError({ message: handleError(err, 'Could not send the report.'), detail: errorDetail(err) })
     } finally {
       setReportSubmitting(false)
     }
   }
 
 
-  const handleChatBundleComplete = useCallback((...args: unknown[]) => {
-    const data = args[0] as { url: string }
-    setChatBundleURL(data.url)
+  const handleChatBundleUploaded = (url: string) => {
+    setChatBundleURL(url)
     setShowChatBundleDialog(false)
     loadBundles()
-  }, [loadBundles])
-
-  useEffect(() => {
-    if (!showChatBundleDialog) return
-    const unsub = window.runtime.EventsOn('support-bundle:upload-complete', handleChatBundleComplete)
-    return () => { unsub() }
-  }, [showChatBundleDialog, handleChatBundleComplete])
+  }
 
   const handleOpenDiscord = () => {
     if (chatBundleURL) {
-      window.go.main.App.CopyToClipboard(chatBundleURL)
-      toast.success('Bundle URL copied to clipboard')
+      SupportService.CopyToClipboard(chatBundleURL)
+      toast.success('Bundle link copied')
     }
-    window.runtime.BrowserOpenURL('https://discord.com/invite/u3P9sDW')
+    SystemService.OpenExternalURL('https://discord.com/invite/u3P9sDW')
   }
 
   const bundleList = (
@@ -223,6 +203,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
                     size="icon"
                     className="h-7 w-7 flex-shrink-0"
                     onClick={() => handleCopy(bundle.remoteId, bundle.url)}
+                    aria-label="Copy link"
                   >
                     {copiedId === bundle.remoteId ? (
                       <Check className="h-3.5 w-3.5" />
@@ -231,21 +212,27 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
                     )}
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Copy URL</TooltipContent>
+                <TooltipContent>Copy link</TooltipContent>
               </Tooltip>
             </div>
+            {appendError?.remoteId === bundle.remoteId && (
+              <>
+                <p className="pt-1 text-xs text-destructive">{appendError.message}</p>
+                <OutputDisclosure output={appendError.detail} />
+              </>
+            )}
             <div className="flex items-center justify-end gap-2 pt-1">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     size="sm"
-                    onClick={() => handleAppend(bundle.remoteId)}
+                    onClick={() => { setAppendError(null); handleAppend(bundle.remoteId) }}
                     disabled={isExpired || appendingId === bundle.remoteId}
                   >
                     {appendingId === bundle.remoteId ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                      <CircleNotch className="h-3.5 w-3.5 animate-spin mr-1.5" />
                     ) : (
-                      <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                      <ArrowsClockwise className="h-3.5 w-3.5 mr-1.5" />
                     )}
                     Update
                   </Button>
@@ -260,7 +247,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
                     onClick={() => setConfirmDeleteBundle(bundle)}
                     disabled={isExpired}
                   >
-                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                    <Trash className="h-3.5 w-3.5 mr-1.5" />
                     Delete
                   </Button>
                 </TooltipTrigger>
@@ -275,126 +262,23 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[80vw] max-w-2xl max-h-[80vh] flex flex-col">
-
-        {screen === 'main' && (
-          <>
-            <DialogHeader className="flex-shrink-0">
-              <DialogTitle>Support</DialogTitle>
-              <DialogDescription>
-                Report issues or get community support.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="flex-1 overflow-y-auto">
-              <div className="grid grid-cols-3 gap-3">
-                <button
-                  className="border rounded-lg py-5 px-4 flex flex-col items-center text-center gap-3 hover:bg-accent hover:border-ring transition-colors"
-                  onClick={() => setScreen('report')}
-                >
-                  <AlertTriangle className="h-8 w-8 text-muted-foreground" />
-                  <span className="text-sm font-medium">Report a Problem</span>
-                  <span className="text-xs text-muted-foreground">Let the developer know what went wrong</span>
-                </button>
-
-                <button
-                  className="border rounded-lg py-5 px-4 flex flex-col items-center text-center gap-3 hover:bg-accent hover:border-ring transition-colors"
-                  onClick={() => setScreen('chat')}
-                >
-                  <MessageSquare className="h-8 w-8 text-muted-foreground" />
-                  <span className="text-sm font-medium">Community Chat</span>
-                  <span className="text-xs text-muted-foreground">Get help from other users</span>
-                </button>
-
-                <button
-                  className="border rounded-lg py-5 px-4 flex flex-col items-center text-center gap-3 hover:bg-accent hover:border-ring transition-colors relative"
-                  onClick={() => setScreen('bundles')}
-                >
-                  <Package className="h-8 w-8 text-muted-foreground" />
-                  <span className="text-sm font-medium">Support Bundles</span>
-                  <span className="text-xs text-muted-foreground">Generate & manage diagnostics</span>
-                  {bundles.length > 0 && (
-                    <Badge className="absolute top-2 right-2 rounded-full h-5 min-w-5 flex items-center justify-center px-1.5 text-[0.625rem]">
-                      {bundles.length}
-                    </Badge>
-                  )}
-                </button>
-              </div>
-
-              {(() => {
-                const activeBundles = bundles.filter(b => !b.expiresAt || b.expiresAt > Date.now() / 1000)
-                const latestBundle = (connectedDeviceId
-                  ? activeBundles.find(b => b.deviceId === connectedDeviceId)
-                  : activeBundles[0]) || activeBundles[0]
-                if (!latestBundle) return null
-                const updatedAt = latestBundle.lastAppended || latestBundle.uploadedAt
-                return (
-                  <div className="border rounded-lg p-3.5 mt-4 flex items-center gap-3">
-                    <Package className="h-5 w-5 text-muted-foreground flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">{latestBundle.deviceName || 'Unknown device'}</div>
-                      <div className="text-xs text-muted-foreground">
-                        Bundle last updated {formatDate(updatedAt)}
-                      </div>
-                    </div>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-8 w-8 flex-shrink-0"
-                          onClick={() => handleCopy(latestBundle.remoteId, latestBundle.url)}
-                        >
-                          {copiedId === latestBundle.remoteId ? (
-                            <Check className="h-3.5 w-3.5" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Copy URL</TooltipContent>
-                    </Tooltip>
-                    <Button
-                      size="sm"
-                      onClick={() => handleAppend(latestBundle.remoteId)}
-                      disabled={appendingId === latestBundle.remoteId}
-                    >
-                      {appendingId === latestBundle.remoteId ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                      ) : (
-                        <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-                      )}
-                      Update Bundle
-                    </Button>
-                  </div>
-                )
-              })()}
-
-            </div>
-
-            <DialogFooter className="flex-shrink-0">
-              <Button variant="outline" onClick={() => onOpenChange(false)} className="">
-                Close
-              </Button>
-            </DialogFooter>
-          </>
-        )}
+      <DialogContent size="lg">
 
         {screen === 'report' && (
           <>
-            <DialogHeader className="flex-shrink-0">
-              <DialogTitle>Report a Problem</DialogTitle>
+            <DialogHeader severity="neutral" icon={Bug} className="flex-shrink-0">
+              <DialogTitle>Report a problem</DialogTitle>
               <DialogDescription>
                 Describe what happened so the developer can look into it.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex-1 overflow-y-auto space-y-4 px-1">
+            <DialogBody className="space-y-4">
               <div>
                 <Label>What went wrong?</Label>
                 <textarea
-                  className="mt-2 flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[6rem] resize-y"
-                  placeholder="Describe the issue you experienced..."
+                  className="mt-2 flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm touch:no-focus-zoom ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[6rem] resize-y"
+                  placeholder="Describe the issue…"
                   value={reportDescription}
                   onChange={(e) => setReportDescription(e.target.value)}
                 />
@@ -408,19 +292,25 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
                   className="mt-2"
                   type="email"
                   placeholder="your@email.com"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   value={reportEmail}
                   onChange={(e) => setReportEmail(e.target.value)}
                 />
+                <div className="text-xs text-muted-foreground mt-1">
+                  The developer cannot reply without an address.
+                </div>
               </div>
 
               {savedDevices.length > 0 && (
                 <div>
                   <Label>
-                    Device <span className="font-normal text-muted-foreground">(optional)</span>
+                    reMarkable <span className="font-normal text-muted-foreground">(optional)</span>
                   </Label>
                   <Select value={reportDeviceId} onValueChange={setReportDeviceId}>
                     <SelectTrigger className="mt-2 w-full">
-                      <SelectValue placeholder="Select a device" />
+                      <SelectValue placeholder="Select a reMarkable" />
                     </SelectTrigger>
                     <SelectContent>
                       {savedDevices.map(d => (
@@ -431,35 +321,44 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
                 </div>
               )}
 
-              <div className="border rounded-lg p-3.5 bg-muted/50 flex items-start gap-3">
-                <Package className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium">Include a diagnostic bundle?</div>
-                  <div className="text-xs text-muted-foreground">Helps investigate the issue faster. No personal data is included.</div>
+              <div className="border rounded-lg p-3.5 bg-muted/50 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="flex items-center gap-3 sm:flex-1 sm:min-w-0">
+                  <Package className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium">Include a diagnostic bundle?</div>
+                    <div className="text-xs text-muted-foreground">Helps investigate the issue faster. No personal data is included.</div>
+                  </div>
                 </div>
                 {reportBundleURL ? (
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <div className="flex items-center justify-center gap-1.5 sm:flex-shrink-0">
+                    <CheckCircle className="h-4 w-4 text-green-600" />
                     <span className="text-xs text-muted-foreground">Attached</span>
                   </div>
                 ) : (
-                  <Button variant="outline" size="sm" className="flex-shrink-0" onClick={() => setShowReportBundleDialog(true)}>
-                    Attach Bundle
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto sm:flex-shrink-0" onClick={() => setShowReportBundleDialog(true)}>
+                    Attach bundle
                   </Button>
                 )}
               </div>
-            </div>
+            </DialogBody>
 
+            {reportError && (
+              <Alert variant="destructive" className="flex-shrink-0">
+                <WarningCircle className="h-4 w-4" />
+                <AlertDescription>{reportError.message}</AlertDescription>
+              </Alert>
+            )}
+            {reportError && <OutputDisclosure output={reportError.detail} className="flex-shrink-0" />}
             <DialogFooter className="flex-shrink-0">
-              <Button variant="outline" onClick={() => setScreen('main')}>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
               <Button
                 onClick={handleSubmitReport}
                 disabled={!reportDescription.trim() || reportSubmitting}
               >
-                {reportSubmitting && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
-                Submit Report
+                {reportSubmitting && <CircleNotch className="h-4 w-4 animate-spin mr-1.5" />}
+                Send report
               </Button>
             </DialogFooter>
           </>
@@ -467,23 +366,22 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
 
         {screen === 'report-sent' && (
           <>
-            <DialogHeader className="flex-shrink-0">
-              <DialogTitle>Report a Problem</DialogTitle>
-              <DialogDescription>Your report has been submitted.</DialogDescription>
+            <DialogHeader severity="success" icon={CheckCircle} className="flex-shrink-0">
+              <DialogTitle>Report a problem</DialogTitle>
+              <DialogDescription>Your report was sent.</DialogDescription>
             </DialogHeader>
 
-            <div className="flex-1 flex items-center gap-3 py-4">
-              <CheckCircle2 className="h-6 w-6 text-green-600 flex-shrink-0" />
+            <div className="flex-1">
               <div>
                 <div className="text-sm font-medium">Thank you for your report</div>
                 <div className="text-xs text-muted-foreground mt-1">
-                  Your report has been received. If you provided an email, you may be contacted for follow-up.
+                  If you included an email address, the developer may follow up.
                 </div>
               </div>
             </div>
 
             <DialogFooter className="flex-shrink-0">
-              <Button onClick={() => { setScreen('main'); setReportDescription(''); setReportEmail(''); setReportBundleURL(''); setReportDeviceId('') }}>
+              <Button onClick={() => onOpenChange(false)}>
                 Done
               </Button>
             </DialogFooter>
@@ -492,42 +390,46 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
 
         {screen === 'chat' && (
           <>
-            <DialogHeader className="flex-shrink-0">
-              <DialogTitle>Community Chat</DialogTitle>
+            <DialogHeader severity="neutral" icon={Chat} className="flex-shrink-0">
+              <DialogTitle>Community chat</DialogTitle>
               <DialogDescription>
                 Join the Discord to get help from other users and the developer.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex-1 overflow-y-auto space-y-4">
-              <div className="border rounded-lg p-3.5 bg-muted/50 flex items-start gap-3">
-                <Package className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium">Generate a support bundle first?</div>
-                  <div className="text-xs text-muted-foreground">You can share the link in Discord so others can help diagnose your issue.</div>
-                </div>
-                {chatBundleURL ? (
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    <span className="text-xs text-muted-foreground">Ready</span>
+            <DialogBody className="space-y-4">
+              {supportUpload && (
+                <div className="border rounded-lg p-3.5 bg-muted/50 flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <div className="flex items-center gap-3 sm:flex-1 sm:min-w-0">
+                    <Package className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium">Generate a support bundle first?</div>
+                      <div className="text-xs text-muted-foreground">You can share the link in Discord so others can help diagnose your issue.</div>
+                    </div>
                   </div>
-                ) : (
-                  <Button variant="outline" size="sm" className="flex-shrink-0" onClick={() => setShowChatBundleDialog(true)}>
-                    Generate
-                  </Button>
-                )}
-              </div>
+                  {chatBundleURL ? (
+                    <div className="flex items-center justify-center gap-1.5 sm:flex-shrink-0">
+                      <CheckCircle className="h-4 w-4 text-green-600" />
+                      <span className="text-xs text-muted-foreground">Ready</span>
+                    </div>
+                  ) : (
+                    <Button variant="outline" size="sm" className="w-full sm:w-auto sm:flex-shrink-0" onClick={() => setShowChatBundleDialog(true)}>
+                      Generate
+                    </Button>
+                  )}
+                </div>
+              )}
 
               <p className="text-xs text-muted-foreground">
                 {chatBundleURL
-                  ? <>The bundle URL will be copied to your clipboard when you open Discord. Open a thread in the <a href="https://discord.com/channels/385916768696139794/1180628656851275938" className="underline hover:text-foreground" onClick={(e) => { e.preventDefault(); window.runtime.BrowserOpenURL('https://discord.com/channels/385916768696139794/1180628656851275938') }}>#support channel</a> and paste it there.</>
-                  : <>You'll be taken to Discord in your browser. Open a thread in the <a href="https://discord.com/channels/385916768696139794/1180628656851275938" className="underline hover:text-foreground" onClick={(e) => { e.preventDefault(); window.runtime.BrowserOpenURL('https://discord.com/channels/385916768696139794/1180628656851275938') }}>#support channel</a> to get help.</>
+                  ? <>The bundle link is copied to your clipboard when you open Discord. Open a thread in the <a href="https://discord.com/channels/385916768696139794/1180628656851275938" className="underline hover:text-foreground" onClick={(e) => { e.preventDefault(); SystemService.OpenExternalURL('https://discord.com/channels/385916768696139794/1180628656851275938') }}>#support channel</a> and paste it there.</>
+                  : <>You'll be taken to Discord in your browser. Open a thread in the <a href="https://discord.com/channels/385916768696139794/1180628656851275938" className="underline hover:text-foreground" onClick={(e) => { e.preventDefault(); SystemService.OpenExternalURL('https://discord.com/channels/385916768696139794/1180628656851275938') }}>#support channel</a> to get help.</>
                 }
               </p>
-            </div>
+            </DialogBody>
 
             <DialogFooter className="flex-shrink-0">
-              <Button variant="outline" onClick={() => setScreen('main')}>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
               <Button onClick={handleOpenDiscord}>
@@ -540,30 +442,35 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
         {screen === 'bundles' && (
           <>
             <DialogHeader className="flex-shrink-0">
-              <DialogTitle>Support Bundles</DialogTitle>
+              <DialogTitle>Support bundles</DialogTitle>
               <DialogDescription>
                 Generate and share diagnostic data for troubleshooting.
-                <span className="block text-xs mt-1">Anyone with the link can view the uploaded data.</span>
+                {supportUpload && <span className="block text-xs mt-1">Anyone with the link can view the uploaded data.</span>}
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex-1 overflow-y-auto">
-              {bundles.length === 0 ? (
+            <DialogBody>
+              {!supportUpload ? (
                 <div className="flex flex-col items-center justify-center h-full text-muted-foreground py-8">
-                  <AlertCircle className="h-8 w-8 mb-3" />
+                  <Package className="h-8 w-8 mb-3" />
+                  <p className="text-sm">This build of reManager cannot upload bundles</p>
+                  <p className="text-xs mt-1">Save a bundle as a file and share it where you ask for help.</p>
+                </div>
+              ) : bundles.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground py-8">
+                  <WarningCircle className="h-8 w-8 mb-3" />
                   <p className="text-sm">No uploaded bundles</p>
-                  <p className="text-xs mt-1">Upload a support bundle to share for support</p>
+                  <p className="text-xs mt-1">Upload a bundle to share it with support.</p>
                 </div>
               ) : bundleList}
-            </div>
+            </DialogBody>
 
             <DialogFooter className="flex-shrink-0">
-              <Button variant="outline" onClick={() => setScreen('main')}>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
               <Button onClick={() => setShowNewBundle(true)}>
-                <Plus className="h-4 w-4 mr-1.5" />
-                New Bundle
+                New bundle
               </Button>
             </DialogFooter>
           </>
@@ -571,12 +478,9 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
       </DialogContent>
 
       <Dialog open={confirmDeleteBundle !== null} onOpenChange={(v) => { if (!v) setConfirmDeleteBundle(null) }}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-destructive" />
-              Delete Bundle
-            </DialogTitle>
+        <DialogContent size="sm">
+          <DialogHeader severity="destructive" icon={Warning}>
+            <DialogTitle>Delete bundle</DialogTitle>
             <DialogDescription>
               This will permanently delete this support bundle from the server.
             </DialogDescription>
@@ -587,6 +491,13 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
               <p className="text-xs mt-1">Uploaded {formatDate(confirmDeleteBundle.uploadedAt)}</p>
             </div>
           )}
+          {deleteError && (
+            <Alert variant="destructive">
+              <WarningCircle className="h-4 w-4" />
+              <AlertDescription>{deleteError.message}</AlertDescription>
+            </Alert>
+          )}
+          {deleteError && <OutputDisclosure output={deleteError.detail} />}
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDeleteBundle(null)}>
               Cancel
@@ -597,7 +508,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
               disabled={deletingId === confirmDeleteBundle?.remoteId}
             >
               {deletingId === confirmDeleteBundle?.remoteId ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                <CircleNotch className="h-4 w-4 animate-spin mr-1.5" />
               ) : null}
               Delete
             </Button>
@@ -611,6 +522,7 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
         isConnected={isConnected}
         savedDevices={savedDevices}
         connectedDeviceId={connectedDeviceId}
+        supportUpload={supportUpload}
       />
 
       <SupportBundleDialog
@@ -619,6 +531,8 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
         isConnected={isConnected || !!reportDeviceId}
         savedDevices={savedDevices}
         connectedDeviceId={reportDeviceId || connectedDeviceId}
+        supportUpload={supportUpload}
+        onUploaded={handleReportBundleUploaded}
       />
 
       <SupportBundleDialog
@@ -627,6 +541,8 @@ export function SupportBundlePage({ open, onOpenChange, isConnected, savedDevice
         isConnected={isConnected}
         savedDevices={savedDevices}
         connectedDeviceId={connectedDeviceId}
+        supportUpload={supportUpload}
+        onUploaded={handleChatBundleUploaded}
       />
     </Dialog>
   )

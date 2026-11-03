@@ -1,0 +1,30 @@
+--- a/pkg/application/application_android.go
++++ b/pkg/application/application_android.go
+@@ -599,9 +599,7 @@
+ }
+ 
+ func (a *App) platformEnvironment() map[string]any {
+-	return map[string]any{
+-		"platform": "android",
+-	}
++	return androidDeviceInfo()
+ }
+ 
+ func fatalHandler(errFunc func(error)) {
+--- a/pkg/application/application_ios.go
++++ b/pkg/application/application_ios.go
+@@ -295,8 +295,13 @@
+ }
+ 
+ func (a *App) platformEnvironment() map[string]any {
++	device := iosDeviceInfo()
+ 	return map[string]any{
+-		"platform": "ios",
++		"platform":      "ios",
++		"model":         device.Model,
++		"systemName":    device.SystemName,
++		"systemVersion": device.SystemVersion,
++		"isSimulator":   device.IsSimulator,
+ 	}
+ }
+ 

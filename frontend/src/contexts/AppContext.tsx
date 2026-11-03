@@ -1,37 +1,44 @@
 import { createContext, useContext, ReactNode } from 'react'
-import { PackageInfo } from '@/lib/types'
+import { FileBrowserError, OperationResult, PackageInfo, TransferFinished, TransferSnapshot } from '@/lib/types'
+import type { OperationKind, OperationSpec } from '@/hooks/useOperation'
+import type { ConnectionStatus } from '@/hooks/useConnectionEvents'
 
 export interface AppContextValue {
   device: string
   deviceInfo: Record<string, string>
-  connectionStatus: 'connected' | 'lost' | 'reconnecting' | 'failed'
+  connectionStatus: ConnectionStatus
   connectionError: string | null
   connectedDeviceId: string
 
   installedPackages: Map<string, string>
   setInstalledPackages: (pkgs: Map<string, string>) => void
+  installTimes: Map<string, number>
   packages: PackageInfo[]
   setPackages: (pkgs: PackageInfo[]) => void
   vellumInstalled: boolean | null
   setVellumInstalled: (v: boolean | null) => void
 
   commandRunning: boolean
-  setCommandRunning: (v: boolean) => void
-  installing: boolean
-  uninstalling: boolean
-  writeableRootBusy: boolean
+  runningOperation: { kind: OperationKind; target: string } | null
+  startOperation: (spec: OperationSpec) => Promise<OperationResult>
+  writableRootBusy: boolean
+
+  transfers: TransferSnapshot | null
+  lastTransferFinished: TransferFinished | null
+  transferError: FileBrowserError | null
+  setTransferError: (v: FileBrowserError | null) => void
 
   appVersion: string
   resolvedAppTheme: string
   resolvedTerminalTheme: string
   resolvedEditorTheme: string
-  tabVisibility: Record<string, boolean>
   suppressSystemFileWarnings: boolean
 
   refreshDeviceState: (deviceType: string) => Promise<void>
   rescanAllPackages: () => Promise<boolean>
-  startMaintenanceOperation: (options?: { showModal?: boolean; resetProgress?: boolean }) => void
   checkDnsProxyError: (dnsError: boolean) => Promise<void>
+  refreshAfterPackageChange: (dnsError: boolean) => Promise<void>
+  refreshAfterUpgrade: (ok: boolean, dnsError: boolean) => Promise<void>
 }
 
 const AppContext = createContext<AppContextValue | null>(null)

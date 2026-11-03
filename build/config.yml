@@ -1,0 +1,90 @@
+# This file contains the configuration for this project.
+# When you update `info` or `fileAssociations`, run `wails3 task common:update:build-assets` to update the assets.
+# Note that this will overwrite any changes you have made to the assets.
+version: '3'
+
+# This information is used to generate the build assets.
+info:
+  companyName: "rmitchellscott"
+  productName: "reManager"
+  productIdentifier: "io.scottlabs.reManager"
+  description: "Manage mods on reMarkable tablets"
+  copyright: "(c) 2026, rmitchellscott"
+  comments: ""
+  version: "2.0.0"
+  # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
+  #                               # Should match the name of your .icon file without the extension
+  #                               # If not set and Assets.car exists, defaults to "appicon"
+
+# iOS build configuration (uncomment to customize iOS project generation)
+# Note: Keys under `ios` OVERRIDE values under `info` when set.
+ios:
+  bundleID: "io.scottlabs.reManager"
+  displayName: "reManager"
+  version: "2.0.0"
+  company: "rmitchellscott"
+  minIOSVersion: "15.0"
+
+# Android release versioning. versionCode is the build number Google Play orders
+# uploads by: raise it for every upload, including a re-upload of the same version.
+android:
+  version: "2.0.0"
+  versionCode: 8
+
+# Dev mode configuration
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - frontend
+      - bin
+      - .flatpak-builder
+      - build-dir
+      - repo
+      - third_party
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+      - "*.js" # Watch for changes to JS/TS files included using the //wails:include directive.
+      - "*.ts" # The frontend directory will be excluded entirely by the setting above.
+    git_ignore: true
+  executes:
+    - cmd: wails3 build DEV=true
+      type: blocking
+    - cmd: wails3 task common:dev:frontend
+      type: background
+    - cmd: wails3 task run
+      type: primary
+
+# File Associations
+# More information at: https://v3.wails.io/noit/done/yet
+fileAssociations:
+#  - ext: wails
+#    name: Wails
+#    description: Wails Application File
+#    iconName: wailsFileIcon
+#    role: Editor
+#  - ext: jpg
+#    name: JPEG
+#    description: Image File
+#    iconName: jpegFileIcon
+#    role: Editor
+#    mimeType: image/jpeg  # (optional)
+
+# Custom URL protocols. A remanager:// link on the package index opens the app
+# at that package. Handled by systemservice_deeplink.go.
+protocols:
+  - scheme: remanager
+    description: "reManager package link"
+
+# Other data
+other:
+  - name: My Other Data

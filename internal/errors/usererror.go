@@ -5,10 +5,10 @@ import (
 )
 
 type UserError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Internal  string `json:"internal,omitempty"`
-	Retryable bool   `json:"retryable"`
+	Code      ErrorCode `json:"code"`
+	Message   string    `json:"message"`
+	Internal  string    `json:"internal,omitempty"`
+	Retryable bool      `json:"retryable"`
 }
 
 func (e *UserError) Error() string {
@@ -20,7 +20,7 @@ func (e *UserError) JSON() string {
 	return string(b)
 }
 
-func New(code, message string, internal error, retryable bool) *UserError {
+func New(code ErrorCode, message string, internal error, retryable bool) *UserError {
 	internalMsg := ""
 	if internal != nil {
 		internalMsg = internal.Error()
@@ -32,4 +32,3 @@ func New(code, message string, internal error, retryable bool) *UserError {
 		Retryable: retryable,
 	}
 }
-

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and above. See backup_rules.xml for why the secure preferences
+     are excluded. device-transfer is excluded for the same reason: a
+     hardware-backed Keystore key does not move between devices either. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="wails_secure.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="wails_secure.xml" />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,4 +1,4 @@
-import { AlertTriangle } from 'lucide-react'
+import { Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -15,6 +15,7 @@ export interface FilesystemRestoreErrorDialogProps {
   onReboot: () => void
   onDismiss: () => void
   isRetrying: boolean
+  isConnected: boolean
 }
 
 export function FilesystemRestoreErrorDialog({
@@ -23,31 +24,31 @@ export function FilesystemRestoreErrorDialog({
   onReboot,
   onDismiss,
   isRetrying,
+  isConnected,
 }: FilesystemRestoreErrorDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) onDismiss() }}>
       <DialogContent>
-        <DialogHeader>
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-6 w-6 text-amber-500" />
-            <DialogTitle>Unable to Re-enable Read-Only Filesystem</DialogTitle>
-          </div>
+        <DialogHeader severity="warning" icon={Warning}>
+          <DialogTitle>Could not re-enable the read-only filesystem</DialogTitle>
           <DialogDescription>
-            Your changes were saved, but the read-only filesystem could not be re-enabled.
-            A reboot will re-enable it without affecting your changes.
-            This can be done at any time.
+            Your changes were saved.
           </DialogDescription>
         </DialogHeader>
 
-        <DialogFooter className="flex-col sm:flex-row gap-2">
+        <p className="text-sm text-muted-foreground">
+          Rebooting re-enables it without affecting your changes. You can reboot at any time.
+        </p>
+
+        <DialogFooter separateExit>
           <Button variant="outline" onClick={onDismiss}>
             Dismiss
           </Button>
-          <Button variant="outline" onClick={onRetry} disabled={isRetrying}>
-            {isRetrying ? 'Retrying...' : 'Retry'}
+          <Button variant="outline" onClick={onRetry} disabled={isRetrying || !isConnected}>
+            {isRetrying ? 'Retrying…' : 'Try again'}
           </Button>
-          <Button variant="destructive" onClick={onReboot}>
-            Reboot Device
+          <Button variant="destructive" onClick={onReboot} disabled={!isConnected}>
+            Reboot reMarkable
           </Button>
         </DialogFooter>
       </DialogContent>

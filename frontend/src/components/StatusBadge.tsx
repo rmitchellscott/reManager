@@ -4,11 +4,11 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 const STATUS_CONFIG: Record<string, { label: string; tooltip: string }> = {
   deprecated: {
     label: 'Deprecated',
-    tooltip: 'This package will be removed in the future',
+    tooltip: 'This mod will be removed from the catalog.',
   },
   unmaintained: {
     label: 'Unmaintained',
-    tooltip: 'This package is no longer receiving updates and may not be available on newer OS versions',
+    tooltip: 'This mod no longer gets upgrades and may not work on newer OS versions.',
   },
 }
 
@@ -16,7 +16,7 @@ export function StatusBadge({ status, showTooltip = true }: { status: string; sh
   const config = STATUS_CONFIG[status]
   if (!config) return null
 
-  const badge = <Badge variant="default" className="text-xs">{config.label}</Badge>
+  const badge = <Badge variant="secondary" className="text-xs">{config.label}</Badge>
 
   if (!showTooltip) return badge
 

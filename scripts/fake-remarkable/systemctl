@@ -1,0 +1,70 @@
+#!/bin/bash
+# Stands in for systemd on the fake reMarkable. Unit state lives in files under
+# /run/fake-systemd, except xochitl, which is a real process so that xovi's
+# scripts and reManager's /proc checks find it. Starting xochitl applies the
+# Environment lines of its drop-ins, which is how xovi injects itself.
+state=/run/fake-systemd
+mkdir -p "$state"
+printf '%s\tsystemctl %s\n' "$(date +%T)" "$*" >> /var/log/fake-systemd.log 2>/dev/null
+
+unit_name() { local unit=${1%.service}; echo "${unit%.timer}"; }
+
+start_xochitl() {
+  local vars=() line
+  for conf in /etc/systemd/system/xochitl.service.d/*.conf; do
+    [ -f "$conf" ] || continue
+    while IFS= read -r line; do
+      case "$line" in Environment=*) line=${line#Environment=}; vars+=("${line//\"/}") ;; esac
+    done < "$conf"
+  done
+  # A caller on a terminal hangs up as it exits, which would take xochitl with
+  # it before setsid ran. Like systemd, the start returns once it is running.
+  nohup env "${vars[@]}" setsid /usr/bin/xochitl </dev/null >/dev/null 2>&1 &
+  for _ in $(seq 50); do pidof xochitl >/dev/null && break; sleep 0.1; done
+}
+
+is_active() {
+  if [ "$1" = xochitl ]; then pidof xochitl >/dev/null; else [ -e "$state/$1.active" ]; fi
+}
+
+start() {
+  if [ "$1" = xochitl ]; then is_active xochitl || start_xochitl; else touch "$state/$1.active"; fi
+}
+
+stop() {
+  if [ "$1" = xochitl ]; then
+    pkill -x xochitl
+    while pidof xochitl >/dev/null; do sleep 0.1; done
+  else
+    rm -f "$state/$1.active"
+  fi
+}
+
+verb=$1; shift
+while [ "${1:-}" != "${1#-}" ]; do shift; done
+case "$verb" in
+  start) for u in "$@"; do start "$(unit_name "$u")"; done ;;
+  stop) for u in "$@"; do stop "$(unit_name "$u")"; done ;;
+  restart|try-restart|reload-or-restart) for u in "$@"; do stop "$(unit_name "$u")"; start "$(unit_name "$u")"; done ;;
+  enable) for u in "$@"; do touch "$state/$(unit_name "$u").enabled"; done ;;
+  disable) for u in "$@"; do rm -f "$state/$(unit_name "$u").enabled"; done ;;
+  mask) for u in "$@"; do rm -f "$state/$(unit_name "$u").enabled"; touch "$state/$(unit_name "$u").masked"; done ;;
+  unmask) for u in "$@"; do rm -f "$state/$(unit_name "$u").masked"; done ;;
+  is-active)
+    if is_active "$(unit_name "$1")"; then echo active; else echo inactive; exit 3; fi ;;
+  is-enabled)
+    u=$(unit_name "$1")
+    if [ -e "$state/$u.masked" ]; then echo masked; exit 1; fi
+    if [ -e "$state/$u.enabled" ]; then echo enabled; else echo disabled; exit 1; fi ;;
+  reboot)
+    touch /fake/rebooted
+    kill -TERM 1 ;;
+  show)
+    if [ "$(unit_name "${!#}")" = xochitl ]; then pid=$(pidof -s xochitl); echo "${pid:-0}"; fi ;;
+  cat)
+    u=$(unit_name "$1")
+    cat "/usr/lib/systemd/system/$u.service" "/etc/systemd/system/$u.service.d/"*.conf 2>/dev/null ;;
+  daemon-reload|reload|reset-failed|status|list-units) ;;
+  *) echo "systemctl: unknown verb $verb" >&2; exit 1 ;;
+esac
+exit 0

@@ -1,11 +1,15 @@
 package vellum
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"reManager/internal/debug"
 	"reManager/internal/executor"
@@ -31,6 +35,19 @@ func IsVirtualPackage(name string) bool {
 	return VirtualPackages[name]
 }
 
+var (
+	packageNameRegex = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+	osVersionRegex   = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
+)
+
+func IsValidPackageName(name string) bool {
+	return packageNameRegex.MatchString(name)
+}
+
+func IsValidOSVersion(version string) bool {
+	return osVersionRegex.MatchString(version)
+}
+
 type Client struct {
 	executor executor.CommandExecutor
 
@@ -39,6 +56,8 @@ type Client struct {
 	listAt       time.Time
 	withVersions map[string]string
 	versionsAt   time.Time
+	osState      *OSVersionState
+	osStateAt    time.Time
 }
 
 const installedCacheTTL = 5 * time.Second
@@ -47,6 +66,7 @@ func (c *Client) InvalidateInstalledCache() {
 	c.cacheMu.Lock()
 	c.listResult = nil
 	c.withVersions = nil
+	c.osState = nil
 	c.cacheMu.Unlock()
 }
 
@@ -90,7 +110,7 @@ func (c *Client) AddStreaming(onOutput func(line string), packages ...string) er
 	if len(packages) == 0 {
 		return nil
 	}
-	cmd := fmt.Sprintf("%s add %s", VellumBin, strings.Join(packages, " "))
+	cmd := fmt.Sprintf("%s add %s", VellumBin, executor.QuoteArgs(packages))
 	debug.Printf("[DEBUG] AddStreaming running: %s\n", cmd)
 	err := c.executor.ExecuteStreaming(cmd, onOutput)
 	debug.Printf("[DEBUG] AddStreaming result: err=%v\n", err)
@@ -102,7 +122,7 @@ func (c *Client) DelStreaming(onOutput func(line string), packages ...string) er
 	if len(packages) == 0 {
 		return nil
 	}
-	cmd := fmt.Sprintf("%s del %s", VellumBin, strings.Join(packages, " "))
+	cmd := fmt.Sprintf("%s del %s", VellumBin, executor.QuoteArgs(packages))
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
 
@@ -136,6 +156,30 @@ type CompatibilityResult struct {
 
 var osUpgradeRegex = regexp.MustCompile(`OS updated \(([^\s]+) → ([^\s]+)\)`)
 var installedPkgRegex = regexp.MustCompile(`^(.+)-(\d+(?:\.\d+)*(?:_\w+)?(?:-r\d+)?)\s+\S+\s+\{`)
+
+func (c *Client) ListInstalledWithTimes() (map[string]int64, error) {
+	cmd := fmt.Sprintf("cat %s/lib/apk/db/installed", VellumRoot)
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]int64)
+	var currentPkg string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "P:") {
+			currentPkg = line[2:]
+		} else if strings.HasPrefix(line, "t:") && currentPkg != "" {
+			var ts int64
+			fmt.Sscanf(line[2:], "%d", &ts)
+			result[currentPkg] = ts
+			currentPkg = ""
+		} else if line == "" {
+			currentPkg = ""
+		}
+	}
+	return result, nil
+}
 
 func (c *Client) ListInstalledWithVersions() (map[string]string, error) {
 	c.cacheMu.Lock()
@@ -208,14 +252,22 @@ func (c *Client) ListWithOsCheck() (*ListResult, error) {
 	return result, nil
 }
 
-func (c *Client) ReenableStatus() (string, error) {
+type ReenableStatus string
+
+const (
+	ReenableNeeded   ReenableStatus = "needed"
+	ReenableOK       ReenableStatus = "ok"
+	ReenableUnneeded ReenableStatus = "unneeded"
+)
+
+func (c *Client) ReenableStatus() (ReenableStatus, error) {
 	cmd := fmt.Sprintf("%s reenable status", VellumBin)
 	output, err := c.executor.ExecuteWithOutput(cmd)
 
 	for _, line := range strings.Split(output, "\n") {
-		switch strings.TrimSpace(line) {
-		case "needed", "ok", "unneeded":
-			return strings.TrimSpace(line), nil
+		switch status := ReenableStatus(strings.TrimSpace(line)); status {
+		case ReenableNeeded, ReenableOK, ReenableUnneeded:
+			return status, nil
 		}
 	}
 
@@ -231,7 +283,16 @@ func (c *Client) ReenableStreaming(onOutput func(line string)) error {
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
 
+// Cached like the installed list: the Plan's checks ask for it several times per change and each read is up to three SSH round trips; a sync invalidates the cache.
 func (c *Client) GetOSVersionState() (*OSVersionState, error) {
+	c.cacheMu.Lock()
+	if c.osState != nil && time.Since(c.osStateAt) < installedCacheTTL {
+		cached := *c.osState
+		c.cacheMu.Unlock()
+		return &cached, nil
+	}
+	c.cacheMu.Unlock()
+
 	var currentVersion string
 
 	output, err := c.executor.ExecuteWithOutput("grep '^RELEASE_VERSION=' /usr/share/remarkable/update.conf 2>/dev/null")
@@ -250,14 +311,28 @@ func (c *Client) GetOSVersionState() (*OSVersionState, error) {
 		}
 	}
 
-	storedOutput, _ := c.executor.ExecuteWithOutput(fmt.Sprintf("cat %s/state/osver 2>/dev/null", VellumRoot))
+	// Not cached on failure: an empty version reads as no mismatch and would skip the pre-upgrade compatibility check. A missing osver exits non-zero and is a real empty value.
+	if currentVersion == "" {
+		return nil, fmt.Errorf("could not read the OS version")
+	}
+	storedOutput, storedErr := c.executor.ExecuteWithOutput(fmt.Sprintf("cat %s/state/osver 2>/dev/null", VellumRoot))
+	var exitErr *ssh.ExitError
+	if storedErr != nil && !errors.As(storedErr, &exitErr) {
+		return nil, fmt.Errorf("could not read the stored OS version: %w", storedErr)
+	}
 	storedVersion := strings.TrimSpace(storedOutput)
 
-	return &OSVersionState{
+	state := &OSVersionState{
 		CurrentVersion: currentVersion,
 		StoredVersion:  storedVersion,
 		Mismatch:       currentVersion != "" && storedVersion != "" && currentVersion != storedVersion,
-	}, nil
+	}
+	c.cacheMu.Lock()
+	c.osState = state
+	c.osStateAt = time.Now()
+	c.cacheMu.Unlock()
+	cached := *state
+	return &cached, nil
 }
 
 func (c *Client) UpdateIndex() error {
@@ -271,7 +346,7 @@ func (c *Client) UpdateIndex() error {
 }
 
 func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, error) {
-	cmd := fmt.Sprintf("%s check-os %s", VellumBin, targetOS)
+	cmd := fmt.Sprintf("%s check-os %s", VellumBin, executor.QuoteArg(targetOS))
 	debug.Printf("[DEBUG] CheckOSCompatibility: running '%s'\n", cmd)
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	debug.Printf("[DEBUG] CheckOSCompatibility: output=%q, err=%v\n", output, err)
@@ -316,52 +391,35 @@ func (c *Client) CheckOSCompatibility(targetOS string) (*CompatibilityResult, er
 	return result, nil
 }
 
-func (c *Client) UpgradeStreaming(onOutput func(line string)) error {
+// Named packages go to apk upgrade, which touches only those and leaves /etc/apk/world alone; using "add" would promote a transitive dependency to explicitly installed. No names upgrades everything.
+func (c *Client) UpgradeStreaming(onOutput func(line string), packages ...string) error {
 	defer c.InvalidateInstalledCache()
 	cmd := fmt.Sprintf("%s upgrade -y", VellumBin)
+	if len(packages) > 0 {
+		cmd = fmt.Sprintf("%s %s", cmd, executor.QuoteArgs(packages))
+	}
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
 
-type UpgradeSimulationResult struct {
-	Packages    []string
-	HasUpgrades bool
-}
+// apk announces each package as it starts, the only per-package signal the upgrade path produces; keeps the counters so a live run can report its position.
+var upgradeProgressRegex = regexp.MustCompile(`\(\s*(\d+)/(\d+)\s*\)\s+(Upgrading|Installing|Downgrading|Purging)\s+([^\s]+)\s+\(`)
 
-func (c *Client) SimulateUpgrade() (*UpgradeSimulationResult, error) {
-	cmd := fmt.Sprintf("%s upgrade --simulate --force-missing-repositories", VellumBin)
-	output, err := c.executor.ExecuteWithOutput(cmd)
-	if err != nil {
-		return &UpgradeSimulationResult{}, nil
+func ParseUpgradeProgress(line string) (pkg string, index, total int, ok bool) {
+	m := upgradeProgressRegex.FindStringSubmatch(line)
+	if m == nil {
+		return "", 0, 0, false
 	}
-	packages := parseUpgradeSimulationOutput(output)
-	return &UpgradeSimulationResult{
-		Packages:    packages,
-		HasUpgrades: len(packages) > 0,
-	}, nil
+	current, err1 := strconv.Atoi(m[1])
+	count, err2 := strconv.Atoi(m[2])
+	if err1 != nil || err2 != nil {
+		return "", 0, 0, false
+	}
+	return m[4], current - 1, count, true
 }
 
 var upgradeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(Upgrading|Installing|Downgrading)\s+([^\s]+)\s+\(`)
 var downgradeTargetRegex = regexp.MustCompile(`->\s+([^\s)]+)`)
 var upgradeVersionRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Upgrading|Installing|Downgrading)\s+[^\s]+\s+\(([^)]+)\)`)
-
-func parseUpgradeSimulationOutput(output string) []string {
-	var packages []string
-	for _, line := range strings.Split(output, "\n") {
-		matches := upgradeLineRegex.FindStringSubmatch(line)
-		if len(matches) >= 3 {
-			action := matches[1]
-			pkgName := matches[2]
-			if action == "Downgrading" {
-				if target := downgradeTargetRegex.FindStringSubmatch(line); len(target) >= 2 {
-					packages = append(packages, pkgName+"="+target[1])
-					continue
-				}
-			}
-			packages = append(packages, pkgName)
-		}
-	}
-	return packages
-}
 
 func parseUpgradeSimulationOutputWithVersions(output string) []SimulatedPackage {
 	var packages []SimulatedPackage
@@ -386,57 +444,26 @@ func parseUpgradeSimulationOutputWithVersions(output string) []SimulatedPackage 
 	return packages
 }
 
-func (c *Client) SimulateUpgradeWithVersions() ([]SimulatedPackage, error) {
+// Passing names lets apk decide the full set, so a dependency the solver pulls in comes back in the result rather than being guessed here.
+func (c *Client) SimulateUpgradeWithVersions(packages ...string) ([]SimulatedPackage, error) {
 	cmd := fmt.Sprintf("%s upgrade --simulate --force-missing-repositories", VellumBin)
+	if len(packages) > 0 {
+		cmd = fmt.Sprintf("%s %s", cmd, executor.QuoteArgs(packages))
+	}
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
-		return nil, nil
+		// Callers treat an empty slice as "nothing to upgrade", so swallowing this error would report an unreachable device as up to date.
+		return nil, fmt.Errorf("upgrade simulation failed: %w", err)
 	}
 	return parseUpgradeSimulationOutputWithVersions(output), nil
 }
 
-func (c *Client) IsPackageInstalled(pkg string) (bool, error) {
-	installed, err := c.List()
-	if err != nil {
-		return false, err
-	}
-	for _, p := range installed {
-		if p == pkg {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// FetchURLs returns the download URLs for packages and their dependencies
-func (c *Client) FetchURLs(packages ...string) ([]string, error) {
-	if len(packages) == 0 {
-		return nil, nil
-	}
-	args := strings.Join(packages, " ")
-	cmd := fmt.Sprintf("%s fetch --url --simulate %s", VellumBin, args)
-	output, err := c.executor.ExecuteWithOutput(cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	var urls []string
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "https://") {
-			urls = append(urls, line)
-		}
-	}
-	return urls, nil
-}
-
-// SimulateAdd returns the list of packages that would actually be installed
-// (excludes packages that are already installed)
+// Packages that are already installed are left out of the result.
 func (c *Client) SimulateAdd(packages ...string) ([]string, error) {
 	if len(packages) == 0 {
 		return nil, nil
 	}
-	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, strings.Join(packages, " "))
+	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, executor.QuoteArgs(packages))
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		if output != "" {
@@ -445,6 +472,61 @@ func (c *Client) SimulateAdd(packages ...string) ([]string, error) {
 		return nil, err
 	}
 	return parseSimulationOutput(output), nil
+}
+
+// Solves an add as if the removed packages were gone: each is passed as an apk "!name" constraint, and the purge that implies is left out of the result.
+func (c *Client) SimulateAddWithout(packages []string, removed []string) ([]string, error) {
+	if len(removed) == 0 {
+		return c.SimulateAdd(packages...)
+	}
+	if len(packages) == 0 {
+		return nil, nil
+	}
+	args := append([]string{}, packages...)
+	for _, name := range removed {
+		args = append(args, "!"+name)
+	}
+	simulated, err := c.SimulateAdd(args...)
+	if err != nil {
+		return nil, err
+	}
+	isRemoved := make(map[string]bool, len(removed))
+	for _, name := range removed {
+		isRemoved[name] = true
+	}
+	kept := simulated[:0]
+	for _, name := range simulated {
+		if !isRemoved[name] {
+			kept = append(kept, name)
+		}
+	}
+	return kept, nil
+}
+
+// Same transaction as SimulateAddWithout, returning only what it would purge: each removed package plus whatever nothing left in world still needs.
+func (c *Client) SimulateAddPurges(packages []string, removed []string) ([]string, error) {
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	args := append([]string{}, packages...)
+	for _, name := range removed {
+		args = append(args, "!"+name)
+	}
+	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, executor.QuoteArgs(args))
+	output, err := c.executor.ExecuteWithOutput(cmd)
+	if err != nil {
+		if output != "" {
+			return nil, fmt.Errorf("%s", strings.TrimSpace(output))
+		}
+		return nil, err
+	}
+	var purged []string
+	for _, line := range strings.Split(output, "\n") {
+		if matches := purgeLineRegex.FindStringSubmatch(line); len(matches) >= 2 {
+			purged = append(purged, matches[1])
+		}
+	}
+	return purged, nil
 }
 
 var conflictSubjectRegex = regexp.MustCompile(`^\s{2}(\S+?)-[^-\s]+-r\d+:\s*$`)
@@ -520,18 +602,16 @@ func ResolutionFailure(err error) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-// SimulateDelResult contains the result of simulating a package deletion
 type SimulateDelResult struct {
-	Packages []string            // packages that would be removed
+	Packages []string
 	Blocked  map[string][]string // pkg -> list of blocking packages (e.g. "xovi" -> ["hide-dev-mode-icon"])
 }
 
-// SimulateDel simulates package deletion and returns packages to remove and any blockers
 func (c *Client) SimulateDel(packages ...string) (*SimulateDelResult, error) {
 	if len(packages) == 0 {
 		return &SimulateDelResult{}, nil
 	}
-	cmd := fmt.Sprintf("%s del -s %s", VellumBin, strings.Join(packages, " "))
+	cmd := fmt.Sprintf("%s del -s %s", VellumBin, executor.QuoteArgs(packages))
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		if output != "" {
@@ -547,12 +627,11 @@ func (c *Client) SimulateDel(packages ...string) (*SimulateDelResult, error) {
 	return result, nil
 }
 
-// SimulateDelRecursive simulates recursive package deletion (includes dependents)
 func (c *Client) SimulateDelRecursive(packages ...string) ([]string, error) {
 	if len(packages) == 0 {
 		return nil, nil
 	}
-	cmd := fmt.Sprintf("%s del -rs %s", VellumBin, strings.Join(packages, " "))
+	cmd := fmt.Sprintf("%s del -rs %s", VellumBin, executor.QuoteArgs(packages))
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		return nil, err
@@ -560,21 +639,23 @@ func (c *Client) SimulateDelRecursive(packages ...string) ([]string, error) {
 	return parseSimulationOutput(output), nil
 }
 
-// DelRecursiveStreaming removes packages and their dependents with streaming output
 func (c *Client) DelRecursiveStreaming(onOutput func(line string), packages ...string) error {
 	defer c.InvalidateInstalledCache()
 	if len(packages) == 0 {
 		return nil
 	}
-	cmd := fmt.Sprintf("%s del -r %s", VellumBin, strings.Join(packages, " "))
+	cmd := fmt.Sprintf("%s del -r %s", VellumBin, executor.QuoteArgs(packages))
 	return c.executor.ExecuteStreaming(cmd, onOutput)
 }
 
-// parseSimulationOutput extracts package names from vellum simulation output
-// Example lines: "( 1/20) Purging hide-dev-mode-icon (1.0.0-r0)"
+// Matches apk simulation lines such as:
+//
+//	"( 1/20) Purging hide-dev-mode-icon (1.0.0-r0)"
 //
 //	"(10/20) Installing qt-resource-rebuilder (16.0.0-r0)"
 var simulationLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Installing|Upgrading|Downgrading|Purging)\s+([^\s]+)\s+\(`)
+
+var purgeLineRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+Purging\s+([^\s]+)\s+\(`)
 
 func parseSimulationOutput(output string) []string {
 	var packages []string
@@ -592,7 +673,8 @@ type SimulatedPackage struct {
 	Version string
 }
 
-var simulationLineWithVersionRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Installing|Upgrading|Downgrading|Purging)\s+([^\s]+)\s+\(([^)]+)\)`)
+// Purging lines are left out: a purged package is not downloaded, installed or given its install hooks.
+var simulationLineWithVersionRegex = regexp.MustCompile(`\(\s*\d+/\d+\)\s+(?:Installing|Upgrading|Downgrading)\s+([^\s]+)\s+\(([^)]+)\)`)
 
 func parseSimulationOutputWithVersions(output string) []SimulatedPackage {
 	var packages []SimulatedPackage
@@ -613,7 +695,7 @@ func (c *Client) SimulateAddWithVersions(packages ...string) ([]SimulatedPackage
 	if len(packages) == 0 {
 		return nil, nil
 	}
-	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, strings.Join(packages, " "))
+	cmd := fmt.Sprintf("%s add --simulate %s", VellumBin, executor.QuoteArgs(packages))
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		if output != "" {
@@ -624,8 +706,7 @@ func (c *Client) SimulateAddWithVersions(packages ...string) ([]SimulatedPackage
 	return parseSimulationOutputWithVersions(output), nil
 }
 
-// parseBlockedPackages extracts blocked package info from vellum simulation output
-// Example output (can wrap to multiple lines):
+// The blockers list can wrap to more lines:
 //
 //	World updated, but the following packages are not removed due to:
 //	  xovi: quicksettings-screenshot bettertoc hide-dev-mode-icon
@@ -648,7 +729,6 @@ func parseBlockedPackages(output string) map[string][]string {
 				continue
 			}
 
-			// Check for "pkg: blockers" format (line starts with 2 spaces and has colon)
 			if idx := strings.Index(line, ":"); idx > 0 && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "        ") {
 				parts := strings.SplitN(trimmed, ":", 2)
 				if len(parts) == 2 {
@@ -657,7 +737,6 @@ func parseBlockedPackages(output string) map[string][]string {
 					blocked[currentPkg] = append(blocked[currentPkg], blockers...)
 				}
 			} else if currentPkg != "" {
-				// Continuation line - just indented blockers
 				blockers := strings.Fields(trimmed)
 				blocked[currentPkg] = append(blocked[currentPkg], blockers...)
 			}
@@ -672,23 +751,27 @@ func (c *Client) GetWorldPackages() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseWorldPackages(output), nil
+}
 
+// A world entry can carry a repository tag, a version constraint, or the "><checksum" pin apk writes for a package added from a local file.
+func parseWorldPackages(output string) []string {
 	var packages []string
 	for _, line := range strings.Split(output, "\n") {
 		pkg := strings.TrimSpace(line)
 		if pkg == "" {
 			continue
 		}
-		if idx := strings.Index(pkg, "@"); idx > 0 {
+		if idx := strings.IndexAny(pkg, "@=<>~"); idx > 0 {
 			pkg = pkg[:idx]
 		}
 		packages = append(packages, pkg)
 	}
-	return packages, nil
+	return packages
 }
 
 func (c *Client) GetReverseDeps(pkg string) ([]string, error) {
-	cmd := fmt.Sprintf("%s info -r %s 2>/dev/null", VellumBin, pkg)
+	cmd := fmt.Sprintf("%s info -r %s 2>/dev/null", VellumBin, executor.QuoteArg(pkg))
 	output, err := c.executor.ExecuteWithOutput(cmd)
 	if err != nil {
 		return nil, err
@@ -728,10 +811,10 @@ func parsePackageNameFromInfo(line string) string {
 func (c *Client) UninstallVellum(removeAllPackages bool, onOutput func(line string)) error {
 	var cmd string
 	if removeAllPackages {
-		onOutput("Removing Vellum and all packages...\n")
+		onOutput("Removing Vellum and everything it installed…\n")
 		cmd = fmt.Sprintf("%s self uninstall --all -y", VellumBin)
 	} else {
-		onOutput("Removing Vellum...\n")
+		onOutput("Removing Vellum…\n")
 		cmd = fmt.Sprintf("%s self uninstall -y", VellumBin)
 	}
 	return c.executor.ExecuteStreaming(cmd, onOutput)

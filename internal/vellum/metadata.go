@@ -1,6 +1,7 @@
 package vellum
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	_ "embed"
-
 	"reManager/internal/debug"
 	"reManager/internal/httputil"
 	versionpkg "reManager/internal/version"
@@ -20,6 +19,7 @@ import (
 const (
 	PackagesMetadataURL  = "https://packages.vellum.delivery/packages-metadata.json"
 	RemanagerMetadataURL = "https://remanager.io/remanager-metadata.json"
+	PackagesStatsURL     = "https://packages.vellum.delivery/stats/stats-overview.json"
 	MetadataTimeout      = 10 * time.Second
 )
 
@@ -48,19 +48,26 @@ type PackageVersion struct {
 	Status         string         `json:"status"`
 	DonateURL      *string        `json:"donateurl"`
 	ReadmeURL      *string        `json:"readmeurl"`
+	ChangelogURL   *string        `json:"changelogurl"`
+	Released       string         `json:"released"`
+	FirstReleased  string         `json:"first_released"`
 }
 
 type PackagesMetadata struct {
-	Generated string                                `json:"generated"`
+	Generated string                               `json:"generated"`
 	Packages  map[string]map[string]PackageVersion `json:"packages"`
 }
 
+// ShowOutput marks a command run for its output, not a log of it running; ExpectedSeconds is a progress estimate, not a deadline.
 type MaintenanceCommand struct {
 	ID               string `json:"id"`
 	Label            string `json:"label"`
+	ProgressLabel    string `json:"progressLabel,omitempty"`
 	Description      string `json:"description,omitempty"`
 	Command          string `json:"command"`
 	RequiresTerminal bool   `json:"requiresTerminal,omitempty"`
+	ShowOutput       bool   `json:"showOutput,omitempty"`
+	ExpectedSeconds  int    `json:"expectedSeconds,omitempty"`
 	AllowStop        bool   `json:"allowStop,omitempty"`
 	Hook             string `json:"hook,omitempty"`
 }
@@ -72,8 +79,7 @@ type PackageHooks struct {
 }
 
 type RemanagerPackageInfo struct {
-	MaintenanceCommands []MaintenanceCommand `json:"maintenanceCommands,omitempty"`
-	Hooks               *PackageHooks        `json:"hooks,omitempty"`
+	Hooks *PackageHooks `json:"hooks,omitempty"`
 }
 
 type VirtualConfig struct {
@@ -85,29 +91,45 @@ type RemanagerMetadata struct {
 	Virtuals map[string]VirtualConfig        `json:"virtuals,omitempty"`
 }
 
+type PackageStats struct {
+	Name           string         `json:"name"`
+	Total          int            `json:"total"`
+	TotalDownloads map[string]int `json:"total_downloads"`
+	IsBootstrap    bool           `json:"is_bootstrap"`
+	IsFramework    bool           `json:"is_framework"`
+}
+
+type PackagesStatsData struct {
+	Packages []PackageStats `json:"packages"`
+}
+
 type Package struct {
-	Name                string
-	Version             string
-	Description         string
-	UpstreamAuthor      string
-	Categories          []string
-	License             string
-	URL                 string
-	OSMin               *string
-	OSMax               *string
-	OSConstraints       []OSConstraint
-	Devices             []string
-	Depends             []string
-	Conflicts           []string
-	Provides            []string
-	Arch                []string
-	Status              string
-	DonateURL           *string
-	ReadmeURL           *string
-	Compatible          bool
-	IncompatibleReason  string
-	MaintenanceCommands []MaintenanceCommand
-	Hooks               *PackageHooks
+	Name               string
+	Version            string
+	Description        string
+	UpstreamAuthor     string
+	Categories         []string
+	License            string
+	URL                string
+	OSMin              *string
+	OSMax              *string
+	OSConstraints      []OSConstraint
+	Devices            []string
+	Depends            []string
+	Conflicts          []string
+	Provides           []string
+	Arch               []string
+	Status             string
+	DonateURL          *string
+	ReadmeURL          *string
+	ChangelogURL       *string
+	Released           string
+	FirstReleased      string
+	Downloads30d       int
+	DownloadsAll       int
+	IsFramework        bool
+	Compatible         bool
+	IncompatibleReason string
 }
 
 var deviceAliases = map[string]string{
@@ -143,6 +165,8 @@ type MetadataStore struct {
 	packages  PackagesMetadata
 	remanager RemanagerMetadata
 	providers map[string][]string
+	stats     map[string]PackageStats
+	commands  map[string][]MaintenanceCommand
 	loaded    bool
 	err       error
 }
@@ -172,7 +196,7 @@ func buildProviderIndex(pm *PackagesMetadata) map[string][]string {
 }
 
 func NewMetadataStore() *MetadataStore {
-	m := &MetadataStore{}
+	m := &MetadataStore{commands: maintenanceCommands}
 	if err := json.Unmarshal(fallbackRemanagerJSON, &m.remanager); err != nil {
 		debug.Printf("[DEBUG] Failed to parse embedded fallback remanager metadata: %v\n", err)
 	}
@@ -180,124 +204,138 @@ func NewMetadataStore() *MetadataStore {
 }
 
 func (m *MetadataStore) Load() error {
-	if err := m.loadPackagesMetadata(); err != nil {
-		m.err = fmt.Errorf("failed to fetch packages metadata: %w", err)
-		return m.err
+	if err := m.fetchAndSwap(); err != nil {
+		m.mu.Lock()
+		m.err = err
+		m.mu.Unlock()
+		return err
 	}
-	normalizePackagesMetadata(&m.packages)
-	m.providers = buildProviderIndex(&m.packages)
-	debug.Printf("[DEBUG] Loaded %d packages from metadata\n", len(m.packages.Packages))
-
-	if err := m.loadRemanagerMetadata(); err != nil {
-		debug.Printf("[DEBUG] HTTP fetch remanager failed: %v, using fallback\n", err)
-		if err := json.Unmarshal(fallbackRemanagerJSON, &m.remanager); err != nil {
-			return fmt.Errorf("failed to parse fallback remanager metadata: %w", err)
-		}
-	}
-	debug.Printf("[DEBUG] Loaded %d remanager package configs\n", len(m.remanager.Packages))
-
-	m.loaded = true
 	return nil
 }
 
 func (m *MetadataStore) Ready() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.loaded
 }
 
 func (m *MetadataStore) Err() error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.err
 }
 
+// A failed refresh keeps the catalog already loaded.
 func (m *MetadataStore) Refresh() error {
-	client := httputil.NewClient(MetadataTimeout)
+	return m.fetchAndSwap()
+}
 
-	var newPackages PackagesMetadata
-	var newRemanager RemanagerMetadata
-
-	resp, err := client.Get(PackagesMetadataURL)
+// Everything is fetched into locals and swapped in under the lock, so a reader never sees a half-loaded catalog and a malformed reManager file leaves the embedded fallback in place.
+func (m *MetadataStore) fetchAndSwap() error {
+	packages, err := fetchPackagesMetadata()
 	if err != nil {
 		return fmt.Errorf("failed to fetch packages metadata: %w", err)
 	}
-	defer resp.Body.Close()
+	normalizePackagesMetadata(&packages)
+	providers := buildProviderIndex(&packages)
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("packages metadata HTTP %d", resp.StatusCode)
+	remanager, remanagerErr := fetchRemanagerMetadata()
+	if remanagerErr != nil {
+		debug.Printf("[DEBUG] Remanager metadata fetch failed (non-fatal): %v\n", remanagerErr)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read packages metadata: %w", err)
+	stats, statsErr := m.fetchStats()
+	if statsErr != nil {
+		debug.Printf("[DEBUG] Stats fetch failed (non-fatal): %v\n", statsErr)
 	}
-
-	if err := json.Unmarshal(body, &newPackages); err != nil {
-		return fmt.Errorf("failed to parse packages metadata: %w", err)
-	}
-
-	resp2, err := client.Get(RemanagerMetadataURL)
-	if err == nil {
-		defer resp2.Body.Close()
-		if resp2.StatusCode == http.StatusOK {
-			body2, err := io.ReadAll(resp2.Body)
-			if err == nil {
-				json.Unmarshal(body2, &newRemanager)
-			}
-		}
-	}
-
-	normalizePackagesMetadata(&newPackages)
 
 	m.mu.Lock()
-	m.packages = newPackages
-	m.providers = buildProviderIndex(&m.packages)
-	if len(newRemanager.Packages) > 0 {
-		m.remanager = newRemanager
+	m.packages = packages
+	m.providers = providers
+	if remanagerErr == nil && len(remanager.Packages) > 0 {
+		m.remanager = remanager
+	}
+	if stats != nil {
+		m.stats = stats
 	}
 	m.loaded = true
 	m.err = nil
+	remanagerCount := len(m.remanager.Packages)
 	m.mu.Unlock()
 
-	debug.Printf("[DEBUG] Refreshed metadata: %d packages, %d remanager configs\n", len(m.packages.Packages), len(m.remanager.Packages))
+	debug.Printf("[DEBUG] Loaded metadata: %d packages, %d remanager configs\n", len(packages.Packages), remanagerCount)
 	return nil
 }
 
-func (m *MetadataStore) loadPackagesMetadata() error {
-	client := httputil.NewClient(MetadataTimeout)
-	resp, err := client.Get(PackagesMetadataURL)
+func fetchPackagesMetadata() (PackagesMetadata, error) {
+	var packages PackagesMetadata
+	body, err := fetchMetadataFile(PackagesMetadataURL)
 	if err != nil {
-		return err
+		return packages, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	return json.Unmarshal(body, &m.packages)
+	err = json.Unmarshal(body, &packages)
+	return packages, err
 }
 
-func (m *MetadataStore) loadRemanagerMetadata() error {
-	client := httputil.NewClient(MetadataTimeout)
-	resp, err := client.Get(RemanagerMetadataURL)
+func fetchRemanagerMetadata() (RemanagerMetadata, error) {
+	var remanager RemanagerMetadata
+	body, err := fetchMetadataFile(RemanagerMetadataURL)
 	if err != nil {
-		return err
+		return remanager, err
+	}
+	err = json.Unmarshal(body, &remanager)
+	return remanager, err
+}
+
+func fetchMetadataFile(url string) ([]byte, error) {
+	client := httputil.NewClient(MetadataTimeout)
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
+func (m *MetadataStore) fetchStats() (map[string]PackageStats, error) {
+	client := httputil.NewClient(MetadataTimeout)
+	resp, err := client.Get(PackagesStatsURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("stats HTTP %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return json.Unmarshal(body, &m.remanager)
+	var data PackagesStatsData
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]PackageStats, len(data.Packages))
+	for _, p := range data.Packages {
+		result[p.Name] = p
+	}
+	return result, nil
+}
+
+func (m *MetadataStore) getStats(name string) (dl30d int, dlAll int, isFramework bool) {
+	if s, ok := m.stats[name]; ok {
+		return s.TotalDownloads["30d"], s.TotalDownloads["all"], s.IsFramework
+	}
+	return 0, 0, false
 }
 
 func (m *MetadataStore) GetAllPackages() []Package {
@@ -310,7 +348,7 @@ func (m *MetadataStore) GetAllPackages() []Package {
 		var latestVersion string
 		var latestInfo PackageVersion
 		for version, info := range versions {
-			if latestVersion == "" || version > latestVersion {
+			if latestVersion == "" || versionpkg.Compare(version, latestVersion) > 0 {
 				latestVersion = version
 				latestInfo = info
 			}
@@ -335,12 +373,15 @@ func (m *MetadataStore) GetAllPackages() []Package {
 			Status:         latestInfo.Status,
 			DonateURL:      latestInfo.DonateURL,
 			ReadmeURL:      latestInfo.ReadmeURL,
+			ChangelogURL:   latestInfo.ChangelogURL,
+			Released:       latestInfo.Released,
+			FirstReleased:  latestInfo.FirstReleased,
 		}
 
-		if rmInfo, ok := m.remanager.Packages[name]; ok {
-			pkg.MaintenanceCommands = rmInfo.MaintenanceCommands
-			pkg.Hooks = rmInfo.Hooks
-		}
+		dl30, dlAll, framework := m.getStats(name)
+		pkg.Downloads30d = dl30
+		pkg.DownloadsAll = dlAll
+		pkg.IsFramework = framework
 
 		packages = append(packages, pkg)
 	}
@@ -360,7 +401,7 @@ func (m *MetadataStore) GetPackage(name string) *Package {
 	var latestVersion string
 	var latestInfo PackageVersion
 	for version, info := range versions {
-		if latestVersion == "" || version > latestVersion {
+		if latestVersion == "" || versionpkg.Compare(version, latestVersion) > 0 {
 			latestVersion = version
 			latestInfo = info
 		}
@@ -385,34 +426,125 @@ func (m *MetadataStore) GetPackage(name string) *Package {
 		Status:         latestInfo.Status,
 		DonateURL:      latestInfo.DonateURL,
 		ReadmeURL:      latestInfo.ReadmeURL,
+		ChangelogURL:   latestInfo.ChangelogURL,
+		Released:       latestInfo.Released,
+		FirstReleased:  latestInfo.FirstReleased,
 	}
 
-	if rmInfo, ok := m.remanager.Packages[name]; ok {
-		pkg.MaintenanceCommands = rmInfo.MaintenanceCommands
-		pkg.Hooks = rmInfo.Hooks
-	}
+	dl30, dlAll, framework := m.getStats(name)
+	pkg.Downloads30d = dl30
+	pkg.DownloadsAll = dlAll
+	pkg.IsFramework = framework
 
 	return pkg
+}
+
+// The index stores at most one pkgrel per pkgver, so a rel bump replaces a row rather than adding one.
+type PackageRelease struct {
+	Version       string         `json:"version"`
+	Released      string         `json:"released"`
+	OSMin         *string        `json:"osMin"`
+	OSMax         *string        `json:"osMax"`
+	OSConstraints []OSConstraint `json:"osConstraints"`
+	Depends       []string       `json:"depends"`
+	Arch          []string       `json:"arch"`
+	Devices       []string       `json:"devices"`
+	ChangelogURL  *string        `json:"changelogUrl"`
+	// False when the attached reMarkable cannot install this version; with no device attached every version is compatible.
+	Compatible bool `json:"compatible"`
+}
+
+// Ordered by version, not release date: a maintenance release on an older branch can ship after a newer one. Not filtered by compatibility; each release carries its own verdict.
+func (m *MetadataStore) GetPackageReleases(name, deviceType, firmware, arch string) []PackageRelease {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	versions, ok := m.packages.Packages[name]
+	if !ok {
+		return nil
+	}
+
+	releases := make([]PackageRelease, 0, len(versions))
+	for ver, info := range versions {
+		releases = append(releases, PackageRelease{
+			Version:       ver,
+			Released:      info.Released,
+			OSMin:         info.OSMin,
+			OSMax:         info.OSMax,
+			OSConstraints: info.OSConstraints,
+			Depends:       info.Depends,
+			Arch:          info.Arch,
+			Devices:       info.Devices,
+			ChangelogURL:  info.ChangelogURL,
+			Compatible:    isVersionCompatible(info, deviceType, firmware, arch),
+		})
+	}
+
+	sort.Slice(releases, func(i, j int) bool {
+		if cmp := versionpkg.Compare(releases[i].Version, releases[j].Version); cmp != 0 {
+			return cmp > 0
+		}
+		return releases[i].Version > releases[j].Version
+	})
+	return releases
+}
+
+// Catalog diff for a disconnected device, not vellum's solver: the solver can block an upgrade this count offers.
+func (m *MetadataStore) UpgradesFor(installed map[string]string, deviceType, firmware, arch string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	count := 0
+	for name, version := range installed {
+		best, _ := m.bestVersion(name, deviceType, firmware, arch)
+		if best != "" && best != version {
+			count++
+		}
+	}
+	return count
+}
+
+// Installed packages with no version compatible with targetOS. A package absent from the index blocks nothing: its constraints are unknown, and treating unknown as a blocker would hide a usable update.
+func (m *MetadataStore) PackagesBlockingOS(installed map[string]string, deviceType, targetOS, arch string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var blocking []string
+	for name := range installed {
+		versions, ok := m.packages.Packages[name]
+		if !ok {
+			continue
+		}
+		supported := false
+		for _, info := range versions {
+			if isVersionCompatible(info, deviceType, targetOS, arch) {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			blocking = append(blocking, name)
+		}
+	}
+	sort.Strings(blocking)
+	return blocking
 }
 
 func (m *MetadataStore) GetMaintenanceCommands(name string) []MaintenanceCommand {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if rmInfo, ok := m.remanager.Packages[name]; ok {
-		return rmInfo.MaintenanceCommands
-	}
-	return nil
+	return m.commands[name]
 }
 
 func (m *MetadataStore) AllMaintenanceCommands() map[string][]MaintenanceCommand {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	result := make(map[string][]MaintenanceCommand, len(m.remanager.Packages))
-	for name, info := range m.remanager.Packages {
-		if len(info.MaintenanceCommands) > 0 {
-			result[name] = info.MaintenanceCommands
+	result := make(map[string][]MaintenanceCommand, len(m.commands))
+	for name, commands := range m.commands {
+		if len(commands) > 0 {
+			result[name] = commands
 		}
 	}
 	return result
@@ -509,14 +641,17 @@ func (m *MetadataStore) GetAllPackagesForDevice(deviceType, firmware, arch strin
 			Status:             bestInfo.Status,
 			DonateURL:          bestInfo.DonateURL,
 			ReadmeURL:          bestInfo.ReadmeURL,
+			ChangelogURL:       bestInfo.ChangelogURL,
+			Released:           bestInfo.Released,
+			FirstReleased:      bestInfo.FirstReleased,
 			Compatible:         compatible,
 			IncompatibleReason: incompatibleReason,
 		}
 
-		if rmInfo, ok := m.remanager.Packages[name]; ok {
-			pkg.MaintenanceCommands = rmInfo.MaintenanceCommands
-			pkg.Hooks = rmInfo.Hooks
-		}
+		dl30, dlAll, framework := m.getStats(name)
+		pkg.Downloads30d = dl30
+		pkg.DownloadsAll = dlAll
+		pkg.IsFramework = framework
 
 		packages = append(packages, pkg)
 	}
@@ -569,12 +704,15 @@ func (m *MetadataStore) GetPackageForTargetOS(name, targetOS, deviceType, arch s
 		Status:         bestInfo.Status,
 		DonateURL:      bestInfo.DonateURL,
 		ReadmeURL:      bestInfo.ReadmeURL,
+		ChangelogURL:   bestInfo.ChangelogURL,
+		Released:       bestInfo.Released,
+		FirstReleased:  bestInfo.FirstReleased,
 	}
 
-	if rmInfo, ok := m.remanager.Packages[name]; ok {
-		pkg.MaintenanceCommands = rmInfo.MaintenanceCommands
-		pkg.Hooks = rmInfo.Hooks
-	}
+	dl30, dlAll, framework := m.getStats(name)
+	pkg.Downloads30d = dl30
+	pkg.DownloadsAll = dlAll
+	pkg.IsFramework = framework
 
 	return pkg
 }
@@ -755,17 +893,7 @@ func (m *MetadataStore) ResolveVirtualChoices(requested, installed []string, dev
 		present[name] = true
 	}
 
-	satisfied := make(map[string]bool)
-	for virtual, providers := range m.providers {
-		for _, provider := range providers {
-			if present[provider] {
-				satisfied[virtual] = true
-				break
-			}
-		}
-	}
-
-	requiredBy := make(map[string][]string)
+	dependents := make(map[string]map[string]bool)
 	var order []string
 
 	visited := make(map[string]bool)
@@ -782,6 +910,7 @@ func (m *MetadataStore) ResolveVirtualChoices(requested, installed []string, dev
 		if info == nil {
 			continue
 		}
+		present[name] = true
 
 		for _, dep := range info.Depends {
 			if strings.HasPrefix(dep, "!") {
@@ -792,31 +921,59 @@ func (m *MetadataStore) ResolveVirtualChoices(requested, installed []string, dev
 				queue = append(queue, depName)
 				continue
 			}
-			if satisfied[depName] || len(m.providers[depName]) == 0 {
+			if len(m.providers[depName]) == 0 {
 				continue
 			}
-			if _, seen := requiredBy[depName]; !seen {
+			if _, seen := dependents[depName]; !seen {
 				order = append(order, depName)
+				dependents[depName] = make(map[string]bool)
 			}
-			requiredBy[depName] = append(requiredBy[depName], name)
+			dependents[depName][name] = true
 		}
+	}
+
+	// Decided after the walk, so a provider that arrives as a plain dependency of something else in the tree covers the virtual too.
+	satisfied := func(virtual string) bool {
+		for _, provider := range m.providers[virtual] {
+			if present[provider] {
+				return true
+			}
+		}
+		return false
 	}
 
 	sort.Strings(order)
 	var choices []VirtualChoice
 	for _, virtual := range order {
+		if satisfied(virtual) {
+			continue
+		}
 		providers := m.providersOf(virtual, deviceType, firmware, arch)
 		if !anyCompatible(providers) {
 			continue
 		}
 		choices = append(choices, VirtualChoice{
 			Virtual:    virtual,
-			RequiredBy: requiredBy[virtual],
+			RequiredBy: m.requestedNeeding(dependents[virtual], requested, deviceType, firmware, arch),
 			Providers:  providers,
 			Default:    m.defaultProvider(virtual, providers),
 		})
 	}
 	return choices
+}
+
+// Names the requested packages rather than the dependency that declares the virtual, so the plan knows which of its entries wait on the answer.
+func (m *MetadataStore) requestedNeeding(dependents map[string]bool, requested []string, deviceType, firmware, arch string) []string {
+	var roots []string
+	for _, root := range requested {
+		for _, pkg := range m.dependencyTree(root, deviceType, firmware, arch) {
+			if dependents[pkg.name] {
+				roots = append(roots, root)
+				break
+			}
+		}
+	}
+	return roots
 }
 
 func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string) bool {
@@ -890,5 +1047,3 @@ func isVersionCompatible(info PackageVersion, deviceType, firmware, arch string)
 
 	return true
 }
-
-

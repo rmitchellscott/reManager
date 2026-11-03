@@ -1,0 +1,80 @@
+--- a/pkg/application/application_ios_delegate.m
++++ b/pkg/application/application_ios_delegate.m
+@@ -13,6 +13,7 @@
+ // shown while the app is in the foreground (and taps are handled). Apple
+ // requires this be set before launch finishes, hence the call below.
+ extern void ios_notifications_init(void);
++extern void ios_receive_deep_link(const char* url);
+ 
+ @implementation WailsAppDelegate
+ - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+@@ -67,6 +68,12 @@
+     });
+     return YES;
+ }
++// UIKit calls this for a URL that opens the running app and, after
++// didFinishLaunchingWithOptions returns YES, for the URL of a cold launch too.
++- (BOOL)application:(UIApplication *)application openURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options {
++    ios_receive_deep_link([[url absoluteString] UTF8String]);
++    return YES;
++}
+ // GENERATED EVENTS START
+ - (void)applicationDidBecomeActive:(UIApplication *)application {
+     if( hasListeners(EventApplicationDidBecomeActive) ) {
+--- a/pkg/application/mobile_features_ios.go
++++ b/pkg/application/mobile_features_ios.go
+@@ -58,6 +58,12 @@
+ 	C.ios_open_url(c)
+ }
+ 
++// TakeDeepLink returns the URL the app was last opened with, and clears it, or
++// an empty string when none is waiting. Each arrival is announced by the
++// "ios:deeplink" event; a link that arrives before app.Run has no listener yet,
++// so it is taken at ApplicationStarted instead.
++func (iosManager) TakeDeepLink() string { return cStr(C.ios_take_deep_link()) }
++
+ // SetKeepAwake disables (true) or restores (false) the idle timer, keeping
+ // the screen on while the app is in the foreground.
+ func (iosManager) SetKeepAwake(enabled bool) { C.ios_set_keep_awake(C.bool(enabled)) }
+--- a/pkg/application/mobile_features_ios.h
++++ b/pkg/application/mobile_features_ios.h
+@@ -8,6 +8,8 @@
+ void ios_open_url(const char* url);
+ void ios_set_keep_awake(bool enabled);
+ void ios_set_torch(bool enabled);
++void ios_receive_deep_link(const char* url); // holds the link and emits "ios:deeplink"
++const char* ios_take_deep_link(void);        // the held link, cleared once taken
+ 
+ // Phase B — state / query
+ const char* ios_safe_area_json(void);
+--- a/pkg/application/mobile_features_ios.m
++++ b/pkg/application/mobile_features_ios.m
+@@ -158,6 +158,28 @@
+     }
+ }
+ 
++// MARK: - Deep links
++
++// Only touched on the main thread: UIKit delivers the link there and the take
++// hops onto it.
++static NSString *g_mfPendingDeepLink = nil;
++
++void ios_receive_deep_link(const char* curl) {
++    if (curl == NULL) return;
++    g_mfPendingDeepLink = [NSString stringWithUTF8String:curl];
++    extern void iosEmitNativeEvent(const char* name, const char* json);
++    iosEmitNativeEvent("ios:deeplink", "{}");
++}
++
++const char* ios_take_deep_link(void) {
++    __block NSString *link = nil;
++    mfRunOnMainSync(^{
++        link = g_mfPendingDeepLink;
++        g_mfPendingDeepLink = nil;
++    });
++    return mfDup(link);
++}
++
+ // MARK: - Safe-area insets
+ 
+ const char* ios_safe_area_json(void) {

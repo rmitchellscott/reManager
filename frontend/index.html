@@ -2,24 +2,62 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>reManager</title>
     <script>
       // Apply dark class before page renders to prevent flash
       if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
         document.documentElement.classList.add('dark');
       }
+      // ?touch=1 forces the touch layout on a fine-pointer browser, which is the
+      // only way to review it outside a device.
+      var touchOverride = new URLSearchParams(location.search).get('touch');
+      if (touchOverride === '1' || (touchOverride !== '0' && window.matchMedia('(pointer: coarse)').matches)) {
+        document.documentElement.setAttribute('data-touch', '');
+      }
+      // 17px is the iOS default body size, and -apple-system-body is the only
+      // way to read the user's Dynamic Type choice. Scale up from the design's
+      // 16px baseline but never down: the type scale bottoms out at 12px, and
+      // the smaller settings would push that under a legible floor. macOS
+      // reports 13px, so the same guard leaves the desktop alone. The probe
+      // stays in the page because WebKit restyles it when the text size is
+      // changed while the app runs, which resizes it.
+      try {
+        var probe = document.createElement('span');
+        probe.setAttribute('aria-hidden', 'true');
+        probe.textContent = 'M';
+        probe.style.cssText = 'position:absolute;top:0;left:0;visibility:hidden;pointer-events:none;font:-apple-system-body';
+        // Chromium drops the keyword, so the probe would inherit the root size
+        // it sets and grow it on every resize. Android scales text itself.
+        if (probe.style.font) {
+          document.documentElement.appendChild(probe);
+          var applyDynamicType = function () {
+            var bodyPx = parseFloat(getComputedStyle(probe).fontSize);
+            document.documentElement.style.fontSize = bodyPx > 17 ? (16 * bodyPx / 17) + 'px' : '';
+          };
+          applyDynamicType();
+          new ResizeObserver(applyDynamicType).observe(probe);
+        }
+      } catch (e) {}
     </script>
     <style>
       html, body {
         margin: 0;
         padding: 0;
       }
+      /* Painted before index.css loads, so these must equal the --background
+         token. The rule is unlayered and index.css sets body in @layer base,
+         so a mismatch here wins the cascade and shows wherever the body is
+         visible, which since the full-bleed iOS webview includes the safe
+         areas. */
       html:not(.dark) body { background: #ffffff; }
-      html.dark body { background: #1a1a1a; }
+      html.dark body { background: #0a0a0a; }
     </style>
   </head>
-  <body>
+  <!-- Wails ignores a drop that does not land on an element carrying this
+       attribute, and both drop handlers listen window-wide, so the whole page
+       is the target. -->
+  <body data-file-drop-target>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -1,4 +1,4 @@
-import { CheckCircle2 } from 'lucide-react'
+import { CheckCircle } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -23,21 +23,18 @@ export function VellumInstallSuccessDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader>
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
-            <DialogTitle>{reinstalled ? 'Vellum Repaired Successfully' : 'Vellum Installed Successfully'}</DialogTitle>
-          </div>
+        <DialogHeader severity="success" icon={CheckCircle}>
+          <DialogTitle>{reinstalled ? 'Vellum repaired' : 'Vellum installed'}</DialogTitle>
           <DialogDescription>
             {reinstalled
-              ? 'Vellum has been reinstalled with the latest version. Your installed mods were preserved.'
-              : 'The Vellum package manager has been installed on your device. You can now install and manage mods.'}
+              ? 'The latest version of Vellum is installed. Your installed mods were kept.'
+              : 'The Vellum package manager has been installed on your reMarkable. You can now install and manage mods.'}
           </DialogDescription>
         </DialogHeader>
 
         <DialogFooter>
           <Button onClick={() => onOpenChange(false)}>
-            {reinstalled ? 'Done' : 'Get Started'}
+            {reinstalled ? 'Done' : 'Get started'}
           </Button>
         </DialogFooter>
       </DialogContent>

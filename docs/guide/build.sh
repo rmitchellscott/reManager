@@ -48,6 +48,7 @@ PDF_PROCESSED=$(mktemp /tmp/guide-pdf-XXXXX.md)
 pandoc \
   --resource-path="$SCRIPT_DIR" \
   -V geometry:margin=1in \
+  -V header-includes='\usepackage{float}\floatplacement{figure}{H}' \
   -o "$PDF_OUTPUT" \
   "$PDF_PROCESSED"
 rm -f "$PDF_PROCESSED"

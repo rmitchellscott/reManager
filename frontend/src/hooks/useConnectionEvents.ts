@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { debugLog } from '@/lib/utils'
-import { handleError, getUserFriendlyMessage } from '@/lib/errorMessages'
+import { errorDetail, handleError } from '@/lib/errorMessages'
+import type { RetryPhase } from '@/components/RetryCountdown'
+import { OSService } from '@bindings/reManager'
+import { onEvent } from '@/lib/events'
+import type { ErrorCode } from '@/lib/types'
+
+export type ConnectionStatus = 'connected' | 'lost' | 'reconnecting' | 'restoring' | 'failed'
 
 interface UseConnectionEventsParams {
   onConnectionRestored: (deviceType: string) => Promise<void>
@@ -15,13 +21,25 @@ export function useConnectionEvents({
   onUnsavedConnectionFailed,
   deviceRef,
 }: UseConnectionEventsParams) {
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'lost' | 'reconnecting' | 'failed'>('connected')
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connected')
   const [reconnectAttempt, setReconnectAttempt] = useState(0)
   const [reconnectMaxAttempts, setReconnectMaxAttempts] = useState(0)
+  const [retryPhase, setRetryPhase] = useState<RetryPhase | null>(null)
+  const [connectionErrorCode, setConnectionErrorCode] = useState<ErrorCode | null>(null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [connectionErrorDetails, setConnectionErrorDetails] = useState('')
+  const reportConnectionFailure = useCallback((failure: unknown) => {
+    if (failure === null) {
+      setConnectionError(null)
+      setConnectionErrorDetails('')
+      return
+    }
+    setConnectionError(handleError(failure, 'Could not connect to your reMarkable.'))
+    setConnectionErrorDetails(errorDetail(failure))
+  }, [])
   const [showFilesystemRestoreError, setShowFilesystemRestoreError] = useState(false)
   const [isRetryingFilesystemRestore, setIsRetryingFilesystemRestore] = useState(false)
-  const [writeableRootBusy, setWriteableRootBusy] = useState(false)
+  const [writableRootBusy, setWritableRootBusy] = useState(false)
 
   const onConnectionRestoredRef = useRef(onConnectionRestored)
   onConnectionRestoredRef.current = onConnectionRestored
@@ -32,83 +50,90 @@ export function useConnectionEvents({
   const onUnsavedConnectionFailedRef = useRef(onUnsavedConnectionFailed)
   onUnsavedConnectionFailedRef.current = onUnsavedConnectionFailed
 
-  useEffect(() => {
-    if (typeof window.runtime === 'undefined') return
+  const connectionStatusRef = useRef(connectionStatus)
+  connectionStatusRef.current = connectionStatus
+  const restoreSession = useCallback(async (deviceType: string) => {
+    setConnectionStatus('restoring')
+    connectionStatusRef.current = 'restoring'
+    try {
+      await onConnectionRestoredRef.current(deviceType)
+      if (connectionStatusRef.current !== 'restoring') return
+      setConnectionStatus('connected')
+    } catch (err) {
+      debugLog('Failed to reload from the reMarkable after reconnecting:', err)
+      if (connectionStatusRef.current !== 'restoring') return
+      setConnectionStatus('failed')
+      setConnectionErrorCode(null)
+      reportConnectionFailure(err)
+    }
+  }, [reportConnectionFailure])
 
-    const unsubscribeConnectionLost = window.runtime.EventsOn('connection:lost', (...args: unknown[]) => {
-      const data = args[0] as { reason: string; code?: string; deviceId: string }
+  useEffect(() => {
+
+    const unsubscribeConnectionLost = onEvent('connection:lost', data => {
       debugLog('Received connection:lost:', data)
       onConnectionLostRef.current()
       setConnectionStatus('lost')
-      setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
+      reportConnectionFailure(data.code ? data : data.reason)
     })
 
-    const unsubscribeConnectionReconnecting = window.runtime.EventsOn('connection:reconnecting', (...args: unknown[]) => {
-      const data = args[0] as { attempt: number; maxAttempts: number; deviceId: string }
+    const unsubscribeConnectionReconnecting = onEvent('connection:reconnecting', data => {
       debugLog('Received connection:reconnecting:', data)
       setConnectionStatus('reconnecting')
       setReconnectAttempt(data.attempt)
       setReconnectMaxAttempts(data.maxAttempts)
+      setRetryPhase({ kind: 'dialing', endsAt: Date.now() + data.durationMs, durationMs: data.durationMs, elapsedMs: data.elapsedMs, totalMs: data.totalMs })
     })
 
-    const unsubscribeConnectionRestored = window.runtime.EventsOn('connection:restored', async (...args: unknown[]) => {
-      const data = args[0] as { deviceId: string; device: string }
+    const unsubscribeRetryScheduled = onEvent('connection:retry-scheduled', data => {
+      debugLog('Received connection:retry-scheduled:', data)
+      setReconnectAttempt(data.attempt)
+      setReconnectMaxAttempts(data.maxAttempts)
+      setRetryPhase({ kind: 'waiting', endsAt: Date.now() + data.durationMs, durationMs: data.durationMs, elapsedMs: data.elapsedMs, totalMs: data.totalMs })
+    })
+
+    const unsubscribeConnectionRestored = onEvent('connection:restored', async data => {
       debugLog('Received connection:restored:', data)
-      onConnectionLostRef.current()
-      setConnectionStatus('connected')
-
-      const deviceType = data.device || deviceRef.current || ''
-      try {
-        await onConnectionRestoredRef.current(deviceType)
-      } catch (err) {
-        debugLog('Failed to refresh device info on reconnect:', err)
-      }
+      await restoreSession(data.device || deviceRef.current || '')
     })
 
-    const unsubscribeConnectionFailed = window.runtime.EventsOn('connection:failed', (...args: unknown[]) => {
-      const data = args[0] as { reason: string; code?: string; deviceId: string }
+    const unsubscribeConnectionFailed = onEvent('connection:failed', data => {
       debugLog('Received connection:failed:', data)
       setConnectionStatus('failed')
-      setConnectionError(data.code ? getUserFriendlyMessage(data) : handleError(data.reason, 'Connection'))
+      setConnectionErrorCode(data.code ?? null)
+      reportConnectionFailure(data.code ? data : data.reason)
       if (!data.deviceId) {
         onUnsavedConnectionFailedRef.current()
       }
     })
 
-    const unsubscribeFilesystemRestoreError = window.runtime.EventsOn('filesystem:restore-error', (...args: unknown[]) => {
-      const data = args[0] as { message: string }
+    const unsubscribeFilesystemRestoreError = onEvent('filesystem:restore-error', data => {
       debugLog('Received filesystem:restore-error:', data)
       setShowFilesystemRestoreError(true)
     })
 
-    const unsubscribeWriteableRootBusy = window.runtime.EventsOn('writeable-root:busy', (...args: unknown[]) => {
-      setWriteableRootBusy(args[0] as boolean)
-    })
+    const unsubscribeWritableRootBusy = onEvent('writable-root:busy', setWritableRootBusy)
 
     return () => {
       unsubscribeConnectionLost()
       unsubscribeConnectionReconnecting()
+      unsubscribeRetryScheduled()
       unsubscribeConnectionRestored()
       unsubscribeConnectionFailed()
       unsubscribeFilesystemRestoreError()
-      unsubscribeWriteableRootBusy()
+      unsubscribeWritableRootBusy()
     }
   }, [])
 
   const handleRetryRestore = useCallback(async () => {
     setIsRetryingFilesystemRestore(true)
     try {
-      await window.go.main.App.RetryRestoreFilesystem()
+      await OSService.RetryRestoreFilesystem()
       setShowFilesystemRestoreError(false)
     } catch (err) {
       debugLog('Filesystem restore retry failed:', err)
     }
     setIsRetryingFilesystemRestore(false)
-  }, [])
-
-  const handleRebootDevice = useCallback(async () => {
-    await window.go.main.App.RebootDevice()
-    setShowFilesystemRestoreError(false)
   }, [])
 
   const handleDismissRestoreError = useCallback(() => {
@@ -118,17 +143,20 @@ export function useConnectionEvents({
   return {
     connectionStatus,
     setConnectionStatus,
+    restoreSession,
     reconnectAttempt,
     setReconnectAttempt,
     reconnectMaxAttempts,
+    retryPhase,
+    connectionErrorCode,
     connectionError,
-    setConnectionError,
+    connectionErrorDetails,
+    reportConnectionFailure,
     showFilesystemRestoreError,
     isRetryingFilesystemRestore,
-    writeableRootBusy,
-    setWriteableRootBusy,
+    writableRootBusy,
+    setWritableRootBusy,
     handleRetryRestore,
-    handleRebootDevice,
     handleDismissRestoreError,
   }
 }

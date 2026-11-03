@@ -48,7 +48,7 @@ func TestInstalledReadsAreSharedWithinTTL(t *testing.T) {
 		if _, err := c.ListInstalledWithVersions(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := c.IsPackageInstalled("xovi"); err != nil {
+		if _, err := c.List(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -95,5 +95,28 @@ func TestStreamingMutationsInvalidate(t *testing.T) {
 		if r.calls["info -q"] != 2 {
 			t.Errorf("%s: info -q ran %d times, want 2 (cache should be dropped)", tc.name, r.calls["info -q"])
 		}
+	}
+}
+
+func TestFailedOSVersionReadIsNotCached(t *testing.T) {
+	r := &countingRunner{calls: map[string]int{}, output: map[string]string{}}
+	c := &Client{executor: r}
+
+	if state, err := c.GetOSVersionState(); err == nil {
+		t.Fatalf("GetOSVersionState with no readable version = %+v, want an error", state)
+	}
+
+	r.output["RELEASE_VERSION"] = "RELEASE_VERSION=3.28.0.172\n"
+	if state, err := c.GetOSVersionState(); err == nil {
+		t.Fatalf("GetOSVersionState with an unreadable stored version = %+v, want an error", state)
+	}
+
+	r.output["state/osver"] = "3.26.0.68\n"
+	state, err := c.GetOSVersionState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Mismatch || state.CurrentVersion != "3.28.0.172" || state.StoredVersion != "3.26.0.68" {
+		t.Errorf("state = %+v, want a mismatch from 3.26.0.68 to 3.28.0.172", state)
 	}
 }

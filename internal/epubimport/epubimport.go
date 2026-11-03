@@ -89,16 +89,18 @@ func Upload(client *sftp.Client, epubData []byte, visibleName, parentID string) 
 	docID := uuid.NewString()
 	base := path.Join(pdfimport.XochitlPath, docID)
 
+	upload := pdfimport.NewDocumentUpload(client)
 	for _, u := range []struct {
 		remote string
 		data   []byte
 	}{
 		{base + ".epub", epubData},
 		{base + ".content", contentData},
-		{base + ".metadata", metadataData},
 		{base + ".pagedata", []byte("\n")},
+		{base + ".metadata", metadataData},
 	} {
-		if err := pdfimport.UploadBytes(client, u.remote, u.data); err != nil {
+		if err := upload.WriteFile(u.remote, u.data); err != nil {
+			upload.Discard()
 			return "", err
 		}
 	}

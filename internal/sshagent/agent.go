@@ -25,7 +25,7 @@ func IsAvailable(socketPath string) bool {
 func Connect(socketPath string) (net.Conn, ssh.AuthMethod, error) {
 	conn, err := dialAgent(socketPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("SSH agent is not running: %w", err)
+		return nil, nil, fmt.Errorf("SSH agent is not running. Start it, or choose a different sign-in method.")
 	}
 
 	agentClient := agent.NewClient(conn)
@@ -33,7 +33,7 @@ func Connect(socketPath string) (net.Conn, ssh.AuthMethod, error) {
 	keys, err := agentClient.List()
 	if err != nil {
 		conn.Close()
-		return nil, nil, fmt.Errorf("failed to list agent keys: %w", err)
+		return nil, nil, fmt.Errorf("Could not read keys from the SSH agent.")
 	}
 	if len(keys) == 0 {
 		conn.Close()

@@ -56,7 +56,7 @@ func TestGetStreamingFailsOnStalledBody(t *testing.T) {
 	}
 }
 
-func TestGetStreamingCancelledByContext(t *testing.T) {
+func TestGetStreamingCanceledByContext(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("start"))
@@ -76,7 +76,7 @@ func TestGetStreamingCancelledByContext(t *testing.T) {
 
 	time.AfterFunc(100*time.Millisecond, cancel)
 	if _, err := io.ReadAll(resp.Body); err == nil {
-		t.Fatal("expected a cancelled download to fail")
+		t.Fatal("expected a canceled download to fail")
 	}
 	cancel()
 }

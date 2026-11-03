@@ -1,0 +1,16 @@
+--- a/pkg/application/mobile_features_android.go
++++ b/pkg/application/mobile_features_android.go
+@@ -170,6 +170,13 @@
+ 	return s
+ }
+ 
++// TakeDeepLink returns the remanager:// link the activity was opened with, and
++// clears it, or an empty string when none is waiting.
++func (androidManager) TakeDeepLink() string {
++	s, _ := androidBridgeString("takeDeepLink")
++	return s
++}
++
+ // --- Phase D: sensors & hardware ---------------------------------------------
+ 
+ // Haptic plays a haptic pattern (impact-light/medium/heavy, success,

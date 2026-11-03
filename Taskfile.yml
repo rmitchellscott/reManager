@@ -1,0 +1,147 @@
+version: '3'
+
+vars:
+  APP_NAME: "reManager"
+  BIN_DIR: "bin"
+  PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+  # Target OS for build/package/run. Defaults to the host OS, and is overridden
+  # by `wails3 build GOOS=...` (or the GOOS env var) for cross-compilation. The
+  # tasks below dispatch to the matching platform Taskfile via this variable.
+  GOOS: '{{.GOOS | default OS}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+  linux: ./build/linux/Taskfile.yml
+  ios: ./build/ios/Taskfile.yml
+  android: ./build/android/Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the application
+    cmds:
+      - task: "{{.GOOS}}:build"
+
+  package:
+    summary: Packages a production build of the application
+    cmds:
+      - task: "{{.GOOS}}:package"
+
+  run:
+    summary: Runs the application
+    cmds:
+      - task: "{{.GOOS}}:run"
+
+  dev:
+    summary: Runs the application in development mode
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  setup:docker:
+    summary: Builds Docker image for cross-compilation (~800MB download)
+    cmds:
+      - task: common:setup:docker
+
+  build:server:
+    summary: Builds the application in server mode (no GUI, HTTP server only)
+    cmds:
+      - task: common:build:server
+
+  run:server:
+    summary: Runs the application in server mode
+    cmds:
+      - task: common:run:server
+
+  build:docker:
+    summary: Builds a Docker image for server mode deployment
+    cmds:
+      - task: common:build:docker
+
+  run:docker:
+    summary: Builds and runs the Docker image
+    cmds:
+      - task: common:run:docker
+
+  lint:
+    summary: Fails if gofmt would change a tracked Go file, then runs go vet. It rewrites nothing.
+    cmds:
+      - |
+        unformatted=$(git ls-files '*.go' | xargs gofmt -l)
+        if [ -n "$unformatted" ]; then
+          echo "gofmt would change:"
+          echo "$unformatted"
+          exit 1
+        fi
+      - go vet ./...
+
+  check:
+    summary: Runs what CI runs, from binding generation to govulncheck
+    cmds:
+      - wails3 generate bindings -clean=true -ts -i
+      - |
+        if [ -n "$(git status --porcelain -- frontend/bindings)" ]; then
+          echo "frontend/bindings is out of date with the Go code:"
+          git status --porcelain -- frontend/bindings
+          exit 1
+        fi
+      - |
+        stray=$(git grep -nE 'Events\.(On|Once|OnMultiple)\(' -- frontend/src ':!frontend/src/lib/events.ts' || true)
+        if [ -n "$stray" ]; then
+          echo "Listen through onEvent in frontend/src/lib/events.ts, which types the event name and payload:"
+          echo "$stray"
+          exit 1
+        fi
+      - npm --prefix frontend run build
+      - npm --prefix frontend test
+      - npm --prefix frontend run lint
+      - task: lint
+      - go test -race ./...
+      - go test -race -tags integration -run '^TestRecorded' .
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  screenshots:
+    summary: Captures every store and guide screenshot in demo mode
+    cmds:
+      - task: screenshots:desktop
+      - task: screenshots:android
+      - task: screenshots:ios
+
+  screenshots:desktop:
+    summary: Captures the Microsoft Store, Flathub, Mac App Store, README and guide screenshots from a server build, or only the targets in TARGETS
+    deps: [build:server]
+    cmds:
+      - task: screenshots:run
+        vars: {TARGETS: '{{.TARGETS | default "microsoft flathub mac readme-light readme-dark guide"}}'}
+
+  screenshots:android:
+    summary: Captures the Play Store screenshots on the Android emulator from a debug build
+    cmds:
+      - task: android:build
+      - task: android:assemble:apk
+      - task: screenshots:run
+        vars: {TARGETS: play}
+
+  screenshots:ios:
+    summary: Captures the App Store iPhone and iPad screenshots on the simulator
+    vars:
+      # The store builds use this Xcode, and an iOS 27 SDK build stops at launch
+      # on iOS 27 until the app adopts the UIScene life cycle.
+      DEVELOPER_DIR: '{{.DEVELOPER_DIR | default "/Applications/Xcode-26.6.app/Contents/Developer"}}'
+      DERIVED_DATA: build/ios/xcode/DerivedData-26
+    cmds:
+      - DEVELOPER_DIR="{{.DEVELOPER_DIR}}" wails3 task ios:signed DERIVED_DATA={{.DERIVED_DATA}}
+      - task: screenshots:run
+        vars:
+          TARGETS: iphone ipad
+          IOS_APP: '{{.ROOT_DIR}}/{{.DERIVED_DATA}}/Build/Products/Debug-iphonesimulator/{{.APP_NAME}}.app'
+
+  screenshots:run:
+    internal: true
+    dir: scripts/screenshots
+    cmds:
+      - npm install --no-audit --no-fund --silent
+      - npx playwright install webkit chromium
+      - '[ -d .appium/node_modules/appium-xcuitest-driver ] || APPIUM_HOME=.appium npx appium driver install xcuitest'
+      - IOS_APP="{{.IOS_APP}}" node run.mjs {{.TARGETS}}

@@ -1,34 +1,23 @@
 import { useState, useEffect, useRef } from 'react'
 import { debugLog } from '@/lib/utils'
-import { HashtabVersionStatus, TimezoneStatus, UpdateServiceStatus } from '@/lib/types'
+import { HashtabVersionStatus, OSChannelStatus, PackageCompatibilityStatus, ReenableStatus, TimezoneStatus, UpdateServiceStatus, UserGuideStatus } from '@/lib/types'
+import { onEvent } from '@/lib/events'
 
 export function useWarnings() {
   const [warningsChecked, setWarningsChecked] = useState(false)
-  const [osUpgradeDetected, setOsUpgradeDetected] = useState(false)
-  const [prevOsVersion, setPrevOsVersion] = useState('')
-  const [newOsVersion, setNewOsVersion] = useState('')
+  const warningsCheckedRef = useRef(false)
   const [osMismatchDetected, setOsMismatchDetected] = useState(false)
   const osMismatchDetectedRef = useRef(false)
   const [storedOsVersion, setStoredOsVersion] = useState('')
   const [currentOsVersion, setCurrentOsVersion] = useState('')
-  const [checklistLoading, setChecklistLoading] = useState(false)
-  const [compatibilityStatus, setCompatibilityStatus] = useState<{
-    installedPackages: string[]
-    compatiblePackages: string[]
-    incompatiblePackages: string[]
-    currentOsVersion: string
-    storedOsVersion: string
-    fetchFailed: boolean
-    statusMap?: Record<string, string>
-  } | null>(null)
-  const [hashtabMismatch, setHashtabMismatch] = useState<HashtabVersionStatus | null>(null)
-  const [hashtabMissing, setHashtabMissing] = useState(false)
-  const [prerelease, setPrerelease] = useState<{ activeVersion: string; latestPublic: string } | null>(null)
+  const [compatibilityStatus, setCompatibilityStatus] = useState<PackageCompatibilityStatus | null>(null)
+  const [hashtab, setHashtab] = useState<HashtabVersionStatus | null>(null)
+  const [osChannel, setOsChannel] = useState<OSChannelStatus | null>(null)
+  const [incompatibleWithLatestOS, setIncompatibleWithLatestOS] = useState<string[]>([])
   const [timezoneMismatch, setTimezoneMismatch] = useState<TimezoneStatus | null>(null)
   const [deviceTimezone, setDeviceTimezone] = useState('')
   const [selectedTimezone, setSelectedTimezone] = useState('')
-  const [reenableStatus, setReenableStatus] = useState('')
-  const [showAutoUpdateBanner, setShowAutoUpdateBanner] = useState(false)
+  const [reenableStatus, setReenableStatus] = useState(ReenableStatus.$zero)
   const [updateServiceStatus, setUpdateServiceStatus] = useState<UpdateServiceStatus>({
     enabled: false,
     running: false,
@@ -37,133 +26,83 @@ export function useWarnings() {
   const [xoviActive, setXoviActive] = useState(false)
   const [activeLauncher, setActiveLauncher] = useState('')
   const [currentLauncher, setCurrentLauncher] = useState('')
-  const [guideOffer, setGuideOffer] = useState<'install' | 'update' | null>(null)
-  const [guideInstalling, setGuideInstalling] = useState(false)
+  const [guideStatus, setGuideStatus] = useState<UserGuideStatus | null>(null)
   const [showGuideRestartDialog, setShowGuideRestartDialog] = useState(false)
 
   useEffect(() => {
-    if (typeof window.runtime === 'undefined') {
-      debugLog('window.runtime is undefined, events will not work')
-      return
-    }
     debugLog('Setting up event listeners')
 
-    const unsubscribeConnectWarnings = window.runtime.EventsOn('connect:warnings', (...args: unknown[]) => {
-      const w = args[0] as {
-        osMismatch?: { prevVersion: string; newVersion: string }
-        compatibilityStatus?: {
-          installedPackages: string[]
-          compatiblePackages: string[]
-          incompatiblePackages: string[]
-          currentOsVersion: string
-          storedOsVersion: string
-          fetchFailed: boolean
-          statusMap?: Record<string, string>
-        }
-        reenableStatus?: string
-        hashtabMismatch?: HashtabVersionStatus
-        hashtabMissing?: boolean
-        autoUpdateEnabled?: { enabled: boolean; running: boolean }
-        timezoneStatus?: TimezoneStatus
-        timezoneMismatch?: TimezoneStatus
-        xochitlNotRunning?: boolean
-        xoviNotRunning?: boolean
-        activeLauncher?: string
-        currentLauncher?: string
-        prerelease?: { isPrerelease: boolean; activeVersion: string; latestPublic: string }
-      }
+    const unsubscribeConnectWarnings = onEvent('connect:warnings', w => {
       debugLog('Received connect:warnings:', w)
       setWarningsChecked(true)
+      warningsCheckedRef.current = true
 
       if (w.osMismatch) {
-        debugLog('connect:warnings — setting osMismatchDetected=true', w.osMismatch)
+        debugLog('connect:warnings: setting osMismatchDetected=true', w.osMismatch)
         setOsMismatchDetected(true)
         osMismatchDetectedRef.current = true
         setStoredOsVersion(w.osMismatch.prevVersion)
         setCurrentOsVersion(w.osMismatch.newVersion)
         if (w.compatibilityStatus) {
-          debugLog('connect:warnings — compatibilityStatus received inline')
+          debugLog('connect:warnings: compatibilityStatus received inline')
           setCompatibilityStatus(w.compatibilityStatus)
         }
       } else {
-        debugLog('connect:warnings — no osMismatch, clearing')
+        debugLog('connect:warnings: no osMismatch, clearing')
         setOsMismatchDetected(false)
         osMismatchDetectedRef.current = false
       }
       if (w.reenableStatus) {
         setReenableStatus(w.reenableStatus)
       }
-      if (w.hashtabMismatch) {
-        setHashtabMismatch(w.hashtabMismatch)
-      } else {
-        setHashtabMismatch(null)
-      }
-      setHashtabMissing(!!w.hashtabMissing)
-      if (w.autoUpdateEnabled) {
-        setShowAutoUpdateBanner(true)
-      } else {
-        setShowAutoUpdateBanner(false)
+      setHashtab(w.hashtab ?? null)
+      if (w.updateService) {
+        setUpdateServiceStatus(w.updateService)
       }
       if (w.timezoneStatus?.deviceTimezone) {
         setDeviceTimezone(w.timezoneStatus.deviceTimezone)
         setSelectedTimezone(w.timezoneStatus.savedTimezone || w.timezoneStatus.deviceTimezone)
       }
-      if (w.timezoneMismatch) {
-        setTimezoneMismatch(w.timezoneMismatch)
-        setDeviceTimezone(w.timezoneMismatch.deviceTimezone)
-        setSelectedTimezone(w.timezoneMismatch.savedTimezone || w.timezoneMismatch.deviceTimezone)
-      } else {
-        setTimezoneMismatch(null)
+      setTimezoneMismatch(w.timezoneStatus?.needsUpdate ? w.timezoneStatus : null)
+      if (w.xochitl) {
+        setXochitlRunning(w.xochitl.running)
+        setXoviActive(w.xochitl.xoviActive)
+        setActiveLauncher(w.xochitl.activeLauncher || '')
+        setCurrentLauncher(w.xochitl.currentLauncher || '')
       }
-      setXochitlRunning(!w.xochitlNotRunning)
-      setXoviActive(!w.xoviNotRunning)
-      setActiveLauncher(w.activeLauncher || '')
-      setCurrentLauncher(w.currentLauncher || '')
-      if (w.prerelease) {
-        setPrerelease({ activeVersion: w.prerelease.activeVersion, latestPublic: w.prerelease.latestPublic })
-      } else {
-        setPrerelease(null)
-      }
-
+      setOsChannel(w.osChannel ?? null)
+      setIncompatibleWithLatestOS(w.incompatibleWithLatestOS ?? [])
     })
 
-    const unsubscribeGuideOffer = window.runtime.EventsOn('guide:offer', (...args: unknown[]) => {
-      const data = args[0] as { type: 'install' | 'update' }
-      setGuideOffer(data.type)
-    })
+    const unsubscribeGuideStatus = onEvent('guide:status', setGuideStatus)
 
     return () => {
       unsubscribeConnectWarnings()
-      unsubscribeGuideOffer()
+      unsubscribeGuideStatus()
     }
   }, [])
 
   return {
     warningsChecked, setWarningsChecked,
-    osUpgradeDetected, setOsUpgradeDetected,
-    prevOsVersion, setPrevOsVersion,
-    newOsVersion, setNewOsVersion,
+    warningsCheckedRef,
     osMismatchDetected, setOsMismatchDetected,
     osMismatchDetectedRef,
     storedOsVersion, setStoredOsVersion,
     currentOsVersion, setCurrentOsVersion,
-    checklistLoading, setChecklistLoading,
     compatibilityStatus, setCompatibilityStatus,
-    hashtabMismatch, setHashtabMismatch,
-    hashtabMissing, setHashtabMissing,
-    prerelease, setPrerelease,
+    hashtab, setHashtab,
+    osChannel, setOsChannel,
+    incompatibleWithLatestOS, setIncompatibleWithLatestOS,
     timezoneMismatch, setTimezoneMismatch,
     deviceTimezone, setDeviceTimezone,
     selectedTimezone, setSelectedTimezone,
     reenableStatus, setReenableStatus,
-    showAutoUpdateBanner, setShowAutoUpdateBanner,
     updateServiceStatus, setUpdateServiceStatus,
     xochitlRunning, setXochitlRunning,
     xoviActive, setXoviActive,
     activeLauncher, setActiveLauncher,
     currentLauncher, setCurrentLauncher,
-    guideOffer, setGuideOffer,
-    guideInstalling, setGuideInstalling,
+    guideStatus, setGuideStatus,
     showGuideRestartDialog, setShowGuideRestartDialog,
   }
 }

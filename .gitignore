@@ -6,6 +6,8 @@ go.work.sum
 build/bin/
 frontend/dist/
 frontend/.vite/
+frontend/coverage/
+frontend/*.tsbuildinfo
 .cache-go/
 
 # Flatpak Build
@@ -16,6 +18,8 @@ repo/
 
 # Dependencies
 frontend/node_modules/
+scripts/screenshots/node_modules/
+scripts/screenshots/.appium/
 vendor/
 
 # Generated Files
@@ -41,3 +45,18 @@ Thumbs.db
 # Environment Files
 .env.local
 .env.*.local
+
+# Wails v3 build outputs and the patched wails tree
+bin/
+.task/
+build/ios/xcode/
+third_party/
+
+# Android build outputs
+build/android/.gradle/
+build/android/app/build/
+build/android/app/src/main/jniLibs/
+build/android/local.properties
+build/android/build/
+build/android/gen/
+build/android/overlay.json

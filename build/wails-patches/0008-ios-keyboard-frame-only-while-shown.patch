@@ -1,0 +1,73 @@
+--- a/pkg/application/mobile_features_ios.m
++++ b/pkg/application/mobile_features_ios.m
+@@ -772,32 +772,65 @@
+ // MARK: - Keyboard insets
+ 
+ static id g_mfKeyboardShowObs = nil;
++static id g_mfKeyboardFrameObs = nil;
+ static id g_mfKeyboardHideObs = nil;
++static BOOL g_mfKeyboardShown = NO;
++
++// The keyboard frame is in screen coordinates. An iPad window in Slide Over, a
++// tile or Stage Manager can end above the bottom of the screen, so the keyboard
++// can cover less of the window than its height, or none of it. The height still
++// says what is on screen, and covered says how much of the window is hidden.
++static void mfEmitKeyboardFrame(NSNotification *note) {
++    CGRect frame = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
++    CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
++    CGFloat height = MAX(0, screenH - frame.origin.y);
++    CGFloat covered = height;
++    UIWindow *window = appDelegate.window;
++    if (window) {
++        CGRect keyboardInWindow = [window convertRect:frame fromCoordinateSpace:window.screen.coordinateSpace];
++        CGRect coveredRect = CGRectIntersection(window.bounds, keyboardInWindow);
++        covered = CGRectIsNull(coveredRect) ? 0 : CGRectGetMaxY(window.bounds) - CGRectGetMinY(coveredRect);
++    }
++    mfEmit(@"common:keyboard", @{@"visible": @(height > 0), @"height": @((int)height), @"covered": @((int)covered)});
++}
+ 
++// A frame change is only reported between WillShow and WillHide. With a
++// hardware keyboard attached, iOS follows the on-screen keyboard's WillHide with
++// one more frame change for the floating shortcut bar, which is taller than the
++// bar reports when shown on its own and would otherwise leave the page ending
++// above a keyboard that is gone.
+ void ios_set_keyboard_watch(bool enabled) {
+     mfRunOnMain(^{
+         NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+         if (enabled) {
+             if (g_mfKeyboardShowObs == nil) {
+-                g_mfKeyboardShowObs = [nc addObserverForName:UIKeyboardWillChangeFrameNotification
++                g_mfKeyboardShowObs = [nc addObserverForName:UIKeyboardWillShowNotification
++                    object:nil queue:[NSOperationQueue mainQueue]
++                    usingBlock:^(NSNotification *note) {
++                        g_mfKeyboardShown = YES;
++                        mfEmitKeyboardFrame(note);
++                    }];
++            }
++            if (g_mfKeyboardFrameObs == nil) {
++                g_mfKeyboardFrameObs = [nc addObserverForName:UIKeyboardWillChangeFrameNotification
+                     object:nil queue:[NSOperationQueue mainQueue]
+                     usingBlock:^(NSNotification *note) {
+-                        CGRect frame = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+-                        CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
+-                        CGFloat height = MAX(0, screenH - frame.origin.y);
+-                        mfEmit(@"common:keyboard", @{@"visible": @(height > 0), @"height": @((int)height)});
++                        if (g_mfKeyboardShown) mfEmitKeyboardFrame(note);
+                     }];
+             }
+             if (g_mfKeyboardHideObs == nil) {
+                 g_mfKeyboardHideObs = [nc addObserverForName:UIKeyboardWillHideNotification
+                     object:nil queue:[NSOperationQueue mainQueue]
+                     usingBlock:^(NSNotification *note) {
++                        g_mfKeyboardShown = NO;
+                         mfEmit(@"common:keyboard", @{@"visible": @NO, @"height": @0});
+                     }];
+             }
+         } else {
+             if (g_mfKeyboardShowObs) { [nc removeObserver:g_mfKeyboardShowObs]; g_mfKeyboardShowObs = nil; }
++            if (g_mfKeyboardFrameObs) { [nc removeObserver:g_mfKeyboardFrameObs]; g_mfKeyboardFrameObs = nil; }
+             if (g_mfKeyboardHideObs) { [nc removeObserver:g_mfKeyboardHideObs]; g_mfKeyboardHideObs = nil; }
++            g_mfKeyboardShown = NO;
+         }
+     });
+ }

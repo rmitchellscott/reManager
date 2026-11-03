@@ -1,18 +1,106 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-@plugin "tailwindcss-animate";
-
 input::-ms-reveal {
   display: none;
 }
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant touch (&:is([data-touch] *));
+
+/* Narrow, or a phone on its side: landscape is wide enough for md but has the
+   height of a narrow layout, and a keyboard takes half of that. [data-compact]
+   is the same case on a tablet: the media height is the whole screen, but a
+   surface sharing it with the keyboard has only what is left above the keys. */
+@custom-variant compact {
+  @media (width < 48rem) {
+    @slot;
+  }
+  &:is([data-touch] *) {
+    @media (height < 32rem) {
+      @slot;
+    }
+  }
+  &:is([data-compact] *) {
+    @slot;
+  }
+}
+
+/* The drawn box must not change size. min-width/min-height leave an axis
+   already past 48px alone. */
+@utility hit-target {
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    translate: -50% -50%;
+    width: var(--hit-target);
+    height: var(--hit-target);
+    min-width: 100%;
+    min-height: 100%;
+  }
+}
+
+/* iOS zooms the viewport when a focused field renders text below 16px, and it
+   does not zoom back out when the field blurs. The viewport tag cannot be
+   relied on to stop it: Safari has ignored maximum-scale and user-scalable
+   since iOS 10, and suppressing pinch-zoom to fix a font size would trade an
+   accessibility guarantee for a layout bug. 16px on the field is the fix.
+
+   This is the one type size between Body and the page headline, and it exists
+   because the platform sets it, not because anything on the screen ranks
+   higher. It belongs to text entry only, never to a label, a value or a
+   button. */
+@utility no-focus-zoom {
+  font-size: 16px;
+}
+
+@theme {
+  /* Page chrome, not type: fixed px so the gutter does not grow with Dynamic
+     Type. Generates p-gutter, -mx-gutter, px-gutter, scroll-pr-gutter. */
+  --spacing-gutter: 16px;
+
+  /* Android's floor governs: one layout serves iOS, Android and desktop, and
+     the touch variant has no per-OS split. */
+  --hit-target: 48px;
+
+  /* The floating tab bar's full footprint: its 8px inset plus 64px of bar, plus
+     an 8px gap. Anything pinned above it derives its clearance from this rather
+     than restating the number. */
+  --spacing-tab-bar-clearance: 80px;
+}
+
+/* Older Android WebViews report 0 for env(safe-area-inset-*) in an edge-to-edge
+   window, so the Android app also sets the system bars as --android-safe-area-*. */
+:root {
+  --safe-area-top: max(env(safe-area-inset-top), var(--android-safe-area-top, 0px));
+  --safe-area-right: max(env(safe-area-inset-right), var(--android-safe-area-right, 0px));
+  --safe-area-bottom: max(env(safe-area-inset-bottom), var(--android-safe-area-bottom, 0px));
+  --safe-area-left: max(env(safe-area-inset-left), var(--android-safe-area-left, 0px));
+}
+
+/* The gutter on a side that can meet the screen edge. In landscape the notch and
+   the rounded corners claim the sides, so the gutter widens to clear them. Inline
+   so the inset resolves on the element: only a surface marked screen-edge
+   supplies one, and a gutter inside a centered dialog stays the plain gutter.
+   Generates pl-gutter-left, -mr-gutter-right and the like. */
+@theme inline {
+  --spacing-gutter-left: max(var(--spacing-gutter), var(--edge-inset-left, 0px));
+  --spacing-gutter-right: max(var(--spacing-gutter), var(--edge-inset-right, 0px));
+}
+
+@utility screen-edge {
+  --edge-inset-left: var(--safe-area-left);
+  --edge-inset-right: var(--safe-area-right);
+}
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --color-ring: var(--ring);
   --color-input: var(--input);
@@ -61,6 +149,54 @@ input::-ms-reveal {
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
+  --success: oklch(0.723 0.219 149.579);
+  --warning: oklch(0.795 0.184 86.047);
+  --info: oklch(0.623 0.214 259.815);
+  /* Staged work awaiting Apply. A plan is the union of installs and upgrades, so
+     the hue sits between their green and blue rather than reusing either, which
+     would misreport a plan that lacks that operation. */
+  --pending: oklch(0.777 0.152 181.912);
+  /* The first signal in the app that counts unread items rather than reporting
+     a condition, so it takes a hue of its own: reusing one would have a follow
+     count read as an operation staged or a device state to fix. */
+  --unread: oklch(0.627 0.265 303.9);
+
+  /* The accents above are surface values, legible only as rings, fills and dots:
+     green-500 is 2.22:1 on white and yellow-500 is 1.91:1, so neither can carry
+     text. These are the text and wash steps for the same five meanings. */
+  --success-text: oklch(0.527 0.154 150.069);
+  --warning-text: oklch(0.555 0.163 48.998);
+  --info-text: oklch(0.546 0.245 262.881);
+  --pending-text: oklch(0.511 0.096 186.391);
+  --unread-text: oklch(0.52 0.25 303.9);
+  --success-ground: oklch(from var(--success) l c h / 15%);
+  --warning-ground: oklch(from var(--warning) l c h / 15%);
+  --info-ground: oklch(from var(--info) l c h / 15%);
+  --pending-ground: oklch(from var(--pending) l c h / 15%);
+  --destructive-ground: oklch(from var(--destructive) l c h / 15%);
+  --unread-ground: oklch(from var(--unread) l c h / 15%);
+  --pending-wash: color-mix(in oklab, var(--pending) 22%, var(--background));
+
+  /* Mixed into --card rather than laid over it, so the card's tonal lift
+     survives under the wash. */
+  --success-surface: color-mix(in oklab, var(--success) 6%, var(--card));
+  --info-surface: color-mix(in oklab, var(--info) 6%, var(--card));
+  --destructive-surface: color-mix(in oklab, var(--destructive) 6%, var(--card));
+  --warning-surface: color-mix(in oklab, var(--warning) 6%, var(--card));
+  --unread-surface: color-mix(in oklab, var(--unread) 6%, var(--card));
+  --implied-surface: color-mix(in oklab, oklch(from var(--success) l c h / 40%) 6%, var(--card));
+
+  /* File-type color in the browser sorts a long list by shape of content, which
+     is the one place color is not reporting device state. It is only ever a
+     16px glyph, never a fill or a wash, so each type is a single text-legible
+     value rather than the surface/text/ground triple the accents carry. Keeping
+     them out of that triple is what stops a file type from being mistaken for a
+     status: nothing can hand these to a badge or a row ground. */
+  --file-folder: oklch(0.546 0.245 262.881);
+  --file-doc: oklch(0.556 0 0);
+  --file-image: oklch(0.527 0.154 150.069);
+  --file-archive: oklch(0.555 0.163 48.998);
+  --file-default: oklch(0.708 0 0);
 }
 
 .dark {
@@ -83,6 +219,51 @@ input::-ms-reveal {
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
+  --success: oklch(0.723 0.219 149.579);
+  --warning: oklch(0.795 0.184 86.047);
+  --info: oklch(0.623 0.214 259.815);
+  --pending: oklch(0.777 0.152 181.912);
+  --unread: oklch(0.627 0.265 303.9);
+
+  --success-text: oklch(0.792 0.209 151.711);
+  --warning-text: oklch(0.828 0.189 84.429);
+  --info-text: oklch(0.707 0.165 254.624);
+  --pending-text: oklch(0.777 0.152 181.912);
+  --unread-text: oklch(0.76 0.19 303.9);
+
+  /* Set directly rather than mixed. A 6% mix in oklab scales chroma to about
+     0.013, which white shows as a tint but a dark card shows as warm gray, so
+     green reads olive. Each hue sits just above --card at one shared chroma,
+     so no status outweighs another. */
+  --success-surface: oklch(0.225 0.03 149.579);
+  --info-surface: oklch(0.225 0.03 259.815);
+  --destructive-surface: oklch(0.225 0.03 22.216);
+  --warning-surface: oklch(0.225 0.03 86.047);
+  --unread-surface: oklch(0.225 0.03 303.9);
+  --implied-surface: oklch(0.215 0.015 149.579);
+  --pending-wash: color-mix(in oklab, var(--pending) 18%, var(--background));
+
+  --file-folder: oklch(0.707 0.165 254.624);
+  --file-doc: oklch(0.708 0 0);
+  --file-image: oklch(0.792 0.209 151.711);
+  --file-archive: oklch(0.828 0.189 84.429);
+  --file-default: oklch(0.556 0 0);
+}
+
+/* Monaco's own keyboard affordance (editor.contrib.ShowKeyboardWidget), a bare
+   textarea it styles with a fixed border and a background image, so it cannot be
+   made to match anything around it. Tapping the editor already re-focuses it and
+   raises the keyboard, which is all this offered. */
+.iPadShowKeyboard {
+  display: none;
+}
+
+/* rem in a media query resolves against the initial font size, so this
+   breakpoint does not move when the root is scaled for Dynamic Type. */
+@media (min-width: 40rem) {
+  :root {
+    --spacing-gutter: 24px;
+  }
 }
 
 @layer base {
@@ -90,9 +271,20 @@ input::-ms-reveal {
     @apply border-border outline-ring/50;
   }
 
+  /* Tailwind's preflight pins this to 100%, which is what makes iOS Dynamic
+     Type a no-op. */
+  html {
+    -webkit-text-size-adjust: auto;
+    text-size-adjust: auto;
+    /* iOS translates the whole visual viewport on overscroll, so sticky and
+       fixed alike ride the bounce. Stopping the bounce is the only way to hold
+       a pinned bar still. Scrollers that set overscroll-contain already stop
+       their own chaining, so this only governs the page itself. */
+    overscroll-behavior-y: none;
+  }
+
   body {
-    @apply bg-background text-foreground;
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    @apply bg-background text-foreground font-sans;
   }
 
   button:not(:disabled),
@@ -102,7 +294,127 @@ input::-ms-reveal {
   }
 }
 
-/* Monaco editor fixes */
+/* An indeterminate bar: the fill crosses the track and starts again, which says
+   work is in progress without claiming how far along it is. Translating a fixed
+   width rather than growing one keeps it off the layout path. */
+@keyframes progress-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+@utility animate-progress-sweep {
+  animation: progress-sweep 1.4s ease-in-out infinite;
+}
+
+/* The plan count bounces once when the reader adds to a plan that already
+   shows, so the change lands where the bar is. Plays on mount, which is why
+   the badge is keyed to each add. */
+@keyframes count-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.3); }
+  70% { transform: scale(0.94); }
+  100% { transform: scale(1); }
+}
+
+@utility animate-count-pop {
+  animation: count-pop 0.45s cubic-bezier(0.3, 0.7, 0.4, 1.4);
+}
+
+/* The bar arrives washed in pending and settles to its neutral surface, which
+   draws the eye to a bar that is otherwise low contrast. The hold outlasts the
+   bar's 300ms entrance, so the color is full when it lands. Later adds get a
+   weaker, shorter wash alongside the count pop. */
+@keyframes plan-wash {
+  0%, 35% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes plan-wash-small {
+  from { opacity: 0.55; }
+  to { opacity: 0; }
+}
+
+@utility animate-plan-wash {
+  animation: plan-wash 900ms ease-in-out;
+}
+
+@utility animate-plan-wash-small {
+  animation: plan-wash-small 450ms ease-out;
+}
+
+/* Neither animate library guards its own keyframes, so the guard is global.
+   Convert motion rather than delete it: both platforms ask for a crossfade,
+   and an entrance that is cut loses the cue about where the panel came from.
+   Duration is deliberately not clamped: the usual 1ms freezes animate-spin
+   mid-rotation, and a still spinner during a minutes-long device operation
+   reads as a hung app. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    --tw-enter-translate-x: 0 !important;
+    --tw-enter-translate-y: 0 !important;
+    --tw-exit-translate-x: 0 !important;
+    --tw-exit-translate-y: 0 !important;
+    --tw-enter-scale: 1 !important;
+    --tw-exit-scale: 1 !important;
+    --tw-enter-rotate: 0 !important;
+    --tw-exit-rotate: 0 !important;
+    animation-delay: 0ms !important;
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow !important;
+    transition-duration: 100ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* A row's accent is its four borders, one being the divider it already shares
+   with the row below. Recoloring beats a ring drawn inside the box, which
+   leaves that divider showing between two accented rows, and closing the gap
+   by pulling the lower row up shifts the page under the pointer. Where two
+   accents meet the upper edge stands for the pair. Matching accents only: a
+   queued row against one pending removal wants both edges. */
+[data-accent="success"] { --row-accent: var(--success); --row-surface: var(--success-surface); }
+[data-accent="info"] { --row-accent: var(--info); --row-surface: var(--info-surface); }
+[data-accent="implied"] { --row-accent: oklch(from var(--success) l c h / 40%); --row-surface: var(--implied-surface); }
+[data-accent="destructive"] { --row-accent: var(--destructive); --row-surface: var(--destructive-surface); }
+[data-accent="warning"] { --row-accent: var(--warning); --row-surface: var(--warning-surface); }
+
+/* The border alone is a 1px edge on a wide row, which is hard to pick out when
+   scanning a long list for what is staged. The ground carries the same accent
+   PlanView uses, so a row reads the same here as it does in the plan it will
+   apply. An implied row washes fainter than a chosen one. */
+[data-accent] {
+  border-color: var(--row-accent);
+  background-color: var(--row-surface);
+}
+
+[data-accent="success"] + [data-accent="success"],
+[data-accent="info"] + [data-accent="info"],
+[data-accent="implied"] + [data-accent="implied"],
+[data-accent="destructive"] + [data-accent="destructive"],
+[data-accent="warning"] + [data-accent="warning"] {
+  border-top-color: transparent;
+}
+
+/* ScrollRow toggles these from its scroll position. The fade is exactly one
+   gutter wide by definition, so it reads the same variable the padding does. On
+   the scrolling element, not its wrapper, so the chevrons stay opaque. */
+.scroll-fade-left {
+  -webkit-mask-image: linear-gradient(to right, transparent, black var(--spacing-gutter, 24px));
+  mask-image: linear-gradient(to right, transparent, black var(--spacing-gutter, 24px));
+}
+
+.scroll-fade-right {
+  -webkit-mask-image: linear-gradient(to left, transparent, black var(--spacing-gutter, 24px));
+  mask-image: linear-gradient(to left, transparent, black var(--spacing-gutter, 24px));
+}
+
+.scroll-fade-left.scroll-fade-right {
+  -webkit-mask-image: linear-gradient(to right, transparent, black var(--spacing-gutter, 24px), black calc(100% - var(--spacing-gutter, 24px)), transparent);
+  mask-image: linear-gradient(to right, transparent, black var(--spacing-gutter, 24px), black calc(100% - var(--spacing-gutter, 24px)), transparent);
+}
+
 .monaco-editor .find-widget {
   z-index: 100 !important;
 }

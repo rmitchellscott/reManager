@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Name=reManager
+Comment=Manage mods on reMarkable tablets
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/remanager %u
+Terminal=false
+Type=Application
+Icon=remanager
+Categories=Utility;
+MimeType=x-scheme-handler/remanager;
+StartupWMClass=remanager
+
+ 

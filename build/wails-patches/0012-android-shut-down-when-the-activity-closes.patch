@@ -1,0 +1,27 @@
+--- a/pkg/application/application_android.go
++++ b/pkg/application/application_android.go
+@@ -304,6 +304,7 @@
+ 	"io"
+ 	"net/http"
+ 	"net/http/httptest"
++	"os"
+ 	"strings"
+ 	"sync"
+ 	"time"
+@@ -522,7 +523,16 @@
+ 	return nil
+ }
+ 
++// The activity asks for this only when it closes for good, not when it is
++// recreated. main runs once per process, so an app whose services have shut
++// down cannot start again here: the process exits, and the next launch starts
++// a fresh one.
+ func (a *androidApp) destroy() {
++	if !globalApplication.shouldQuit() {
++		return
++	}
++	globalApplication.cleanup()
++	os.Exit(0)
+ }
+ 
+ func (a *androidApp) setIcon(_ []byte) {

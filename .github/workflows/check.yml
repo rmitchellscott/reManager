@@ -1,0 +1,42 @@
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install GTK 4 and WebKitGTK 6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev
+
+      - name: Prepare the Wails fork
+        run: ./scripts/prepare-wails-fork.sh
+
+      - name: Install the Wails CLI from the fork
+        working-directory: third_party/wails-v3
+        run: go install ./cmd/wails3
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Check
+        run: wails3 task check

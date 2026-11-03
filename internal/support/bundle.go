@@ -15,14 +15,17 @@ import (
 )
 
 type BundleInfo struct {
-	AppVersion    string   `json:"appVersion"`
-	Timestamp     string   `json:"timestamp"`
-	BundleID      string   `json:"bundleId"`
-	HostOS        string   `json:"hostOS"`
-	FormatVersion string   `json:"formatVersion"`
-	DeviceID      string   `json:"deviceId,omitempty"`
-	DeviceName    string   `json:"deviceName,omitempty"`
-	Errors        []string `json:"errors,omitempty"`
+	AppVersion          string   `json:"appVersion"`
+	Timestamp           string   `json:"timestamp"`
+	BundleID            string   `json:"bundleId"`
+	HostOS              string   `json:"hostOS"`
+	HostOSVersion       string   `json:"hostOSVersion,omitempty"`
+	HostModel           string   `json:"hostModel,omitempty"`
+	DistributionChannel string   `json:"distributionChannel,omitempty"`
+	FormatVersion       string   `json:"formatVersion"`
+	DeviceID            string   `json:"deviceId,omitempty"`
+	DeviceName          string   `json:"deviceName,omitempty"`
+	Errors              []string `json:"errors,omitempty"`
 }
 
 type DeviceInfo struct {
@@ -49,20 +52,24 @@ type LauncherInfo struct {
 }
 
 type Generator struct {
-	AppVersion        string
-	HostOS            string
-	LogDir            string
-	DeviceID          string
-	DeviceName        string
-	Device            *DeviceInfo
-	InstalledPackages map[string]string
-	OSVer             string
-	Settings          any
-	UpdateService     *UpdateServiceStatus
-	Hashtab           *HashtabInfo
-	Launcher          *LauncherInfo
-	Timezone          string
-	PartitionInfo     any
+	AppVersion          string
+	HostOS              string
+	HostOSVersion       string
+	HostModel           string
+	DistributionChannel string
+	LogDir              string
+	DeviceID            string
+	DeviceName          string
+	Device              *DeviceInfo
+	InstalledPackages   map[string]string
+	OSVer               string
+	Settings            any
+	UpdateService       *UpdateServiceStatus
+	Hashtab             *HashtabInfo
+	Launcher            *LauncherInfo
+	Timezone            string
+	PartitionInfo       any
+	XoviTree            *DirTreeNode
 }
 
 func GenerateBundleID() string {
@@ -80,13 +87,16 @@ func (g *Generator) GenerateToBuffer(bundleID string) ([]byte, error) {
 	var bundleErrors []string
 
 	info := BundleInfo{
-		AppVersion:    g.AppVersion,
-		Timestamp:     time.Now().UTC().Format(time.RFC3339),
-		BundleID:      bundleID,
-		HostOS:        g.HostOS,
-		FormatVersion: "1",
-		DeviceID:      g.DeviceID,
-		DeviceName:    g.DeviceName,
+		AppVersion:          g.AppVersion,
+		Timestamp:           time.Now().UTC().Format(time.RFC3339),
+		BundleID:            bundleID,
+		HostOS:              g.HostOS,
+		HostOSVersion:       g.HostOSVersion,
+		HostModel:           g.HostModel,
+		DistributionChannel: g.DistributionChannel,
+		FormatVersion:       "2",
+		DeviceID:            g.DeviceID,
+		DeviceName:          g.DeviceName,
 	}
 
 	if g.Device != nil {
@@ -159,6 +169,15 @@ func (g *Generator) GenerateToBuffer(bundleID string) ([]byte, error) {
 		}
 	}
 
+	if g.XoviTree != nil {
+		data, _ := json.MarshalIndent(g.XoviTree, "", "  ")
+		if err := writeEntry(tw, "support-bundle/device/xovi_tree.json", data); err != nil {
+			tw.Close()
+			gzw.Close()
+			return nil, err
+		}
+	}
+
 	if g.Settings != nil {
 		data, _ := json.MarshalIndent(g.Settings, "", "  ")
 		if err := writeEntry(tw, "support-bundle/settings.json", data); err != nil {
@@ -224,7 +243,7 @@ func (g *Generator) addLogFiles(tw *tar.Writer) error {
 			continue
 		}
 
-		if err := writeEntry(tw, "support-bundle/logs/"+entry.Name(), data); err != nil {
+		if err := writeEntry(tw, "support-bundle/logs/"+entry.Name(), redactDeviceIdentifiers(data)); err != nil {
 			return err
 		}
 	}
@@ -257,7 +276,7 @@ func (g *Generator) addDeviceCommandLogs(tw *tar.Writer, deviceID string) {
 		if err != nil {
 			continue
 		}
-		writeEntry(tw, "support-bundle/logs/commands/"+entry.Name(), data)
+		writeEntry(tw, "support-bundle/logs/commands/"+entry.Name(), redactDeviceIdentifiers(data))
 	}
 }
 
@@ -288,19 +307,21 @@ func GetPreview() SupportBundlePreview {
 			"Device name, type, OS version, and partition info",
 			"Device timezone",
 			"Auto-update service status",
-			"Hashtab version",
+			"Hashtable version",
 			"Selected and running launcher",
 			"Installed package names and versions",
+			"File and folder names in the xovi directory",
 			"reManager behavior settings",
 			"reManager application and command logs",
-			"reManager version and host OS type",
+			"On Android, when a connection fails or drops: attached USB devices, network types, and USB network addresses",
+			"reManager version and distribution channel, host OS type and version, and phone or tablet model",
 		},
 		Excluded: []string{
 			"SSH passwords or key passphrases",
 			"SSH private keys",
 			"Personal documents, notebooks, or files",
 			"Device serial number",
-			"Network configuration or WiFi passwords",
+			"Network configuration or Wi-Fi passwords",
 		},
 	}
 }

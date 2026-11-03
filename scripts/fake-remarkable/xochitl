@@ -1,0 +1,13 @@
+#!/bin/bash
+# Stands in for the reMarkable UI. Run by xovi's rebuild_hashtable, it writes a
+# hashtab stamped with the OS version after /fake/hashtab-seconds and prints
+# the line the script waits for, as qt-resource-rebuilder does.
+trap 'exit 0' TERM INT
+
+if [ -n "${QMLDIFF_HASHTAB_CREATE:-}" ]; then
+  sleep "$(cat /fake/hashtab-seconds 2>/dev/null || echo 65)"
+  /fake/write-hashtab "$QMLDIFF_HASHTAB_CREATE"
+  echo "[qmldiff]: Hashtab saved to $QMLDIFF_HASHTAB_CREATE"
+fi
+
+while :; do sleep 1; done

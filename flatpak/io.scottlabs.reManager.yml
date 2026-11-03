@@ -1,10 +1,10 @@
 app-id: io.scottlabs.reManager
 runtime: org.gnome.Platform
-runtime-version: '49'
+runtime-version: '51'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.golang
-  - org.freedesktop.Sdk.Extension.node20
+  - org.freedesktop.Sdk.Extension.node24
 command: reManager
 
 finish-args:
@@ -17,9 +17,10 @@ finish-args:
   - --filesystem=~/.ssh:ro
 
 build-options:
-  append-path: /usr/lib/sdk/golang/bin:/usr/lib/sdk/node20/bin
+  append-path: /usr/lib/sdk/golang/bin:/usr/lib/sdk/node24/bin
   env:
     GOROOT: /usr/lib/sdk/golang
+    GOTOOLCHAIN: local
     XDG_CACHE_HOME: /run/build/reManager/flatpak-node/cache
     npm_config_cache: /run/build/reManager/flatpak-node/npm-cache
 
@@ -27,18 +28,37 @@ modules:
   - name: reManager
     buildsystem: simple
     build-commands:
+      - cp flatpak/vendor-modules.txt vendor/modules.txt
       - |
-        mkdir -p vendor && \
-        cp flatpak/vendor-modules.txt vendor/modules.txt && \
-        npm install --offline --prefix=frontend && \
-        go build -o wails ./vendor/github.com/wailsapp/wails/v2/cmd/wails && \
-        ./wails build -tags webkit2_41 -m -nosyncgomod -ldflags "-X main.version=$(git describe --tags --always)"
-      - install -Dm755 build/bin/reManager /app/bin/reManager
+        for patch in build/wails-patches/*.patch; do
+          patch -p1 -d vendor/github.com/wailsapp/wails/v3 < "$patch"
+        done
+      - npm install --offline --prefix=frontend
+      - npm run build --prefix=frontend
+      - go build -mod=vendor -tags production -trimpath -buildvcs=false -ldflags "-w -s -X main.version=$(git describe --tags --always)" -o reManager .
+      - install -Dm755 reManager /app/bin/reManager
       - install -Dm644 flatpak/io.scottlabs.reManager.desktop /app/share/applications/io.scottlabs.reManager.desktop
       - install -Dm644 flatpak/io.scottlabs.reManager.metainfo.xml /app/share/metainfo/io.scottlabs.reManager.metainfo.xml
       - install -Dm644 assets/icon.svg /app/share/icons/hicolor/scalable/apps/io.scottlabs.reManager.svg
     sources:
       - type: dir
         path: ..
+        skip:
+          - third_party
+          - vendor
+          - frontend/node_modules
+          - frontend/dist
+          - bin
+          - build-dir
+          - repo
+          - .flatpak-builder
+          - flatpak/.flatpak-builder
+          - reManager.flatpak
+          - reManager-gnome49.flatpak
+      - type: archive
+        url: https://proxy.golang.org/github.com/wailsapp/wails/v3/@v/v3.0.0-beta.26.zip
+        sha256: 64010e5d1c0ddd05e17a07925bd620a263068669d3008cb422881d51e585de07
+        strip-components: 4
+        dest: vendor/github.com/wailsapp/wails/v3
       - node-sources.json
       - go-sources.yml

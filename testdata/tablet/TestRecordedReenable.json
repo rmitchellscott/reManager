@@ -1,0 +1,331 @@
+{
+  "exchanges": [
+    {
+      "command": "printf '%s' __REMANAGER_SHELL_OK__",
+      "stdout": "__REMANAGER_SHELL_OK__",
+      "exit": 0
+    },
+    {
+      "command": "PATH=/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin:$PATH uname -m",
+      "stdout": "aarch64\n",
+      "exit": 0
+    },
+    {
+      "command": "cat /etc/machine-id",
+      "stdout": "6386aeb41640e85b0984efaa31eb9170\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; test -x /home/root/.vellum/bin/vellum \u0026\u0026 echo yes || echo no",
+      "stdout": "yes\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; /home/root/.vellum/bin/vellum info -q",
+      "stdout": "appload\nbettertoc\nhide-dev-mode-icon\nkoreader\nmount-utils\nqt-resource-rebuilder\nremarkable-os\nrmppmove\ntripletap\nvellum\nvellum-bash-completion\nxovi\nxovi-extensions\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; /home/root/.vellum/bin/vellum reenable status",
+      "stdout": "ok\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; grep REMARKABLE_RELEASE_VERSION /usr/share/remarkable/update.conf",
+      "stderr": "grep: /usr/share/remarkable/update.conf: No such file or directory\n",
+      "exit": 2
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; grep IMG_VERSION /etc/os-release",
+      "stdout": "IMG_VERSION=\"3.28.0.172\"\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; test -f /home/root/xovi/exthome/qt-resource-rebuilder/hashtab \u0026\u0026 echo yes || echo no",
+      "stdout": "yes\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; hexdump -v -e '1/1 \"%02x\"' -n 128 /home/root/xovi/exthome/qt-resource-rebuilder/hashtab",
+      "stdout": "000000000000000000000026486173687461622066696c6520666f7220514d4c444946462e20446f206e6f7420656469742ef45906d1817f42770000000a332e32382e302e3137327e153290a529e3640000001254696d65644f757457696e646f772e716d6c000006710f667c3300000006666c61766f728edde8c51d451693",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; /home/root/.vellum/bin/vellum list -I",
+      "stdout": "appload-0.6.0-r0 aarch64 {appload} (GPL-3.0) [installed]\nbettertoc-1.5.1-r0 aarch64 {bettertoc} (GPL-3.0-only) [installed]\nhide-dev-mode-icon-1.0.2-r7 aarch64 {hide-dev-mode-icon} (MIT) [installed]\nkoreader-2026.07.1-r1 aarch64 {koreader} (AGPL-3.0) [installed]\nmount-utils-1.2.0-r0 aarch64 {mount-utils} (MIT) [installed]\nqt-resource-rebuilder-19.0.0-r4 aarch64 {xovi-extensions} (GPL-3.0) [installed]\nremarkable-os-3.28.0.172-r0 noarch {remarkable-os} (MIT) [installed]\nrmppmove-1.0.0-r0 noarch {rmppmove} (MIT) [installed]\ntripletap-1.1.1-r0 aarch64 {tripletap} (GPL-3.0-only) [installed]\nvellum-0.3.1-r0 aarch64 {vellum} (MIT) [installed]\nvellum-bash-completion-3.0.3-r3 aarch64 {vellum-bash-completion} (GPL-2.0-only) [installed]\nxovi-0.3.3-r2 aarch64 {xovi} (GPL-3.0) [installed]\nxovi-extensions-19.0.0-r4 aarch64 {xovi-extensions} (GPL-3.0) [installed]\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; systemctl is-enabled update-engine.service",
+      "stdout": "disabled\n",
+      "exit": 1
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; systemctl is-active update-engine.service",
+      "stdout": "inactive\n",
+      "exit": 3
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; grep -m1 '^AutoUpdate=' /home/root/.config/remarkable/xochitl.conf",
+      "stdout": "AutoUpdate=false\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; systemctl is-active xochitl; echo @@launcherctl@@; [ -x /home/root/.vellum/bin/launcherctl ] \u0026\u0026 /home/root/.vellum/bin/launcherctl active-launcher 2\u003e/dev/null; echo @@launcherctl@@; [ -x /home/root/.vellum/bin/launcherctl ] \u0026\u0026 /home/root/.vellum/bin/launcherctl current-launcher 2\u003e/dev/null",
+      "stdout": "active\n@@launcherctl@@\n@@launcherctl@@\n",
+      "exit": 1
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; tr '\\0' '\\n' \u003c /proc/$(pidof xochitl)/environ | grep -q LD_PRELOAD.*xovi",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; readlink /etc/localtime | sed 's|.*/zoneinfo/||'",
+      "stdout": "America/Denver\n",
+      "exit": 0
+    },
+    {
+      "command": "PATH=/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin:$PATH swupdate -g",
+      "stdout": "/dev/mmcblk0p3\n",
+      "exit": 0
+    },
+    {
+      "command": "PATH=/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin:$PATH rootdev",
+      "stdout": "/dev/mmcblk0p3\n",
+      "exit": 0
+    },
+    {
+      "command": "mount -o ro /dev/mmcblk0p2 /tmp/mount_p2",
+      "exit": 0
+    },
+    {
+      "command": "umount /tmp/mount_p2",
+      "exit": 0
+    },
+    {
+      "command": "PATH=/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin:$PATH swupdate -g",
+      "stdout": "/dev/mmcblk0p3\n",
+      "exit": 0
+    },
+    {
+      "command": "PATH=/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin:$PATH rootdev",
+      "stdout": "/dev/mmcblk0p3\n",
+      "exit": 0
+    },
+    {
+      "command": "mount -o ro /dev/mmcblk0p2 /tmp/mount_p2",
+      "exit": 0
+    },
+    {
+      "command": "umount /tmp/mount_p2",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; grep '^RELEASE_VERSION=' /usr/share/remarkable/update.conf 2\u003e/dev/null",
+      "exit": 2
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; grep '^IMG_VERSION=' /etc/os-release 2\u003e/dev/null",
+      "stdout": "IMG_VERSION=\"3.28.0.172\"\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; cat /home/root/.vellum/state/osver 2\u003e/dev/null",
+      "stdout": "3.28.0.172",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; echo remanager-pid:$$; /home/root/.vellum/bin/vellum reenable",
+      "stdout": "remanager-pid:4284\nRe-enabling packages after OS upgrade...\nRemounting / as read-write...\nUnmounting /etc overlay...\nSystem ready for modifications\n  tripletap\n  qt-resource-rebuilder\n======================================================\n  NOTE: Before using any QT modifications,\n  you must run: xovi/rebuild_hashtable\n======================================================\nRestoring /etc overlay...\nRemounting / as read-only...\nMounts restored to normal state\nDone.\n",
+      "exit": 0
+    },
+    {
+      "command": "export PATH=/home/root/.vellum/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH; /home/root/.vellum/bin/vellum reenable status",
+      "stdout": "ok\n",
+      "exit": 0
+    }
+  ],
+  "files": [
+    {
+      "op": "read",
+      "path": "/sys/devices/soc0/machine",
+      "content": "cmVNYXJrYWJsZSBDaGlhcHBhCg=="
+    },
+    {
+      "op": "read",
+      "path": "/usr/share/remarkable/update.conf",
+      "notExist": true
+    },
+    {
+      "op": "read",
+      "path": "/etc/os-release",
+      "content": "SUQ9Y29kZXgKTkFNRT0iQ29kZXggTGludXgiClZFUlNJT049IjUuOC4yMDMgKHNjYXJ0aGdhcCkiClZFUlNJT05fSUQ9NS44LjIwMwpWRVJTSU9OX0NPREVOQU1FPSJzY2FydGhnYXAiClBSRVRUWV9OQU1FPSJDb2RleCBMaW51eCA1LjguMjAzIChzY2FydGhnYXApIgpDUEVfTkFNRT0iY3BlOi9vOm9wZW5lbWJlZGRlZDpjb2RleDo1LjguMjAzIgpCVUlMRF9NT0RFX1JNPSJwdWJsaWMiCklNR19WRVJTSU9OPSIzLjI4LjAuMTcyIgo="
+    },
+    {
+      "op": "read",
+      "path": "/usr/share/remarkable/update.conf",
+      "notExist": true
+    },
+    {
+      "op": "read",
+      "path": "/etc/os-release",
+      "content": "SUQ9Y29kZXgKTkFNRT0iQ29kZXggTGludXgiClZFUlNJT049IjUuOC4yMDMgKHNjYXJ0aGdhcCkiClZFUlNJT05fSUQ9NS44LjIwMwpWRVJTSU9OX0NPREVOQU1FPSJzY2FydGhnYXAiClBSRVRUWV9OQU1FPSJDb2RleCBMaW51eCA1LjguMjAzIChzY2FydGhnYXApIgpDUEVfTkFNRT0iY3BlOi9vOm9wZW5lbWJlZGRlZDpjb2RleDo1LjguMjAzIgpCVUlMRF9NT0RFX1JNPSJwdWJsaWMiCklNR19WRVJTSU9OPSIzLjI4LjAuMTcyIgo="
+    },
+    {
+      "op": "read",
+      "path": "/sys/bus/mmc/devices/mmc0:0001/boot_part",
+      "content": "Mgo="
+    },
+    {
+      "op": "read",
+      "path": "/sys/devices/platform/lpgpr/swu_status",
+      "content": "MAo="
+    },
+    {
+      "op": "read",
+      "path": "/usr/share/remarkable/update.conf",
+      "notExist": true
+    },
+    {
+      "op": "read",
+      "path": "/etc/os-release",
+      "content": "SUQ9Y29kZXgKTkFNRT0iQ29kZXggTGludXgiClZFUlNJT049IjUuOC4yMDMgKHNjYXJ0aGdhcCkiClZFUlNJT05fSUQ9NS44LjIwMwpWRVJTSU9OX0NPREVOQU1FPSJzY2FydGhnYXAiClBSRVRUWV9OQU1FPSJDb2RleCBMaW51eCA1LjguMjAzIChzY2FydGhnYXApIgpDUEVfTkFNRT0iY3BlOi9vOm9wZW5lbWJlZGRlZDpjb2RleDo1LjguMjAzIgpCVUlMRF9NT0RFX1JNPSJwdWJsaWMiCklNR19WRVJTSU9OPSIzLjI4LjAuMTcyIgo="
+    },
+    {
+      "op": "stat",
+      "path": "/tmp/mount_p2",
+      "notExist": true
+    },
+    {
+      "op": "stat",
+      "path": "/tmp",
+      "infos": [
+        {
+          "name": "tmp",
+          "size": 440,
+          "mode": 2148532735,
+          "modTime": 1790827544
+        }
+      ]
+    },
+    {
+      "op": "read",
+      "path": "/tmp/mount_p2/usr/share/remarkable/update.conf",
+      "notExist": true
+    },
+    {
+      "op": "read",
+      "path": "/tmp/mount_p2/etc/os-release",
+      "content": "SUQ9Y29kZXgKTkFNRT0iQ29kZXggTGludXgiClZFUlNJT049IjUuNy4xMjYgKHNjYXJ0aGdhcCkiClZFUlNJT05fSUQ9NS43LjEyNgpWRVJTSU9OX0NPREVOQU1FPSJzY2FydGhnYXAiClBSRVRUWV9OQU1FPSJDb2RleCBMaW51eCA1LjcuMTI2IChzY2FydGhnYXApIgpDUEVfTkFNRT0iY3BlOi9vOm9wZW5lbWJlZGRlZDpjb2RleDo1LjcuMTI2IgpCVUlMRF9NT0RFX1JNPSJwdWJsaWMiCklNR19WRVJTSU9OPSIzLjI3LjMuMCIK"
+    },
+    {
+      "op": "stat",
+      "path": "/tmp/mount_p2",
+      "infos": [
+        {
+          "name": "mount_p2",
+          "size": 40,
+          "mode": 2147484141,
+          "modTime": 1790827546
+        }
+      ]
+    },
+    {
+      "op": "list",
+      "path": "/tmp/mount_p2"
+    },
+    {
+      "op": "read",
+      "path": "/proc/mounts",
+      "content": "L2Rldi9yb290IC8gZXh0NCBybyxyZWxhdGltZSAwIDAKZGV2dG1wZnMgL2RldiBkZXZ0bXBmcyBydyxyZWxhdGltZSxzaXplPTkzNzkzMmssbnJfaW5vZGVzPTIzNDQ4Myxtb2RlPTc1NSAwIDAKcHJvYyAvcHJvYyBwcm9jIHJ3LHJlbGF0aW1lIDAgMApzeXNmcyAvc3lzIHN5c2ZzIHJ3LG5vc3VpZCxub2Rldixub2V4ZWMscmVsYXRpbWUgMCAwCnNlY3VyaXR5ZnMgL3N5cy9rZXJuZWwvc2VjdXJpdHkgc2VjdXJpdHlmcyBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lIDAgMAp0bXBmcyAvZGV2L3NobSB0bXBmcyBydyxub3N1aWQsbm9kZXYgMCAwCmRldnB0cyAvZGV2L3B0cyBkZXZwdHMgcncscmVsYXRpbWUsZ2lkPTUsbW9kZT02MjAscHRteG1vZGU9NjY2IDAgMAp0bXBmcyAvcnVuIHRtcGZzIHJ3LG5vc3VpZCxub2RldixzaXplPTQwMTczNmssbnJfaW5vZGVzPTgxOTIwMCxtb2RlPTc1NSAwIDAKdG1wZnMgL3N5cy9mcy9jZ3JvdXAgdG1wZnMgcm8sbm9zdWlkLG5vZGV2LG5vZXhlYyxzaXplPTQwOTZrLG5yX2lub2Rlcz0xMDI0LG1vZGU9NzU1IDAgMApjZ3JvdXAyIC9zeXMvZnMvY2dyb3VwL3VuaWZpZWQgY2dyb3VwMiBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lLG5zZGVsZWdhdGUgMCAwCmNncm91cCAvc3lzL2ZzL2Nncm91cC9zeXN0ZW1kIGNncm91cCBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lLHhhdHRyLG5hbWU9c3lzdGVtZCAwIDAKY2dyb3VwIC9zeXMvZnMvY2dyb3VwL2Jsa2lvIGNncm91cCBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lLGJsa2lvIDAgMApjZ3JvdXAgL3N5cy9mcy9jZ3JvdXAvZGV2aWNlcyBjZ3JvdXAgcncsbm9zdWlkLG5vZGV2LG5vZXhlYyxyZWxhdGltZSxkZXZpY2VzIDAgMApjZ3JvdXAgL3N5cy9mcy9jZ3JvdXAvcGlkcyBjZ3JvdXAgcncsbm9zdWlkLG5vZGV2LG5vZXhlYyxyZWxhdGltZSxwaWRzIDAgMApjZ3JvdXAgL3N5cy9mcy9jZ3JvdXAvY3B1LGNwdWFjY3QgY2dyb3VwIHJ3LG5vc3VpZCxub2Rldixub2V4ZWMscmVsYXRpbWUsY3B1LGNwdWFjY3QgMCAwCmNncm91cCAvc3lzL2ZzL2Nncm91cC9odWdldGxiIGNncm91cCBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lLGh1Z2V0bGIgMCAwCmh1Z2V0bGJmcyAvZGV2L2h1Z2VwYWdlcyBodWdldGxiZnMgcncsbm9zdWlkLG5vZGV2LHJlbGF0aW1lLHBhZ2VzaXplPTJNIDAgMAptcXVldWUgL2Rldi9tcXVldWUgbXF1ZXVlIHJ3LG5vc3VpZCxub2Rldixub2V4ZWMscmVsYXRpbWUgMCAwCmNvbmZpZ2ZzIC9zeXMva2VybmVsL2NvbmZpZyBjb25maWdmcyBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lIDAgMAp0bXBmcyAvdG1wIHRtcGZzIHJ3LG5vc3VpZCxub2RldixzaXplPTEwMDQzMzZrLG5yX2lub2Rlcz0xMDQ4NTc2IDAgMAp0bXBmcyAvdmFyL3ZvbGF0aWxlIHRtcGZzIHJ3LHJlbGF0aW1lIDAgMApvdmVybGF5IC92YXIvY2FjaGUgb3ZlcmxheSBydyxyZWxhdGltZSxsb3dlcmRpcj0vdmFyL2NhY2hlLHVwcGVyZGlyPS92YXIvdm9sYXRpbGUvY2FjaGUsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5jYWNoZS13b3JrLHV1aWQ9b24gMCAwCm92ZXJsYXkgL2V0YyBvdmVybGF5IHJ3LHJlbGF0aW1lLGxvd2VyZGlyPS9ldGMsdXBwZXJkaXI9L3Zhci92b2xhdGlsZS9ldGMsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5ldGMtd29yayx1dWlkPW9uIDAgMApvdmVybGF5IC92YXIvbGliIG92ZXJsYXkgcncscmVsYXRpbWUsbG93ZXJkaXI9L3Zhci9saWIsdXBwZXJkaXI9L3Zhci92b2xhdGlsZS9saWIsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5saWItd29yayx1dWlkPW9uIDAgMApvdmVybGF5IC92YXIvc3Bvb2wgb3ZlcmxheSBydyxyZWxhdGltZSxsb3dlcmRpcj0vdmFyL3Nwb29sLHVwcGVyZGlyPS92YXIvdm9sYXRpbGUvc3Bvb2wsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5zcG9vbC13b3JrLHV1aWQ9b24gMCAwCm92ZXJsYXkgL3NydiBvdmVybGF5IHJ3LHJlbGF0aW1lLGxvd2VyZGlyPS9zcnYsdXBwZXJkaXI9L3Zhci92b2xhdGlsZS9zcnYsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5zcnYtd29yayx1dWlkPW9uIDAgMAovZGV2L21tY2JsazBwMSAvZGF0YSBleHQ0IHJ3LHN5bmMscmVsYXRpbWUsbm9kaW9yZWFkX25vbG9jayxub2RlbGFsbG9jLGRhdGE9am91cm5hbCAwIDAKL2Rldi9tYXBwZXIvcGVyc2lzdCAvdmFyL2xpYi9yZW1hcmthYmxlIGV4dDQgcm8scmVsYXRpbWUgMCAwCi9kZXYvbWFwcGVyL2hvbWUtZW5jcnlwdGVkLWRpc2sgL2hvbWUgZXh0NCBydyxyZWxhdGltZSAwIDAKL2Rldi9tYXBwZXIvaG9tZS1lbmNyeXB0ZWQtZGlzayAvZXRjL2Ryb3BiZWFyIGV4dDQgcncscmVsYXRpbWUgMCAwCi9kZXYvbWFwcGVyL2hvbWUtZW5jcnlwdGVkLWRpc2sgL3Zhci9saWIvTmV0d29ya01hbmFnZXIgZXh0NCBydyxyZWxhdGltZSAwIDAKL2Rldi9tYXBwZXIvaG9tZS1lbmNyeXB0ZWQtZGlzayAvdmFyL2xpYi9ibHVldG9vdGggZXh0NCBydyxyZWxhdGltZSAwIDAKL2Rldi9tYXBwZXIvaG9tZS1lbmNyeXB0ZWQtZGlzayAvdmFyL2xvZy9qb3VybmFsIGV4dDQgcncscmVsYXRpbWUgMCAwCnRtcGZzIC9ldGMvc3lzdGVtZC9zeXN0ZW0veG9jaGl0bC5zZXJ2aWNlLmQgdG1wZnMgcncscmVsYXRpbWUgMCAwCg=="
+    },
+    {
+      "op": "read",
+      "path": "/sys/devices/platform/lpgpr/swu_status",
+      "content": "MAo="
+    },
+    {
+      "op": "read",
+      "path": "/usr/share/remarkable/update.conf",
+      "notExist": true
+    },
+    {
+      "op": "read",
+      "path": "/etc/os-release",
+      "content": "SUQ9Y29kZXgKTkFNRT0iQ29kZXggTGludXgiClZFUlNJT049IjUuOC4yMDMgKHNjYXJ0aGdhcCkiClZFUlNJT05fSUQ9NS44LjIwMwpWRVJTSU9OX0NPREVOQU1FPSJzY2FydGhnYXAiClBSRVRUWV9OQU1FPSJDb2RleCBMaW51eCA1LjguMjAzIChzY2FydGhnYXApIgpDUEVfTkFNRT0iY3BlOi9vOm9wZW5lbWJlZGRlZDpjb2RleDo1LjguMjAzIgpCVUlMRF9NT0RFX1JNPSJwdWJsaWMiCklNR19WRVJTSU9OPSIzLjI4LjAuMTcyIgo="
+    },
+    {
+      "op": "read",
+      "path": "/sys/bus/mmc/devices/mmc0:0001/boot_part",
+      "content": "Mgo="
+    },
+    {
+      "op": "read",
+      "path": "/sys/devices/platform/lpgpr/swu_status",
+      "content": "MAo="
+    },
+    {
+      "op": "read",
+      "path": "/usr/share/remarkable/update.conf",
+      "notExist": true
+    },
+    {
+      "op": "read",
+      "path": "/etc/os-release",
+      "content": "SUQ9Y29kZXgKTkFNRT0iQ29kZXggTGludXgiClZFUlNJT049IjUuOC4yMDMgKHNjYXJ0aGdhcCkiClZFUlNJT05fSUQ9NS44LjIwMwpWRVJTSU9OX0NPREVOQU1FPSJzY2FydGhnYXAiClBSRVRUWV9OQU1FPSJDb2RleCBMaW51eCA1LjguMjAzIChzY2FydGhnYXApIgpDUEVfTkFNRT0iY3BlOi9vOm9wZW5lbWJlZGRlZDpjb2RleDo1LjguMjAzIgpCVUlMRF9NT0RFX1JNPSJwdWJsaWMiCklNR19WRVJTSU9OPSIzLjI4LjAuMTcyIgo="
+    },
+    {
+      "op": "stat",
+      "path": "/tmp/mount_p2",
+      "notExist": true
+    },
+    {
+      "op": "stat",
+      "path": "/tmp",
+      "infos": [
+        {
+          "name": "tmp",
+          "size": 440,
+          "mode": 2148532735,
+          "modTime": 1790827546
+        }
+      ]
+    },
+    {
+      "op": "read",
+      "path": "/tmp/mount_p2/usr/share/remarkable/update.conf",
+      "notExist": true
+    },
+    {
+      "op": "read",
+      "path": "/tmp/mount_p2/etc/os-release",
+      "content": "SUQ9Y29kZXgKTkFNRT0iQ29kZXggTGludXgiClZFUlNJT049IjUuNy4xMjYgKHNjYXJ0aGdhcCkiClZFUlNJT05fSUQ9NS43LjEyNgpWRVJTSU9OX0NPREVOQU1FPSJzY2FydGhnYXAiClBSRVRUWV9OQU1FPSJDb2RleCBMaW51eCA1LjcuMTI2IChzY2FydGhnYXApIgpDUEVfTkFNRT0iY3BlOi9vOm9wZW5lbWJlZGRlZDpjb2RleDo1LjcuMTI2IgpCVUlMRF9NT0RFX1JNPSJwdWJsaWMiCklNR19WRVJTSU9OPSIzLjI3LjMuMCIK"
+    },
+    {
+      "op": "stat",
+      "path": "/tmp/mount_p2",
+      "infos": [
+        {
+          "name": "mount_p2",
+          "size": 40,
+          "mode": 2147484141,
+          "modTime": 1790827546
+        }
+      ]
+    },
+    {
+      "op": "list",
+      "path": "/tmp/mount_p2"
+    },
+    {
+      "op": "read",
+      "path": "/proc/mounts",
+      "content": "L2Rldi9yb290IC8gZXh0NCBybyxyZWxhdGltZSAwIDAKZGV2dG1wZnMgL2RldiBkZXZ0bXBmcyBydyxyZWxhdGltZSxzaXplPTkzNzkzMmssbnJfaW5vZGVzPTIzNDQ4Myxtb2RlPTc1NSAwIDAKcHJvYyAvcHJvYyBwcm9jIHJ3LHJlbGF0aW1lIDAgMApzeXNmcyAvc3lzIHN5c2ZzIHJ3LG5vc3VpZCxub2Rldixub2V4ZWMscmVsYXRpbWUgMCAwCnNlY3VyaXR5ZnMgL3N5cy9rZXJuZWwvc2VjdXJpdHkgc2VjdXJpdHlmcyBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lIDAgMAp0bXBmcyAvZGV2L3NobSB0bXBmcyBydyxub3N1aWQsbm9kZXYgMCAwCmRldnB0cyAvZGV2L3B0cyBkZXZwdHMgcncscmVsYXRpbWUsZ2lkPTUsbW9kZT02MjAscHRteG1vZGU9NjY2IDAgMAp0bXBmcyAvcnVuIHRtcGZzIHJ3LG5vc3VpZCxub2RldixzaXplPTQwMTczNmssbnJfaW5vZGVzPTgxOTIwMCxtb2RlPTc1NSAwIDAKdG1wZnMgL3N5cy9mcy9jZ3JvdXAgdG1wZnMgcm8sbm9zdWlkLG5vZGV2LG5vZXhlYyxzaXplPTQwOTZrLG5yX2lub2Rlcz0xMDI0LG1vZGU9NzU1IDAgMApjZ3JvdXAyIC9zeXMvZnMvY2dyb3VwL3VuaWZpZWQgY2dyb3VwMiBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lLG5zZGVsZWdhdGUgMCAwCmNncm91cCAvc3lzL2ZzL2Nncm91cC9zeXN0ZW1kIGNncm91cCBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lLHhhdHRyLG5hbWU9c3lzdGVtZCAwIDAKY2dyb3VwIC9zeXMvZnMvY2dyb3VwL2Jsa2lvIGNncm91cCBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lLGJsa2lvIDAgMApjZ3JvdXAgL3N5cy9mcy9jZ3JvdXAvZGV2aWNlcyBjZ3JvdXAgcncsbm9zdWlkLG5vZGV2LG5vZXhlYyxyZWxhdGltZSxkZXZpY2VzIDAgMApjZ3JvdXAgL3N5cy9mcy9jZ3JvdXAvcGlkcyBjZ3JvdXAgcncsbm9zdWlkLG5vZGV2LG5vZXhlYyxyZWxhdGltZSxwaWRzIDAgMApjZ3JvdXAgL3N5cy9mcy9jZ3JvdXAvY3B1LGNwdWFjY3QgY2dyb3VwIHJ3LG5vc3VpZCxub2Rldixub2V4ZWMscmVsYXRpbWUsY3B1LGNwdWFjY3QgMCAwCmNncm91cCAvc3lzL2ZzL2Nncm91cC9odWdldGxiIGNncm91cCBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lLGh1Z2V0bGIgMCAwCmh1Z2V0bGJmcyAvZGV2L2h1Z2VwYWdlcyBodWdldGxiZnMgcncsbm9zdWlkLG5vZGV2LHJlbGF0aW1lLHBhZ2VzaXplPTJNIDAgMAptcXVldWUgL2Rldi9tcXVldWUgbXF1ZXVlIHJ3LG5vc3VpZCxub2Rldixub2V4ZWMscmVsYXRpbWUgMCAwCmNvbmZpZ2ZzIC9zeXMva2VybmVsL2NvbmZpZyBjb25maWdmcyBydyxub3N1aWQsbm9kZXYsbm9leGVjLHJlbGF0aW1lIDAgMAp0bXBmcyAvdG1wIHRtcGZzIHJ3LG5vc3VpZCxub2RldixzaXplPTEwMDQzMzZrLG5yX2lub2Rlcz0xMDQ4NTc2IDAgMAp0bXBmcyAvdmFyL3ZvbGF0aWxlIHRtcGZzIHJ3LHJlbGF0aW1lIDAgMApvdmVybGF5IC92YXIvY2FjaGUgb3ZlcmxheSBydyxyZWxhdGltZSxsb3dlcmRpcj0vdmFyL2NhY2hlLHVwcGVyZGlyPS92YXIvdm9sYXRpbGUvY2FjaGUsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5jYWNoZS13b3JrLHV1aWQ9b24gMCAwCm92ZXJsYXkgL2V0YyBvdmVybGF5IHJ3LHJlbGF0aW1lLGxvd2VyZGlyPS9ldGMsdXBwZXJkaXI9L3Zhci92b2xhdGlsZS9ldGMsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5ldGMtd29yayx1dWlkPW9uIDAgMApvdmVybGF5IC92YXIvbGliIG92ZXJsYXkgcncscmVsYXRpbWUsbG93ZXJkaXI9L3Zhci9saWIsdXBwZXJkaXI9L3Zhci92b2xhdGlsZS9saWIsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5saWItd29yayx1dWlkPW9uIDAgMApvdmVybGF5IC92YXIvc3Bvb2wgb3ZlcmxheSBydyxyZWxhdGltZSxsb3dlcmRpcj0vdmFyL3Nwb29sLHVwcGVyZGlyPS92YXIvdm9sYXRpbGUvc3Bvb2wsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5zcG9vbC13b3JrLHV1aWQ9b24gMCAwCm92ZXJsYXkgL3NydiBvdmVybGF5IHJ3LHJlbGF0aW1lLGxvd2VyZGlyPS9zcnYsdXBwZXJkaXI9L3Zhci92b2xhdGlsZS9zcnYsd29ya2Rpcj0vdmFyL3ZvbGF0aWxlLy5zcnYtd29yayx1dWlkPW9uIDAgMAovZGV2L21tY2JsazBwMSAvZGF0YSBleHQ0IHJ3LHN5bmMscmVsYXRpbWUsbm9kaW9yZWFkX25vbG9jayxub2RlbGFsbG9jLGRhdGE9am91cm5hbCAwIDAKL2Rldi9tYXBwZXIvcGVyc2lzdCAvdmFyL2xpYi9yZW1hcmthYmxlIGV4dDQgcm8scmVsYXRpbWUgMCAwCi9kZXYvbWFwcGVyL2hvbWUtZW5jcnlwdGVkLWRpc2sgL2hvbWUgZXh0NCBydyxyZWxhdGltZSAwIDAKL2Rldi9tYXBwZXIvaG9tZS1lbmNyeXB0ZWQtZGlzayAvZXRjL2Ryb3BiZWFyIGV4dDQgcncscmVsYXRpbWUgMCAwCi9kZXYvbWFwcGVyL2hvbWUtZW5jcnlwdGVkLWRpc2sgL3Zhci9saWIvTmV0d29ya01hbmFnZXIgZXh0NCBydyxyZWxhdGltZSAwIDAKL2Rldi9tYXBwZXIvaG9tZS1lbmNyeXB0ZWQtZGlzayAvdmFyL2xpYi9ibHVldG9vdGggZXh0NCBydyxyZWxhdGltZSAwIDAKL2Rldi9tYXBwZXIvaG9tZS1lbmNyeXB0ZWQtZGlzayAvdmFyL2xvZy9qb3VybmFsIGV4dDQgcncscmVsYXRpbWUgMCAwCnRtcGZzIC9ldGMvc3lzdGVtZC9zeXN0ZW0veG9jaGl0bC5zZXJ2aWNlLmQgdG1wZnMgcncscmVsYXRpbWUgMCAwCg=="
+    },
+    {
+      "op": "read",
+      "path": "/sys/devices/platform/lpgpr/swu_status",
+      "content": "MAo="
+    }
+  ]
+}

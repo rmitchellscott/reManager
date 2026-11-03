@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="wails_blue">#3574D4</color>
+    <!-- The frontend's background token, so the splash and the window behind the
+         WebView match the first painted page. values-night holds the dark one. -->
+    <color name="app_background">#FFFFFFFF</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="black">#FF000000</color>
+</resources>

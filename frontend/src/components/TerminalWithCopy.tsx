@@ -1,7 +1,7 @@
+import { CheckCircle, Copy } from '@phosphor-icons/react'
 import { Terminal } from './Terminal'
 import { Button } from './ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip'
-import { Copy, CopyCheck } from 'lucide-react'
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
 
 interface TerminalWithCopyProps {
@@ -25,14 +25,14 @@ export function TerminalWithCopy({ output, theme }: TerminalWithCopyProps) {
               className="h-8 w-8 bg-background/95 backdrop-blur-sm hover:bg-background"
             >
               {isCopied ? (
-                <CopyCheck className="h-4 w-4" />
+                <CheckCircle className="h-4 w-4" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            {isCopied ? 'Copied!' : 'Copy output'}
+            {isCopied ? 'Copied' : 'Copy output'}
           </TooltipContent>
         </Tooltip>
       </div>

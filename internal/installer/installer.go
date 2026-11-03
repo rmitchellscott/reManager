@@ -65,7 +65,7 @@ func (i *Installer) Install(
 			TotalComponents:  len(packageNames),
 			CurrentIndex:     0,
 			Status:           executor.StatusInstalling,
-			Message:          "Installing packages...",
+			Message:          "Installing packages…",
 		})
 	}
 
@@ -82,6 +82,15 @@ func (i *Installer) Install(
 		}
 
 		if idx, total, pkgName := parseInstallProgress(line); pkgName != "" {
+			// apk installs one package at a time, so announcing the next means the previous one is done.
+			if currentPkg != "" && onProgress != nil {
+				onProgress(executor.ProgressInfo{
+					CurrentComponent: currentPkg,
+					TotalComponents:  total,
+					CurrentIndex:     currentIdx,
+					Status:           executor.StatusCompleted,
+				})
+			}
 			currentPkg = pkgName
 			currentIdx = idx - 1
 			if onProgress != nil {
@@ -90,7 +99,7 @@ func (i *Installer) Install(
 					TotalComponents:  total,
 					CurrentIndex:     currentIdx,
 					Status:           executor.StatusInstalling,
-					Message:          fmt.Sprintf("Installing %s (%d/%d)...", pkgName, idx, total),
+					Message:          fmt.Sprintf("Installing %s (%d/%d)…", pkgName, idx, total),
 				})
 			}
 		} else if onProgress != nil && currentPkg != "" {
@@ -117,20 +126,25 @@ func (i *Installer) Install(
 				Message:          errMsg,
 			})
 		}
+		// A hook for a package apk did not install would act on something not there, such as a hashtable for a missing xovi.
+		return InstallResult{Success: false, Errors: errors, DNSError: dnsError}
 	} else {
 		debug.Printf("[DEBUG] All packages installed successfully\n")
 		if onProgress != nil {
+			lastPkg, lastIdx := currentPkg, currentIdx
+			if lastPkg == "" {
+				lastPkg, lastIdx = packageNames[len(packageNames)-1], len(packageNames)-1
+			}
 			onProgress(executor.ProgressInfo{
-				CurrentComponent: packageNames[len(packageNames)-1],
+				CurrentComponent: lastPkg,
 				TotalComponents:  len(packageNames),
-				CurrentIndex:     len(packageNames) - 1,
+				CurrentIndex:     lastIdx,
 				Status:           executor.StatusCompleted,
-				Message:          "All packages installed successfully",
+				Message:          "All packages installed",
 			})
 		}
 	}
 
-	// Run postInstall hooks for ALL packages (including dependencies)
 	for _, pkgName := range allPackages {
 		hooks := i.metadata.GetHooks(pkgName)
 		if hooks != nil && hooks.PostInstall != "" {
@@ -139,19 +153,19 @@ func (i *Installer) Install(
 				debug.Printf("[DEBUG] Running postInstall hook for %s\n", pkgName)
 				hookResult, err := hookFunc(ctx)
 				if err != nil {
-					errors = append(errors, fmt.Sprintf("Post-install hook failed for %s: %v", pkgName, err))
+					errors = append(errors, fmt.Sprintf("Post-install script failed for %s: %v", pkgName, err))
 					continue
 				}
 				if hookResult != nil && hookResult.DialogConfig != nil {
 					hookResult.DialogConfig.InstallFlow = true
-					hookResult.DialogConfig.Title = "Build Hashtable"
+					hookResult.DialogConfig.Title = "Build hashtable"
 					hookResult.DialogConfig.ConfirmText = "Build"
 					hookResult.DialogConfig.CancelText = "Later"
 				}
 				if hookResult != nil && onHook != nil {
 					if err := onHook(hookResult); err != nil {
 						if err != ErrHookDeclined {
-							errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))
+							errors = append(errors, fmt.Sprintf("Script callback failed for %s: %v", pkgName, err))
 						}
 						continue
 					}
@@ -180,7 +194,6 @@ func (i *Installer) Uninstall(
 
 	debug.Printf("[DEBUG] Uninstall starting for packages: %v (all: %v, recursive: %v, batch: %v)\n", packageNames, allPackages, useRecursive, batch)
 
-	// Run preUninstall hooks for ALL packages first (before any actual uninstall)
 	for _, pkgName := range allPackages {
 		hooks := i.metadata.GetHooks(pkgName)
 		if hooks != nil && hooks.PreUninstall != "" {
@@ -189,13 +202,13 @@ func (i *Installer) Uninstall(
 				debug.Printf("[DEBUG] Running preUninstall hook for %s\n", pkgName)
 				hookResult, err := hookFunc(ctx)
 				if err != nil {
-					errors = append(errors, fmt.Sprintf("Pre-uninstall hook failed for %s: %v", pkgName, err))
+					errors = append(errors, fmt.Sprintf("Pre-removal script failed for %s: %v", pkgName, err))
 					continue
 				}
 				if hookResult != nil && onHook != nil {
 					if err := onHook(hookResult); err != nil {
 						if err != ErrHookDeclined {
-							errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))
+							errors = append(errors, fmt.Sprintf("Script callback failed for %s: %v", pkgName, err))
 						}
 						continue
 					}
@@ -204,6 +217,7 @@ func (i *Installer) Uninstall(
 		}
 	}
 
+	errorsBeforeRemoval := len(errors)
 	if batch {
 		label := strings.Join(packageNames, ", ")
 		if onProgress != nil {
@@ -212,7 +226,7 @@ func (i *Installer) Uninstall(
 				TotalComponents:  1,
 				CurrentIndex:     0,
 				Status:           executor.StatusInstalling,
-				Message:          fmt.Sprintf("Uninstalling %d packages...", len(packageNames)),
+				Message:          fmt.Sprintf("Removing %d packages…", len(packageNames)),
 			})
 		}
 
@@ -231,7 +245,7 @@ func (i *Installer) Uninstall(
 		}, packageNames...)
 
 		if err != nil {
-			errMsg := fmt.Sprintf("Uninstall failed: %s", diagnostics.explain(err))
+			errMsg := fmt.Sprintf("Removal failed: %s", diagnostics.explain(err))
 			errors = append(errors, errMsg)
 			reportError(onProgress, label, 1, 0, errMsg)
 		} else if onProgress != nil {
@@ -240,11 +254,12 @@ func (i *Installer) Uninstall(
 				TotalComponents:  1,
 				CurrentIndex:     0,
 				Status:           executor.StatusCompleted,
-				Message:          "Packages uninstalled successfully",
+				Message:          "Packages removed",
 			})
 		}
+	} else if !useRecursive {
+		i.uninstallTogether(packageNames, onProgress, &errors)
 	} else {
-		// Perform actual uninstall for requested packages one at a time
 		removed := map[string]bool{}
 		for idx, pkgName := range packageNames {
 			pkg := i.metadata.GetPackage(pkgName)
@@ -272,48 +287,29 @@ func (i *Installer) Uninstall(
 					TotalComponents:  len(packageNames),
 					CurrentIndex:     idx,
 					Status:           executor.StatusInstalling,
-					Message:          fmt.Sprintf("Uninstalling %s...", displayName),
+					Message:          fmt.Sprintf("Removing %s…", displayName),
 				})
 			}
 
 			var perPkgDiagnostics vellumDiagnostics
-			var err error
-			if useRecursive {
-				err = i.vellum.DelRecursiveStreaming(func(line string) {
-					perPkgDiagnostics.observe(line)
-					if name := parsePurgedPackage(line); name != "" {
-						removed[name] = true
-					}
-					if onProgress != nil {
-						onProgress(executor.ProgressInfo{
-							CurrentComponent: displayName,
-							TotalComponents:  len(packageNames),
-							CurrentIndex:     idx,
-							Status:           executor.StatusInstalling,
-							Message:          line,
-						})
-					}
-				}, pkgName)
-			} else {
-				err = i.vellum.DelStreaming(func(line string) {
-					perPkgDiagnostics.observe(line)
-					if name := parsePurgedPackage(line); name != "" {
-						removed[name] = true
-					}
-					if onProgress != nil {
-						onProgress(executor.ProgressInfo{
-							CurrentComponent: displayName,
-							TotalComponents:  len(packageNames),
-							CurrentIndex:     idx,
-							Status:           executor.StatusInstalling,
-							Message:          line,
-						})
-					}
-				}, pkgName)
-			}
+			err := i.vellum.DelRecursiveStreaming(func(line string) {
+				perPkgDiagnostics.observe(line)
+				if name := parsePurgedPackage(line); name != "" {
+					removed[name] = true
+				}
+				if onProgress != nil {
+					onProgress(executor.ProgressInfo{
+						CurrentComponent: displayName,
+						TotalComponents:  len(packageNames),
+						CurrentIndex:     idx,
+						Status:           executor.StatusInstalling,
+						Message:          line,
+					})
+				}
+			}, pkgName)
 
 			if err != nil {
-				errMsg := fmt.Sprintf("Uninstall failed for %s: %s", displayName, perPkgDiagnostics.explain(err))
+				errMsg := fmt.Sprintf("Could not remove %s: %s", displayName, perPkgDiagnostics.explain(err))
 				errors = append(errors, errMsg)
 				reportError(onProgress, displayName, len(packageNames), idx, errMsg)
 				continue
@@ -325,13 +321,16 @@ func (i *Installer) Uninstall(
 					TotalComponents:  len(packageNames),
 					CurrentIndex:     idx,
 					Status:           executor.StatusCompleted,
-					Message:          fmt.Sprintf("%s uninstalled successfully", displayName),
+					Message:          fmt.Sprintf("%s removed", displayName),
 				})
 			}
 		}
 	}
 
-	// Run postUninstall hooks for ALL packages (including orphaned deps)
+	if len(errors) > errorsBeforeRemoval {
+		return InstallResult{Success: false, Errors: errors}
+	}
+
 	for _, pkgName := range allPackages {
 		hooks := i.metadata.GetHooks(pkgName)
 		if hooks != nil && hooks.PostUninstall != "" {
@@ -340,13 +339,13 @@ func (i *Installer) Uninstall(
 				debug.Printf("[DEBUG] Running postUninstall hook for %s\n", pkgName)
 				hookResult, err := hookFunc(ctx)
 				if err != nil {
-					errors = append(errors, fmt.Sprintf("Post-uninstall hook failed for %s: %v", pkgName, err))
+					errors = append(errors, fmt.Sprintf("Post-removal script failed for %s: %v", pkgName, err))
 					continue
 				}
 				if hookResult != nil && onHook != nil {
 					if err := onHook(hookResult); err != nil {
 						if err != ErrHookDeclined {
-							errors = append(errors, fmt.Sprintf("Hook callback failed for %s: %v", pkgName, err))
+							errors = append(errors, fmt.Sprintf("Script callback failed for %s: %v", pkgName, err))
 						}
 						continue
 					}
@@ -358,6 +357,67 @@ func (i *Installer) Uninstall(
 	return InstallResult{
 		Success: len(errors) == 0,
 		Errors:  errors,
+	}
+}
+
+// One apk transaction: removing packages one at a time fails when an earlier one is still needed by a later one (appload before pitwall).
+func (i *Installer) uninstallTogether(packageNames []string, onProgress executor.ProgressCallback, errors *[]string) {
+	index := make(map[string]int, len(packageNames))
+	for idx, name := range packageNames {
+		index[name] = idx
+	}
+	removed := map[string]bool{}
+	nextPending := func() string {
+		for _, name := range packageNames {
+			if !removed[name] {
+				return name
+			}
+		}
+		return ""
+	}
+	report := func(name string, status executor.ProgressStatus, message string) {
+		if onProgress != nil {
+			onProgress(executor.ProgressInfo{
+				CurrentComponent: name,
+				TotalComponents:  len(packageNames),
+				CurrentIndex:     index[name],
+				Status:           status,
+				Message:          message,
+			})
+		}
+	}
+
+	report(packageNames[0], executor.StatusInstalling, fmt.Sprintf("Removing %s…", strings.Join(packageNames, ", ")))
+
+	var diagnostics vellumDiagnostics
+	err := i.vellum.DelStreaming(func(line string) {
+		diagnostics.observe(line)
+		if name := parsePurgedPackage(line); name != "" {
+			if _, requested := index[name]; requested && !removed[name] {
+				removed[name] = true
+				report(name, executor.StatusCompleted, fmt.Sprintf("%s removed", name))
+				return
+			}
+		}
+		if pending := nextPending(); pending != "" {
+			report(pending, executor.StatusInstalling, line)
+		}
+	}, packageNames...)
+
+	if err != nil {
+		errMsg := fmt.Sprintf("Could not remove %s: %s", strings.Join(packageNames, ", "), diagnostics.explain(err))
+		*errors = append(*errors, errMsg)
+		for _, name := range packageNames {
+			if !removed[name] {
+				report(name, executor.StatusError, errMsg)
+			}
+		}
+		return
+	}
+	for _, name := range packageNames {
+		if !removed[name] {
+			report(name, executor.StatusCompleted, fmt.Sprintf("%s removed", name))
+		}
 	}
 }
 
