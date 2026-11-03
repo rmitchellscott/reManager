@@ -233,6 +233,12 @@ export function ModsTab({
   const [queueConflict, setQueueConflict] = useState<{ entries: QueueConflictEntry[]; detail: string } | null>(null)
   const queueConflicts = queueConflict?.entries ?? []
   const [impliedPackages, setImpliedPackages] = useState<Set<string>>(new Set())
+  const [solvedUpgrades, setSolvedUpgrades] = useState<Map<string, UpgradeCandidate>>(new Map())
+  // A staged upgrade runs before the install phase, so by then apk has nothing left to move.
+  const impliedUpgrades = useMemo(
+    () => new Map([...solvedUpgrades].filter(([name]) => !upgradeQueue.has(name))),
+    [solvedUpgrades, upgradeQueue],
+  )
 
   const keptProviders = async (queue: string[], providers: Record<string, string>): Promise<Record<string, string>> => {
     const kept: Record<string, string> = {}
@@ -252,6 +258,7 @@ export function ModsTab({
     if (connectionStatus !== 'connected' || installQueue.size === 0) {
       setQueueConflict(null)
       setImpliedPackages(new Set())
+      setSolvedUpgrades(new Map())
       setOpenQuestions([])
       setWaiting(new Set())
       setInstallSolving(false)
@@ -302,6 +309,9 @@ export function ModsTab({
         const answered = [...Object.values(installAnswers.providers), ...installAnswers.companions]
         setImpliedPackages(new Set(
           (sim && !sim.error ? tree : answered).filter(name => !installQueue.has(name) && !installedPackages.has(name))
+        ))
+        setSolvedUpgrades(new Map(
+          [...upgradeCandidateMap(sim && !sim.error ? sim.upgrades : null)].filter(([name]) => !installQueue.has(name))
         ))
         if (!sim?.error) setQueueError(null)
         setInstallSolving(false)
@@ -376,8 +386,8 @@ export function ModsTab({
   }, [subTab, searching])
 
   useEffect(() => {
-    setPlanSolve?.({ implied: impliedPackages.size, impliedRemovals: impliedRemovals.size, conflict: queueConflict !== null, openQuestions: openQuestions.length })
-  }, [impliedPackages.size, impliedRemovals.size, queueConflict, openQuestions.length, setPlanSolve])
+    setPlanSolve?.({ implied: impliedPackages.size + impliedUpgrades.size, impliedRemovals: impliedRemovals.size, conflict: queueConflict !== null, openQuestions: openQuestions.length })
+  }, [impliedPackages.size, impliedUpgrades.size, impliedRemovals.size, queueConflict, openQuestions.length, setPlanSolve])
   useEffect(() => () => setPlanSolve?.(noPlanSolveFacts), [setPlanSolve])
 
   useEffect(() => { setPlanOpen?.(planSheetOpen) }, [planSheetOpen, setPlanOpen])
@@ -622,13 +632,14 @@ export function ModsTab({
 
     const implied = [...impliedPackages]
     const planned = [...installs.filter(name => installQueue.has(name)), ...implied]
+    const impliedUpgrade = installs.length ? new Map(impliedUpgrades) : new Map<string, UpgradeCandidate>()
     const installFirst = removals.length > 0 && removalInstallFirst
     const impliedRemove = removals.length ? [...impliedRemovals] : []
     const plannedRemovals = [...removals, ...impliedRemove]
 
     stagedAtResultRef.current = null
     setApplySnapshot({
-      remove: plannedRemovals, upgrade: upgrades, install: planned, implied, impliedRemove,
+      remove: plannedRemovals, upgrade: upgrades, install: planned, implied, impliedRemove, impliedUpgrade,
       sync: syncTo ? { to: syncTo, targets: syncTargets } : undefined,
     })
     setApplyResult(null)
@@ -719,7 +730,7 @@ export function ModsTab({
       return settle(result, 'upgrade')
     } }
     const installPhase: Phase = { names: installs, run: async () => {
-      const result = await runPhase(planned, id => PackagesService.InstallPackages(id, installs, installs, device), true)
+      const result = await runPhase([...planned, ...impliedUpgrade.keys()], id => PackagesService.InstallPackages(id, installs, installs, device), true)
       await refreshAfterPackageChange(!!result.install?.dnsError)
       return settle(result, 'install')
     } }
@@ -814,8 +825,8 @@ export function ModsTab({
 
   const applyNumbers = useMemo(() => {
     if (!applySnapshot) return null
-    const names = [...applySnapshot.remove, ...applySnapshot.upgrade, ...applySnapshot.install]
-    const implied = new Set([...applySnapshot.implied, ...applySnapshot.impliedRemove])
+    const names = [...applySnapshot.remove, ...applySnapshot.upgrade, ...applySnapshot.impliedUpgrade.keys(), ...applySnapshot.install]
+    const implied = new Set([...applySnapshot.implied, ...applySnapshot.impliedRemove, ...applySnapshot.impliedUpgrade.keys()])
     const requested = names.filter(name => !implied.has(name))
     const settled = (name: string) => applyProgress.done.has(name) || applyProgress.failed.has(name)
     return {
@@ -889,17 +900,18 @@ export function ModsTab({
     }
     const removals = uninstallQueue.size + impliedRemovals.size
     const installs = installQueue.size + impliedPackages.size
+    const upgrades = upgradeQueue.size + impliedUpgrades.size
     const counted = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
     const summary = [
       removals && counted(removals, 'removal', 'removals'),
-      upgradeQueue.size && counted(upgradeQueue.size, 'upgrade', 'upgrades'),
+      upgrades && counted(upgrades, 'upgrade', 'upgrades'),
       installs && counted(installs, 'install', 'installs'),
     ].filter(Boolean).join(' · ')
     const detail = queueConflict !== null ? <span className="text-destructive">Remove one of the conflicting mods to apply.</span>
       : openQuestions.length > 0 ? <span className="text-[var(--warning-text)]">{openQuestions.length === 1 ? 'A question' : `${openQuestions.length} questions`} to answer</span>
       : summary
     return { ...base, bump: planBump, wash: planWash, title: 'Changes', count: planCount, detail }
-  }, [planBarVisible, planLevel, openPlan, finishApply, applySnapshot, applyNumbers, applyResult, uninstallQueue.size, impliedRemovals.size, installQueue.size, impliedPackages.size, upgradeQueue.size, queueConflict, openQuestions.length, planCount, planBump, planWash])
+  }, [planBarVisible, planLevel, openPlan, finishApply, applySnapshot, applyNumbers, applyResult, uninstallQueue.size, impliedRemovals.size, installQueue.size, impliedPackages.size, upgradeQueue.size, impliedUpgrades.size, queueConflict, openQuestions.length, planCount, planBump, planWash])
 
   // Layout effect so the bar lands in the same paint as the queue change that App already turned into the mods dot.
   useLayoutEffect(() => { setPlanBar?.(planBarModel) }, [planBarModel, setPlanBar])
@@ -948,6 +960,7 @@ export function ModsTab({
       uninstallQueue={uninstallQueue}
       impliedPackages={impliedPackages}
       impliedRemovals={impliedRemovals}
+      impliedUpgrades={impliedUpgrades}
       upgradeCandidates={upgradeCandidates}
       questions={showOsMismatch ? undefined : planQuestions}
       resolutionFailure={!showOsMismatch && queueConflict && conflictNotes.size === 0 ? queueConflict.detail : null}

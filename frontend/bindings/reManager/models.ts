@@ -218,6 +218,7 @@ export interface InstallSimulationResult {
     "error"?: string;
     "conflicts"?: vellum$0.QueueConflictEntry[] | null;
     "unresolvedVirtuals"?: string[] | null;
+    "upgrades"?: { [_ in string]?: UpgradeCandidate } | null;
 }
 
 export enum InstallStatus {
