@@ -1,4 +1,4 @@
-//go:build !android
+//go:build !android && !linux && !windows
 
 package main
 
