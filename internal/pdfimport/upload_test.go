@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -30,11 +29,30 @@ func (w *recordingWriter) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	return w.FileWriter.Filewrite(r)
 }
 
-func inMemoryTablet(t *testing.T) (*sftp.Client, *recordingWriter) {
+type recordingRenamer struct {
+	sftp.FileCmder
+	mu         sync.Mutex
+	renamed    []string
+	failSuffix string
+}
+
+func (c *recordingRenamer) PosixRename(r *sftp.Request) error {
+	c.mu.Lock()
+	c.renamed = append(c.renamed, r.Target)
+	c.mu.Unlock()
+	if c.failSuffix != "" && strings.HasSuffix(r.Target, c.failSuffix) {
+		return errors.New("rename refused")
+	}
+	return c.FileCmder.(sftp.PosixRenameFileCmder).PosixRename(r)
+}
+
+func inMemoryTablet(t *testing.T) (*sftp.Client, *recordingWriter, *recordingRenamer) {
 	t.Helper()
 	handlers := sftp.InMemHandler()
 	writer := &recordingWriter{FileWriter: handlers.FilePut}
 	handlers.FilePut = writer
+	renamer := &recordingRenamer{FileCmder: handlers.FileCmd}
+	handlers.FileCmd = renamer
 
 	serverConn, clientConn := net.Pipe()
 	server := sftp.NewRequestServer(serverConn, handlers)
@@ -49,7 +67,7 @@ func inMemoryTablet(t *testing.T) (*sftp.Client, *recordingWriter) {
 	if err := client.MkdirAll(XochitlPath); err != nil {
 		t.Fatal(err)
 	}
-	return client, writer
+	return client, writer, renamer
 }
 
 func xochitlEntries(t *testing.T, client *sftp.Client) []string {
@@ -65,20 +83,36 @@ func xochitlEntries(t *testing.T, client *sftp.Client) []string {
 	return names
 }
 
-func TestPDFUploadWritesMetadataLast(t *testing.T) {
-	client, writer := inMemoryTablet(t)
+func assertNoStagingLeft(t *testing.T, client *sftp.Client) {
+	t.Helper()
+	if _, err := client.Stat(ImportStagingPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging directory still exists: stat err = %v", err)
+	}
+}
+
+func TestPDFUploadPublishesMetadataLast(t *testing.T) {
+	client, writer, renamer := inMemoryTablet(t)
 
 	if _, err := Upload(client, []byte("%PDF-1.4"), "Doc", "", 1, nil); err != nil {
 		t.Fatalf("Upload: %v", err)
 	}
 
-	if len(writer.opened) != 4 || !strings.HasSuffix(writer.opened[3], ".metadata") {
-		t.Fatalf("write order = %v, want .metadata last", writer.opened)
+	for _, opened := range writer.opened {
+		if !strings.HasPrefix(opened, ImportStagingPath+"/") {
+			t.Fatalf("wrote %s outside staging", opened)
+		}
 	}
+	if len(renamer.renamed) != 4 || !strings.HasSuffix(renamer.renamed[3], ".metadata") {
+		t.Fatalf("publish order = %v, want .metadata last", renamer.renamed)
+	}
+	if names := xochitlEntries(t, client); len(names) != 4 {
+		t.Fatalf("xochitl holds %v, want the 4 document files", names)
+	}
+	assertNoStagingLeft(t, client)
 }
 
 func TestFailedPDFUploadLeavesNothingBehind(t *testing.T) {
-	client, writer := inMemoryTablet(t)
+	client, writer, _ := inMemoryTablet(t)
 	writer.failSuffix = ".pagedata"
 
 	if _, err := Upload(client, []byte("%PDF-1.4"), "Doc", "", 1, nil); err == nil {
@@ -88,31 +122,39 @@ func TestFailedPDFUploadLeavesNothingBehind(t *testing.T) {
 	if names := xochitlEntries(t, client); len(names) != 0 {
 		t.Fatalf("failed import left %v in xochitl", names)
 	}
+	assertNoStagingLeft(t, client)
 }
 
-func TestDiscardKeepsDirectoriesThatAlreadyExisted(t *testing.T) {
-	client, _ := inMemoryTablet(t)
-	existing := path.Join(XochitlPath, "existing.thumbnails")
-	if err := client.Mkdir(existing); err != nil {
-		t.Fatal(err)
+func TestFailedPublishRemovesWhatItMoved(t *testing.T) {
+	client, _, renamer := inMemoryTablet(t)
+	renamer.failSuffix = ".metadata"
+
+	if _, err := Upload(client, []byte("%PDF-1.4"), "Doc", "", 1, nil); err == nil {
+		t.Fatal("Upload succeeded with a failing rename")
 	}
 
-	upload := NewDocumentUpload(client)
-	if err := upload.MkdirAll(existing); err != nil {
-		t.Fatal(err)
+	if names := xochitlEntries(t, client); len(names) != 0 {
+		t.Fatalf("failed publish left %v in xochitl", names)
 	}
-	if err := upload.MkdirAll(path.Join(XochitlPath, "new", "pages")); err != nil {
-		t.Fatal(err)
-	}
-	if err := upload.WriteFile(path.Join(XochitlPath, "new", "pages", "a.rm"), []byte("x")); err != nil {
-		t.Fatal(err)
-	}
-	upload.Discard()
+	assertNoStagingLeft(t, client)
+}
 
-	if _, err := client.Stat(existing); err != nil {
-		t.Fatalf("Discard removed a directory it did not create: %v", err)
+func TestNextImportClearsAnInterruptedUpload(t *testing.T) {
+	client, _, _ := inMemoryTablet(t)
+
+	interrupted, err := NewDocumentUpload(client, "interrupted")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := client.Stat(path.Join(XochitlPath, "new")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Discard left the directory it created: stat err = %v", err)
+	if err := interrupted.WriteFile("interrupted.pdf", []byte("%PDF")); err != nil {
+		t.Fatal(err)
 	}
+	if names := xochitlEntries(t, client); len(names) != 0 {
+		t.Fatalf("unpublished upload reached xochitl: %v", names)
+	}
+
+	if _, err := Upload(client, []byte("%PDF-1.4"), "Doc", "", 1, nil); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	assertNoStagingLeft(t, client)
 }

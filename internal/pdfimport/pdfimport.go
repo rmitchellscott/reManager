@@ -6,11 +6,12 @@ package pdfimport
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,9 @@ import (
 
 // XochitlPath is scanned by xochitl; a document appears once its bundle lands here.
 const XochitlPath = "/home/root/.local/share/remarkable/xochitl"
+
+// ImportStagingPath must stay on XochitlPath's filesystem: publishing a document is a rename, which cannot cross filesystems.
+const ImportStagingPath = "/home/root/.local/share/remarkable/.remanager-import"
 
 func init() {
 	// pdfcpu creates a config directory under the user's home on first use unless this is set, which a desktop app has no reason to do.
@@ -141,41 +145,65 @@ func UploadBytes(client *sftp.Client, remotePath string, data []byte) error {
 	return nil
 }
 
-// DocumentUpload records what one import has written to the xochitl directory, so a failed import can remove it again rather than leave xochitl a document with missing or truncated files.
+// DocumentUpload stages one document outside xochitl and publishes it only once every file is on the tablet, so an interrupted import cannot leave xochitl a truncated file.
 type DocumentUpload struct {
-	client  *sftp.Client
-	created []string
+	client     *sftp.Client
+	stagingDir string
+	published  []string
 }
 
-func NewDocumentUpload(client *sftp.Client) *DocumentUpload {
-	return &DocumentUpload{client: client}
+// NewDocumentUpload clears what an interrupted import left in staging, since that import lost the connection it would have cleaned up with.
+func NewDocumentUpload(client *sftp.Client, docID string) (*DocumentUpload, error) {
+	_ = client.RemoveAll(ImportStagingPath)
+	stagingDir := path.Join(ImportStagingPath, docID)
+	if err := client.MkdirAll(stagingDir); err != nil {
+		return nil, fmt.Errorf("failed to create staging directory %s: %w", stagingDir, err)
+	}
+	return &DocumentUpload{client: client, stagingDir: stagingDir}, nil
 }
 
-func (u *DocumentUpload) WriteFile(remotePath string, data []byte) error {
-	u.created = append(u.created, remotePath)
-	return UploadBytes(u.client, remotePath, data)
+func (u *DocumentUpload) WriteFile(name string, data []byte) error {
+	return UploadBytes(u.client, path.Join(u.stagingDir, name), data)
 }
 
-// MkdirAll records only the directories it creates, so Discard never removes one that was already on the tablet.
 func (u *DocumentUpload) MkdirAll(dir string) error {
-	topMissing := ""
-	for d := dir; d != XochitlPath && d != "/" && d != "."; d = path.Dir(d) {
-		_, err := u.client.Stat(d)
-		if !errors.Is(err, os.ErrNotExist) {
-			break
+	return u.client.MkdirAll(path.Join(u.stagingDir, dir))
+}
+
+// Publish moves .metadata last, so xochitl never finds a .metadata without the rest of its document.
+func (u *DocumentUpload) Publish() error {
+	entries, err := u.client.ReadDir(u.stagingDir)
+	if err != nil {
+		return fmt.Errorf("failed to read staging directory %s: %w", u.stagingDir, err)
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return !isMetadataFile(entries[i]) && isMetadataFile(entries[j])
+	})
+	for _, entry := range entries {
+		destPath := path.Join(XochitlPath, entry.Name())
+		if err := u.client.PosixRename(path.Join(u.stagingDir, entry.Name()), destPath); err != nil {
+			return fmt.Errorf("failed to publish %s: %w", entry.Name(), err)
 		}
-		topMissing = d
+		u.published = append(u.published, destPath)
 	}
-	if topMissing != "" {
-		u.created = append(u.created, topMissing)
-	}
-	return u.client.MkdirAll(dir)
+	u.removeStaging()
+	return nil
+}
+
+func isMetadataFile(entry os.FileInfo) bool {
+	return strings.HasSuffix(entry.Name(), ".metadata")
 }
 
 func (u *DocumentUpload) Discard() {
-	for i := len(u.created) - 1; i >= 0; i-- {
-		_ = u.client.RemoveAll(u.created[i])
+	for i := len(u.published) - 1; i >= 0; i-- {
+		_ = u.client.RemoveAll(u.published[i])
 	}
+	u.removeStaging()
+}
+
+func (u *DocumentUpload) removeStaging() {
+	_ = u.client.RemoveAll(u.stagingDir)
+	_ = u.client.RemoveDirectory(ImportStagingPath)
 }
 
 // Upload returns the new document's UUID. An empty parentID files the document at the root rather than inside a collection.
@@ -190,22 +218,28 @@ func Upload(client *sftp.Client, pdfData []byte, visibleName, parentID string, p
 	}
 
 	docID := uuid.NewString()
-	base := path.Join(XochitlPath, docID)
 
-	upload := NewDocumentUpload(client)
+	upload, err := NewDocumentUpload(client, docID)
+	if err != nil {
+		return "", err
+	}
 	for _, file := range []struct {
-		remotePath string
-		data       []byte
+		name string
+		data []byte
 	}{
-		{base + ".pdf", pdfData},
-		{base + ".content", contentData},
-		{base + ".pagedata", []byte("\n")},
-		{base + ".metadata", metadataData},
+		{docID + ".pdf", pdfData},
+		{docID + ".content", contentData},
+		{docID + ".pagedata", []byte("\n")},
+		{docID + ".metadata", metadataData},
 	} {
-		if err := upload.WriteFile(file.remotePath, file.data); err != nil {
+		if err := upload.WriteFile(file.name, file.data); err != nil {
 			upload.Discard()
 			return "", err
 		}
+	}
+	if err := upload.Publish(); err != nil {
+		upload.Discard()
+		return "", err
 	}
 
 	return docID, nil
