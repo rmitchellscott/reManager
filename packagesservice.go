@@ -543,6 +543,10 @@ func (s *PackagesService) GetUpgradeCandidates() (map[string]UpgradeCandidate, e
 		}); err != nil {
 			return nil, fmt.Errorf("failed to refresh package index: %w", err)
 		}
+	} else if !proxyEnabled && !s.operationRunning() {
+		if err := vc.UpdateIndex(); err != nil {
+			debug.Printf("[DEBUG] GetUpgradeCandidates index refresh failed: %v\n", err)
+		}
 	}
 
 	candidates, err := vc.SimulateUpgradeWithVersions()
@@ -975,6 +979,12 @@ func (s *PackagesService) SimulateInstall(packageNames []string, removals []stri
 	start := time.Now()
 	simulation, err := vc.SimulateAddWithout(toSimulate, removals)
 	debug.Printf("[DEBUG] SimulateAdd: %d package(s) in %v\n", len(toSimulate), time.Since(start))
+	// The catalog is fetched from the internet but apk solves against the tablet's cached index, so a mod released since the last refresh reads as missing.
+	if err != nil && vellum.IsMissingPackage(vellum.ResolutionFailure(err)) {
+		_, deviceArch := s.getConnectedDevice()
+		s.refreshDevicePackageIndex(vc, string(deviceArch))
+		simulation, err = vc.SimulateAddWithout(toSimulate, removals)
+	}
 	if err != nil {
 		debug.Printf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
 		failure := vellum.ResolutionFailure(err)

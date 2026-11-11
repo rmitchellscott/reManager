@@ -612,6 +612,10 @@ func ResolutionFailure(err error) string {
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
+func IsMissingPackage(failure string) bool {
+	return strings.Contains(failure, "(no such package)")
+}
+
 type SimulateDelResult struct {
 	Packages []string
 	Blocked  map[string][]string // pkg -> list of blocking packages (e.g. "xovi" -> ["hide-dev-mode-icon"])
