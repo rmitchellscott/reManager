@@ -96,6 +96,25 @@ input::-ms-reveal {
   --spacing-bleed-right: calc(max(var(--spacing-gutter), var(--edge-inset-right, 0px)) - var(--edge-inset-right, 0px));
 }
 
+/* A full-width surface's divider, drawn as a 1px background stripe that stops at the side safe
+   areas, so the surface's background still runs under the iPhone Duo side column and only the line
+   stops. For surfaces that span the screen width. */
+@utility edge-rule-b {
+  border-bottom-width: 0;
+  background-image: linear-gradient(var(--border), var(--border));
+  background-repeat: no-repeat;
+  background-size: calc(100% - var(--safe-area-left) - var(--safe-area-right)) 1px;
+  background-position: var(--safe-area-left) 100%;
+}
+
+@utility edge-rule-t {
+  border-top-width: 0;
+  background-image: linear-gradient(var(--border), var(--border));
+  background-repeat: no-repeat;
+  background-size: calc(100% - var(--safe-area-left) - var(--safe-area-right)) 1px;
+  background-position: var(--safe-area-left) 0;
+}
+
 @utility screen-edge {
   --edge-inset-left: var(--safe-area-left);
   --edge-inset-right: var(--safe-area-right);

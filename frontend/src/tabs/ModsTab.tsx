@@ -1026,7 +1026,7 @@ export function ModsTab({
                 aria-hidden
                 className="pointer-events-none fixed inset-x-0 top-0 z-30 h-[calc(var(--safe-area-top)+8px)] bg-background hidden touch:block"
               />
-              <div className="sticky top-0 touch:top-[calc(var(--safe-area-top)+8px)] z-30 bg-background border-b border-border mb-4 -ml-gutter-left -mr-gutter-right">
+              <div className="sticky top-0 touch:top-[calc(var(--safe-area-top)+8px)] z-30 bg-background edge-rule-b mb-4 -ml-gutter-left -mr-gutter-right">
               <TabsList className="flex h-auto w-full gap-0 rounded-none bg-transparent p-0 justify-start">
                 <div
                   ref={subTabsRef}

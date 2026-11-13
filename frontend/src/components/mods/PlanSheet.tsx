@@ -16,7 +16,7 @@ export function PlanSheet({ open, onOpenChange, title, children }: {
         side={narrow ? 'bottom' : 'right'}
         hideClose
         className={narrow
-          ? 'flex h-[calc(100dvh-var(--safe-area-top)-8px)] flex-col gap-0 rounded-t-2xl p-0 max-md:pb-0 touch-auto'
+          ? 'screen-edge flex h-[calc(100dvh-var(--safe-area-top)-8px)] flex-col gap-0 rounded-t-2xl p-0 max-md:pb-0 touch-auto'
           : 'flex w-full flex-col gap-0 p-0 sm:max-w-lg'}
       >
         <div className={narrow ? 'shrink-0 pt-2 touch-none' : 'shrink-0 pt-3 border-b'}>

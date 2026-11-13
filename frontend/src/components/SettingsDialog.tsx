@@ -523,7 +523,7 @@ export function SettingsDialog({
         {...shellSwipe}
         className="screen-edge fixed inset-0 z-50 flex touch-pan-y flex-col bg-background duration-150 animate-in fade-in-0"
       >
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b pl-gutter-left pr-gutter-right pb-3 pt-[calc(var(--safe-area-top)+12px)]">
+        <div className="flex shrink-0 items-center justify-between gap-2 edge-rule-b pl-gutter-left pr-gutter-right pb-3 pt-[calc(var(--safe-area-top)+12px)]">
           <div className="flex min-w-0 items-center gap-1">
             {section !== null && (
               <button

@@ -348,7 +348,7 @@ export function PackageDetailPanel({
 
   return (
     <div ref={attachPanelRoot} {...swipeHandlers} className="relative flex flex-col min-h-0 flex-1">
-      <div className="shrink-0 -mx-6 px-6 pb-3 border-b">
+      <div className="shrink-0 -mx-6 px-6 pb-3 border-b max-sm:-mr-[calc(max(1.5rem,var(--safe-area-right))-var(--safe-area-right))] max-sm:pr-[calc(max(1.5rem,var(--safe-area-right))-var(--safe-area-right))]">
         {onBack && (
           <div className="mb-1">
             <Button variant="ghost" size="sm" onClick={onBack}>
