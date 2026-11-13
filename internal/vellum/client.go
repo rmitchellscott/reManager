@@ -71,7 +71,34 @@ func (c *Client) InvalidateInstalledCache() {
 }
 
 func NewClient(exec executor.CommandExecutor) *Client {
-	return &Client{executor: exec}
+	return &Client{executor: oneVellumAtATime{exec}}
+}
+
+// vellum rewrites its world file with no lock while it simulates an upgrade, then writes the
+// saved copy back, so two vellum processes that overlap on the tablet can undo a removal or tear
+// the file. The lock is package-wide because the app keeps more than one Client for a device.
+var vellumOnDevice sync.Mutex
+
+type oneVellumAtATime struct {
+	executor.CommandExecutor
+}
+
+func (e oneVellumAtATime) ExecuteWithOutput(cmd string) (string, error) {
+	if !strings.Contains(cmd, VellumBin) {
+		return e.CommandExecutor.ExecuteWithOutput(cmd)
+	}
+	vellumOnDevice.Lock()
+	defer vellumOnDevice.Unlock()
+	return e.CommandExecutor.ExecuteWithOutput(cmd)
+}
+
+func (e oneVellumAtATime) ExecuteStreaming(cmd string, onOutput func(line string)) error {
+	if !strings.Contains(cmd, VellumBin) {
+		return e.CommandExecutor.ExecuteStreaming(cmd, onOutput)
+	}
+	vellumOnDevice.Lock()
+	defer vellumOnDevice.Unlock()
+	return e.CommandExecutor.ExecuteStreaming(cmd, onOutput)
 }
 
 func (c *Client) IsInstalled() (bool, error) {
