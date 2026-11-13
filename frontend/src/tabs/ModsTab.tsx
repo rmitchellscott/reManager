@@ -1031,9 +1031,9 @@ export function ModsTab({
                 <div
                   ref={subTabsRef}
                   className={cn(
-                    'flex min-w-0 flex-initial pl-gutter-left overflow-x-auto overscroll-x-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+                    'flex min-w-0 flex-initial ml-[var(--edge-inset-left,0px)] pl-bleed-left overflow-x-auto overscroll-x-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
                     '[--room:calc((var(--hit-target)_-_36px)/2)] py-[var(--room)] -my-[var(--room)]',
-                    'pr-gutter-right',
+                    'mr-[var(--edge-inset-right,0px)] pr-bleed-right',
                     subTabsFadeLeft && 'scroll-fade-left',
                     subTabsFadeRight && 'scroll-fade-right',
                   )}

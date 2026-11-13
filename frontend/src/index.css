@@ -90,6 +90,10 @@ input::-ms-reveal {
 @theme inline {
   --spacing-gutter-left: max(var(--spacing-gutter), var(--edge-inset-left, 0px));
   --spacing-gutter-right: max(var(--spacing-gutter), var(--edge-inset-right, 0px));
+  /* How far a horizontal scroller may bleed past the content box: to the safe-area edge, not under
+     the iPhone Duo side column or a landscape notch. Generates -mr-bleed-right, pr-bleed-right. */
+  --spacing-bleed-left: calc(max(var(--spacing-gutter), var(--edge-inset-left, 0px)) - var(--edge-inset-left, 0px));
+  --spacing-bleed-right: calc(max(var(--spacing-gutter), var(--edge-inset-right, 0px)) - var(--edge-inset-right, 0px));
 }
 
 @utility screen-edge {
