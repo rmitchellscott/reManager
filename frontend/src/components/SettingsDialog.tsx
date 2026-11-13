@@ -13,7 +13,7 @@ import { useBackHandler } from '@/hooks/useBackHandler'
 import { panelAction, PanelGroup, PanelRow, SectionLabel } from '@/components/Panel'
 import { pageTitle } from '@/components/PageHeader'
 import { SupportHome, type SupportScreen } from '@/components/SupportHome'
-import { SSHKeyManager } from '@/components/SSHKeyManager'
+import { SSHKeyManager, useSSHKeyDrafts } from '@/components/SSHKeyManager'
 import { SyncKey, type ManagedKey, type PlatformCapabilities, type SettingsInfo } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { ConnectionService, SupportService, SystemService } from '@bindings/reManager'
@@ -83,6 +83,7 @@ export function SettingsDialog({
   const [clearingCache, setClearingCache] = useState(false)
   const [cachedDevices, setCachedDevices] = useState(0)
   const [managedKeys, setManagedKeys] = useState<ManagedKey[]>([])
+  const keyDrafts = useSSHKeyDrafts()
   const [deletingLogs, setDeletingLogs] = useState(false)
   const [enteringBack, setEnteringBack] = useState(false)
 
@@ -279,7 +280,7 @@ export function SettingsDialog({
           {capabilities.managedKeys && (
             <div className="border-t pt-5">
               <SectionLabel>SSH keys</SectionLabel>
-              <SSHKeyManager keys={managedKeys} onKeysChange={setManagedKeys} canChooseFile={capabilities.localKeyFiles} />
+              <SSHKeyManager keys={managedKeys} onKeysChange={setManagedKeys} canChooseFile={capabilities.localKeyFiles} drafts={keyDrafts} />
             </div>
           )}
           </div>
