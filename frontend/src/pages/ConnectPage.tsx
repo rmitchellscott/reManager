@@ -423,9 +423,9 @@ export function ConnectPage({
     : authType === 'key' ? (!!selectedKey && selectedKey !== '__other__' && selectedKey !== '__manage__')
     : (!!editingDevice || !!password)
 
-  const canSubmit = editingDevice
+  const canSubmit = !!host.trim() && (editingDevice
     ? !!deviceName.trim() && credentialReady
-    : credentialReady
+    : credentialReady)
 
   const canLeaveForm = showAddForm && savedDevices.length > 0 && !connecting
   const swipeBack = useSwipeToDismiss({
