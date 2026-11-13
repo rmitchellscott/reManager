@@ -226,6 +226,11 @@ tasks:
         # App Store Connect rejects a macOS upload with no category.
         /usr/libexec/PlistBuddy -c 'Add :LSApplicationCategoryType string public.app-category.utilities' "$PLIST" 2>/dev/null || \
           /usr/libexec/PlistBuddy -c 'Set :LSApplicationCategoryType public.app-category.utilities' "$PLIST"
+        # Same export compliance pair as the iOS archive in build/ios/Taskfile.yml.
+        /usr/libexec/PlistBuddy \
+          -c 'Add :ITSAppUsesNonExemptEncryption bool true' \
+          -c 'Add :ITSEncryptionExportComplianceCode string f4bf37a5-5958-4189-ae99-25331c2d6eff' \
+          "$PLIST"
       - cp "{{.MAS_PROVISIONING_PROFILE}}" "{{.APP_BUNDLE}}/Contents/embedded.provisionprofile"
       # A profile downloaded through a browser carries com.apple.quarantine, which App Store Connect rejects anywhere in the bundle (ITMS-91109).
       - xattr -cr "{{.APP_BUNDLE}}"
