@@ -124,7 +124,7 @@ tasks:
         vars: {TARGETS: play}
 
   screenshots:ios:
-    summary: Captures the App Store iPhone and iPad screenshots on the simulator
+    summary: Captures the App Store iPhone, iPad and closed iPhone Duo screenshots on the simulator, or only the targets in TARGETS
     vars:
       DEVELOPER_DIR: '{{.DEVELOPER_DIR | default "/Applications/Xcode.app/Contents/Developer"}}'
       DERIVED_DATA: build/ios/xcode/DerivedData-27
@@ -132,7 +132,7 @@ tasks:
       - DEVELOPER_DIR="{{.DEVELOPER_DIR}}" wails3 task ios:signed DERIVED_DATA={{.DERIVED_DATA}}
       - task: screenshots:run
         vars:
-          TARGETS: iphone ipad
+          TARGETS: '{{.TARGETS | default "iphone ipad duo-outer"}}'
           IOS_APP: '{{.ROOT_DIR}}/{{.DERIVED_DATA}}/Build/Products/Debug-iphonesimulator/{{.APP_NAME}}.app'
 
   screenshots:run:

@@ -46,6 +46,23 @@ export const targets = {
     dir: path.join(store, 'app-store/ipad-13'),
     files: storeSix,
   },
+  'duo-outer': {
+    platform: 'ios',
+    device: 'iPhone Duo',
+    pose: 'closed',
+    display: { width: 1398, height: 2034 },
+    dir: path.join(store, 'app-store/iphone-duo-outer'),
+    files: storeSix,
+  },
+  'duo-inner': {
+    platform: 'ios',
+    device: 'iPhone Duo',
+    presetPose: 'open, in landscape',
+    landscape: true,
+    display: { width: 2007, height: 2853 },
+    dir: path.join(store, 'app-store/iphone-duo-inner'),
+    files: storeSix,
+  },
   play: {
     platform: 'android',
     screenSize: '1080x1920',
