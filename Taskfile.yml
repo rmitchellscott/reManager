@@ -141,5 +141,5 @@ tasks:
     cmds:
       - npm install --no-audit --no-fund --silent
       - npx playwright install webkit chromium
-      - '[ -d .appium/node_modules/appium-xcuitest-driver ] || APPIUM_HOME=.appium npx appium driver install xcuitest'
+      - '[ -d .appium/node_modules/appium-xcuitest-driver ] || APPIUM_HOME=.appium npx appium driver install xcuitest@12.22.8'
       - IOS_APP="{{.IOS_APP}}" node run.mjs {{.TARGETS}}
