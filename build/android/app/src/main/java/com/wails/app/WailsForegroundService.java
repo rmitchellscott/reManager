@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
@@ -15,6 +16,7 @@ import java.util.List;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 /**
  * Keeps the process alive while a job the user started on the tablet runs, so
@@ -34,11 +36,35 @@ public class WailsForegroundService extends android.app.Service {
     private static final String EXTRA_REQUEST_PROMOTED_ONGOING = "android.requestPromotedOngoing";
 
     private static volatile WailsForegroundService running;
+    private static volatile boolean startPending;
+    private static volatile boolean stopWhenStarted;
 
     private PowerManager.WakeLock wakeLock;
 
     public static boolean isRunning() {
         return running != null;
+    }
+
+    public static void start(Context context, Intent intent) {
+        startPending = true;
+        stopWhenStarted = false;
+        try {
+            ContextCompat.startForegroundService(context, intent);
+        } catch (RuntimeException e) {
+            startPending = false;
+            throw e;
+        }
+    }
+
+    // A job can finish before onStartCommand runs. Stopping the service before
+    // it calls startForeground makes Android kill the app with
+    // ForegroundServiceDidNotStartInTimeException, so that stop waits for it.
+    public static void stop(Context context) {
+        if (startPending) {
+            stopWhenStarted = true;
+            return;
+        }
+        context.stopService(new Intent(context, WailsForegroundService.class));
     }
 
     public static void update(String title, String text, int percent) {
@@ -107,6 +133,11 @@ public class WailsForegroundService extends android.app.Service {
             startForeground(NOTIFICATION_ID, n);
         }
         running = this;
+        startPending = false;
+        if (stopWhenStarted) {
+            stopWhenStarted = false;
+            stopSelf();
+        }
         // A restart after the process dies would have no job to show, since
         // the job lived in the process that died.
         return START_NOT_STICKY;
