@@ -13,6 +13,7 @@ export enum ErrorCode {
     ErrNetworkUnreachable = "ERR_NETWORK_UNREACHABLE",
     ErrHostDown = "ERR_HOST_DOWN",
     ErrDNSFailed = "ERR_DNS_FAILED",
+    ErrVPNBlocksLocal = "ERR_VPN_BLOCKS_LOCAL",
     ErrShellRCNoisy = "ERR_SHELL_RC_NOISY",
     ErrKeyNotFound = "ERR_KEY_NOT_FOUND",
     ErrKeyPassphrase = "ERR_KEY_PASSPHRASE",

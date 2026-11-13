@@ -63,6 +63,7 @@ describe('handleError', () => {
   it.each([
     ['ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]', ErrorCode.ErrAuthFailed],
     ['dial tcp 10.11.99.1:22: connect: connection refused', ErrorCode.ErrConnectionRefused],
+    ['dial tcp 10.11.99.1:22: bind to local network: Binding socket to network 261 failed: EPERM (Operation not permitted)', ErrorCode.ErrVPNBlocksLocal],
     ['dial tcp 10.11.99.1:22: i/o timeout', ErrorCode.ErrTimeout],
     ['dial tcp 10.11.99.1:22: connect: no route to host', ErrorCode.ErrNetworkUnreachable],
     ['dial tcp: lookup remarkable.local: no such host', ErrorCode.ErrDNSFailed],
