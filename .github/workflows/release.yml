@@ -57,6 +57,21 @@ jobs:
           echo "PLATFORMS=$PLATFORMS_JSON" >> $GITHUB_OUTPUT
           echo "DESKTOP=$(jq -c 'any(.[]; IN("macos", "windows", "linux"))' <<< "$PLATFORMS_JSON")" >> $GITHUB_OUTPUT
 
+      - uses: actions/checkout@v4
+        if: github.ref_type == 'tag'
+
+      # The iOS and Mac App Store tasks read the version from build/config.yml, not the tag.
+      - name: Check the configured version
+        if: github.ref_type == 'tag'
+        env:
+          VERSION: ${{ steps.inputs.outputs.VERSION }}
+        run: |
+          MISMATCHED=$(grep -nE '^  version: ' build/config.yml | grep -v "\"$VERSION\"" || true)
+          if [ -n "$MISMATCHED" ]; then
+            echo "::error::build/config.yml does not carry version $VERSION: $MISMATCHED"
+            exit 1
+          fi
+
       # Each version owns a block of 99 codes, major*1_000_000 + minor*10_000 + patch*100 plus an upload counter, so the next code is one past the highest bundle Play already has in the block.
       - name: Look up build numbers
         id: build-numbers
@@ -501,6 +516,160 @@ jobs:
             bin/reManager.aab
             bin/reManager-android.apk
 
+  build-ios:
+    needs: [version]
+    if: contains(fromJSON(needs.version.outputs.platforms), 'ios')
+    runs-on: xcode-27
+    outputs:
+      build-number: ${{ steps.profile.outputs.BUILD_NUMBER }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Prepare the Wails fork
+        run: ./scripts/prepare-wails-fork.sh
+
+      - name: Install Wails
+        working-directory: third_party/wails-v3
+        run: go install ./cmd/wails3
+
+      - name: Import certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+
+      - name: Install provisioning profile
+        id: profile
+        env:
+          PROFILE_BASE64: ${{ secrets.APPLE_IOS_APPSTORE_PROFILE_BASE64 }}
+        run: |
+          PROFILE=$RUNNER_TEMP/appstore.mobileprovision
+          base64 --decode -o "$PROFILE" <<< "$PROFILE_BASE64"
+          security cms -D -i "$PROFILE" > "$RUNNER_TEMP/profile.plist"
+          UUID=$(plutil -extract UUID raw "$RUNNER_TEMP/profile.plist")
+          for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$dir"
+            cp "$PROFILE" "$dir/$UUID.mobileprovision"
+          done
+          echo "NAME=$(plutil -extract Name raw "$RUNNER_TEMP/profile.plist")" >> $GITHUB_OUTPUT
+          echo "TEAM=$(plutil -extract TeamIdentifier.0 raw "$RUNNER_TEMP/profile.plist")" >> $GITHUB_OUTPUT
+          echo "BUILD_NUMBER=${{ github.run_number }}.${{ github.run_attempt }}" >> $GITHUB_OUTPUT
+
+      - name: Archive
+        run: >-
+          wails3 task ios:archive
+          BUILD_NUMBER=${{ steps.profile.outputs.BUILD_NUMBER }}
+          DEVELOPMENT_TEAM=${{ steps.profile.outputs.TEAM }}
+          CODE_SIGN_STYLE=Manual
+          "CODE_SIGN_IDENTITY=Apple Distribution"
+          "PROVISIONING_PROFILE_SPECIFIER=${{ steps.profile.outputs.NAME }}"
+          "EXTRA_LDFLAGS=-X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
+
+      - name: Export
+        env:
+          PROFILE_NAME: ${{ steps.profile.outputs.NAME }}
+          TEAM: ${{ steps.profile.outputs.TEAM }}
+        run: |
+          cat > "$RUNNER_TEMP/export.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>$TEAM</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict><key>io.scottlabs.reManager</key><string>$PROFILE_NAME</string></dict>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><false/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath bin/reManager.xcarchive \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+            -exportPath bin/export
+          mv bin/export/*.ipa bin/reManager.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reManager-ios
+          path: bin/reManager.ipa
+
+  build-mas:
+    needs: [version]
+    if: contains(fromJSON(needs.version.outputs.platforms), 'macos')
+    runs-on: macos-latest
+    outputs:
+      build-number: ${{ steps.build-number.outputs.BUILD_NUMBER }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Prepare the Wails fork
+        run: ./scripts/prepare-wails-fork.sh
+
+      - name: Install Wails
+        working-directory: third_party/wails-v3
+        run: go install ./cmd/wails3
+
+      - name: Import distribution certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+
+      - name: Import installer certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          create-keychain: false
+          p12-file-base64: ${{ secrets.APPLE_MAC_INSTALLER_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.APPLE_MAC_INSTALLER_CERTIFICATE_PASSWORD }}
+
+      - name: Write provisioning profile
+        env:
+          PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
+        run: base64 --decode -o "$RUNNER_TEMP/mas.provisionprofile" <<< "$PROFILE_BASE64"
+
+      - name: Set build number
+        id: build-number
+        run: echo "BUILD_NUMBER=${{ github.run_number }}.${{ github.run_attempt }}" >> $GITHUB_OUTPUT
+
+      - name: Build installer package
+        run: >-
+          wails3 task darwin:mas
+          BUILD_NUMBER=${{ steps.build-number.outputs.BUILD_NUMBER }}
+          MAS_PROVISIONING_PROFILE=${{ runner.temp }}/mas.provisionprofile
+          "EXTRA_LDFLAGS=-X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reManager-mas
+          path: bin/*.pkg
+
   publish-desktop:
     needs: [version, build-macos, build-linux-amd64, build-linux-arm64, build-windows-amd64, build-windows-arm64, build-flatpak-x86_64, build-flatpak-aarch64]
     # The builds of platforms that were not dispatched are skipped, which a plain needs would carry into this job.
@@ -582,6 +751,119 @@ jobs:
             gh release create "$TAG" --draft --verify-tag --title "$TAG (Android)" --notes-file notes.md
           fi
           gh release upload "$TAG" --clobber artifacts/reManager-android.apk
+
+  publish-ios:
+    needs: [version, build-ios]
+    if: >-
+      !cancelled() && needs.build-ios.result == 'success'
+      && github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
+    runs-on: macos-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: reManager-ios
+          path: artifacts
+
+      - name: Store API key
+        run: |
+          mkdir -p ~/private_keys
+          echo -n "${{ secrets.APPLE_API_KEY_BASE64 }}" | base64 --decode -o ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
+
+      - name: Upload to App Store Connect
+        run: |
+          xcrun altool --upload-package artifacts/reManager.ipa --type ios \
+            --apple-id 6812167832 \
+            --bundle-id io.scottlabs.reManager \
+            --bundle-short-version-string ${{ needs.version.outputs.version }} \
+            --bundle-version ${{ needs.build-ios.outputs.build-number }} \
+            --apiKey ${{ secrets.APPLE_API_KEY_ID }} \
+            --apiIssuer ${{ secrets.APPLE_API_ISSUER_ID }}
+
+  publish-mas:
+    needs: [version, build-mas]
+    if: >-
+      !cancelled() && needs.build-mas.result == 'success'
+      && github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
+    runs-on: macos-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: reManager-mas
+          path: artifacts
+
+      - name: Store API key
+        run: |
+          mkdir -p ~/private_keys
+          echo -n "${{ secrets.APPLE_API_KEY_BASE64 }}" | base64 --decode -o ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
+
+      - name: Upload to App Store Connect
+        run: |
+          xcrun altool --upload-package artifacts/*.pkg --type macos \
+            --apiKey ${{ secrets.APPLE_API_KEY_ID }} \
+            --apiIssuer ${{ secrets.APPLE_API_ISSUER_ID }}
+
+  # Leaves a draft submission for the releaser to commit: the packages replace those of the last submission, and a draft from an earlier run of this version is reused.
+  publish-msstore:
+    needs: [version, build-windows-msix]
+    if: >-
+      !cancelled() && needs.build-windows-msix.result == 'success'
+      && github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    env:
+      API: https://manage.devcenter.microsoft.com/v1.0/my/applications/9NV10641JZDS
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: reManager-msix-*
+          path: artifacts
+
+      - name: Get an access token
+        env:
+          TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
+          CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
+        run: |
+          TOKEN=$(curl -sS --fail-with-body "https://login.microsoftonline.com/$TENANT_ID/oauth2/token" \
+            -d grant_type=client_credentials \
+            --data-urlencode "client_id=$CLIENT_ID" \
+            --data-urlencode "client_secret=$CLIENT_SECRET" \
+            -d resource=https://manage.devcenter.microsoft.com | jq -r .access_token)
+          echo "::add-mask::$TOKEN"
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+
+      - name: Create or reuse the draft submission
+        run: |
+          PENDING=$(curl -sS --fail-with-body -H "Authorization: Bearer $TOKEN" "$API" | jq -r '.pendingApplicationSubmission.id // empty')
+          if [ -n "$PENDING" ]; then
+            curl -sS --fail-with-body -H "Authorization: Bearer $TOKEN" "$API/submissions/$PENDING" > submission.json
+          else
+            curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Length: 0' "$API/submissions" > submission.json
+          fi
+          STATUS=$(jq -r .status submission.json)
+          if [ "$STATUS" != PendingCommit ]; then
+            echo "::error::The pending submission is $STATUS, not PendingCommit"
+            exit 1
+          fi
+
+      - name: Replace the packages
+        run: |
+          mkdir upload
+          cp artifacts/reManager-msix-*/*.msix upload/
+          FILES=$(cd upload && ls *.msix | jq -R . | jq -sc .)
+          jq --argjson files "$FILES" '.applicationPackages = (
+            [.applicationPackages[] | select(.fileStatus != "PendingUpload") | .fileStatus = "PendingDelete"]
+            + ($files | map({fileName: ., fileStatus: "PendingUpload", minimumDirectXVersion: "None", minimumSystemRam: "None"}))
+          )' submission.json > updated.json
+          ID=$(jq -r .id updated.json)
+          curl -sS --fail-with-body -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            --data @updated.json "$API/submissions/$ID" > /dev/null
+          (cd upload && zip -q ../packages.zip *.msix)
+          curl -sS --fail-with-body -X PUT -H 'x-ms-blob-type: BlockBlob' \
+            --upload-file packages.zip "$(jq -r .fileUploadUrl updated.json)"
+          echo "Draft submission $ID carries $(jq -r 'join(", ")' <<< "$FILES")"
 
   update-flathub:
     needs: [version, publish-desktop]

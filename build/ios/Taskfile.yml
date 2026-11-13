@@ -389,6 +389,8 @@ tasks:
       # past whatever App Store Connect already holds.
       BUILD_NUMBER: '{{.BUILD_NUMBER | default "1"}}'
       ARCHIVE_PATH: '{{.ARCHIVE_PATH | default "bin/reManager.xcarchive"}}'
+      # CI signs with the distribution identity and App Store profile from its secrets instead of an Xcode account.
+      CODE_SIGN_STYLE: '{{.CODE_SIGN_STYLE | default "Automatic"}}'
       APP_VERSION:
         sh: awk '/^ios:/ {in_ios=1} in_ios && $1 == "version:" {gsub(/"/, "", $2); print $2; exit}' build/config.yml
     cmds:
@@ -406,7 +408,8 @@ tasks:
           -configuration Release \
           -archivePath "{{.ARCHIVE_PATH}}" \
           DEVELOPMENT_TEAM="{{.DEVELOPMENT_TEAM}}" \
-          CODE_SIGN_STYLE=Automatic \
+          CODE_SIGN_STYLE={{.CODE_SIGN_STYLE}} \
+          {{if .CODE_SIGN_IDENTITY}}CODE_SIGN_IDENTITY="{{.CODE_SIGN_IDENTITY}}" {{end}}{{if .PROVISIONING_PROFILE_SPECIFIER}}PROVISIONING_PROFILE_SPECIFIER="{{.PROVISIONING_PROFILE_SPECIFIER}}" {{end}}\
           CODE_SIGNING_ALLOWED=YES \
           CODE_SIGN_ENTITLEMENTS="$PWD/build/ios/reManager.entitlements" \
           TARGETED_DEVICE_FAMILY="1,2" \
@@ -534,7 +537,7 @@ tasks:
         # the signature. A device bundle wants the real identity and the
         # entitlements it was signed with.
         if [ "{{.XCODE_SDK}}" = "iphoneos" ]; then
-          IDENTITY=$(security find-identity -v -p codesigning | awk '/Apple Development/ {print $2; exit}')
+          IDENTITY=$(codesign -dvv "$APP" 2>&1 | awk -F= '/^Authority=/ {print $2; exit}')
           codesign --force --sign "$IDENTITY" --entitlements "$TMP_AC/entitlements.plist" \
             --timestamp=none --generate-entitlement-der "$APP"
         else
