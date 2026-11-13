@@ -271,11 +271,10 @@ input::-ms-reveal {
     @apply border-border outline-ring/50;
   }
 
-  /* Tailwind's preflight pins this to 100%, which is what makes iOS Dynamic
-     Type a no-op. */
+  /* Preflight's text-size-adjust: 100% stays. On an iPhone, auto enlarges long
+     text in wide boxes, such as on the unfolded iPhone Duo, and index.html
+     already applies Dynamic Type through the root font size. */
   html {
-    -webkit-text-size-adjust: auto;
-    text-size-adjust: auto;
     /* iOS translates the whole visual viewport on overscroll, so sticky and
        fixed alike ride the bounce. Stopping the bounce is the only way to hold
        a pinned bar still. Scrollers that set overscroll-contain already stop

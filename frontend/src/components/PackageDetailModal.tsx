@@ -14,7 +14,7 @@ export function PackageDetailModal({ open, onClose, onBack, children }: PackageD
       <DialogContent
         size="xl"
         onSwipeDismiss={onBack ? undefined : onClose}
-        className="max-sm:w-screen max-sm:h-[100dvh] max-sm:max-h-none max-sm:rounded-none max-sm:border-0 max-sm:pt-[calc(var(--safe-area-top)+1rem)] max-sm:pb-[var(--safe-area-bottom)] sm:h-[82dvh]"
+        className="max-sm:w-screen max-sm:h-[100dvh] max-sm:max-h-none max-sm:rounded-none max-sm:border-0 max-sm:pt-[calc(var(--safe-area-top)+1rem)] max-sm:pb-[var(--safe-area-bottom)] max-sm:pl-[max(1.5rem,var(--safe-area-left))] max-sm:pr-[max(1.5rem,var(--safe-area-right))] sm:h-[82dvh]"
       >
         {children}
         <DialogCloseButton onClick={onClose} className="max-sm:top-[calc(var(--safe-area-top)+1rem)]" />

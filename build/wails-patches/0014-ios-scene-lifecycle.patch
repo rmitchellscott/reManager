@@ -1,0 +1,170 @@
+--- a/pkg/application/application_ios_delegate.h
++++ b/pkg/application/application_ios_delegate.h
+@@ -10,6 +10,12 @@
+ @interface WailsAppDelegate : UIResponder <UIApplicationDelegate>
+ @property (strong, nonatomic) UIWindow *window;
+ @property (nonatomic, strong) NSMutableArray<WailsViewController *> *viewControllers;
++- (void)installWindow:(UIWindow *)window;
++- (void)startGoRuntime;
+ @end
+ 
++@interface WailsSceneDelegate : UIResponder <UIWindowSceneDelegate>
++@property (strong, nonatomic) UIWindow *window;
++@end
++
+ #endif /* application_ios_delegate_h */
+\ No newline at end of file
+--- a/pkg/application/application_ios_delegate.m
++++ b/pkg/application/application_ios_delegate.m
+@@ -15,36 +15,13 @@
+ extern void ios_notifications_init(void);
+ extern void ios_receive_deep_link(const char* url);
+ 
++static BOOL appDeclaresScenes(void) {
++    return [[NSBundle mainBundle] objectForInfoDictionaryKey:@"UIApplicationSceneManifest"] != nil;
++}
++
+ @implementation WailsAppDelegate
+ - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+-    // Set global appDelegate reference and bring up a window if needed
+     appDelegate = self;
+-    if (self.window == nil) {
+-        // Start the window with the launch-screen colour (a "LaunchBackground"
+-        // colour asset, also referenced by UILaunchScreen) so there's no white
+-        // flash between the launch screen and the first WebView paint. The Go
+-        // options set the colour too, but that happens after this delegate runs,
+-        // so it can't colour the initial window. Falls back to white if the
+-        // asset isn't present.
+-        UIColor *launchBG = [UIColor colorNamed:@"LaunchBackground"] ?: [UIColor whiteColor];
+-        self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+-        self.window.backgroundColor = launchBG;
+-        UIViewController *rootVC = [[UIViewController alloc] init];
+-        rootVC.view.backgroundColor = launchBG;
+-        self.window.rootViewController = rootVC;
+-        [self.window makeKeyAndVisible];
+-    }
+-    // Apply app-wide background colour if configured
+-    unsigned char r = 255, g = 255, b = 255, a = 255;
+-    if (ios_get_app_background_color(&r, &g, &b, &a)) {
+-        CGFloat fr = ((CGFloat)r) / 255.0;
+-        CGFloat fg = ((CGFloat)g) / 255.0;
+-        CGFloat fb = ((CGFloat)b) / 255.0;
+-        CGFloat fa = ((CGFloat)a) / 255.0;
+-        UIColor *color = [UIColor colorWithRed:fr green:fg blue:fb alpha:fa];
+-        self.window.backgroundColor = color;
+-        self.window.rootViewController.view.backgroundColor = color;
+-    }
+     if (!self.viewControllers) {
+         self.viewControllers = [NSMutableArray array];
+     }
+@@ -52,21 +29,58 @@
+     // notifications appear while the app is foregrounded (otherwise iOS delivers
+     // them silently and no banner is shown).
+     ios_notifications_init();
++    // An app with a scene manifest gets its window from WailsSceneDelegate once
++    // the scene connects, and the Go runtime starts there. Apps built with the
++    // iOS 27 SDK must declare one or UIKit refuses to launch them.
++    if (!appDeclaresScenes()) {
++        [self installWindow:[[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]]];
++        [self startGoRuntime];
++    }
++    return YES;
++}
++- (void)installWindow:(UIWindow *)window {
++    // Start the window with the launch-screen colour (a "LaunchBackground"
++    // colour asset, also referenced by UILaunchScreen) so there's no white
++    // flash between the launch screen and the first WebView paint. The Go
++    // options set the colour too, but that happens after the Go runtime starts,
++    // so it can't colour the initial window. Falls back to white if the
++    // asset isn't present.
++    UIColor *background = [UIColor colorNamed:@"LaunchBackground"] ?: [UIColor whiteColor];
++    unsigned char r = 255, g = 255, b = 255, a = 255;
++    if (ios_get_app_background_color(&r, &g, &b, &a)) {
++        background = [UIColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:a / 255.0];
++    }
++    window.backgroundColor = background;
++    // A scene UIKit discarded in the background reconnects with a new window,
++    // which takes over the WebView the Go runtime already created.
++    if (self.viewControllers.count > 0) {
++        window.rootViewController = self.viewControllers.firstObject;
++    } else {
++        UIViewController *placeholder = [[UIViewController alloc] init];
++        placeholder.view.backgroundColor = background;
++        window.rootViewController = placeholder;
++    }
++    self.window = window;
++    [window makeKeyAndVisible];
++}
++- (void)startGoRuntime {
+     // Unconditional launch signal for the Go runtime. platformRun waits on
+     // this and emits ApplicationDidFinishLaunching from the Go side once the
+     // event listeners are wired up - emitting it from here would race the Go
+     // runtime's startup and the event could be dropped.
+-    // Start the Go runtime NOW — only after UIKit has delivered the launch and
++    // Start the Go runtime only after UIKit has delivered the launch and
+     // the window exists. Starting Go earlier (concurrently with UIApplicationMain)
+     // intermittently corrupts the FrontBoard launch handshake on a physical
+-    // device, so this method never fires (blank cold launch / 0x8BADF00D). Run it
+-    // on a background thread so app.Run()'s blocking loop never touches the main
+-    // thread. WailsIOSMain -> user main() -> app.Run(); the window's run() then
+-    // creates the WebView (appDelegate/window are already set above).
+-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+-        WailsIOSMain();
++    // device, so the launch callbacks never fire (blank cold launch / 0x8BADF00D).
++    // Run it on a background thread so app.Run()'s blocking loop never touches
++    // the main thread. WailsIOSMain -> user main() -> app.Run(); the window's
++    // run() then creates the WebView (appDelegate/window are already set).
++    static dispatch_once_t started;
++    dispatch_once(&started, ^{
++        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
++            WailsIOSMain();
++        });
+     });
+-    return YES;
+ }
+ // UIKit calls this for a URL that opens the running app and, after
+ // didFinishLaunchingWithOptions returns YES, for the URL of a cold launch too.
+@@ -119,3 +133,43 @@
+ 
+ // GENERATED EVENTS END
+ @end
++
++@implementation WailsSceneDelegate
++- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
++    if (![scene isKindOfClass:[UIWindowScene class]]) return;
++    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
++    [appDelegate installWindow:self.window];
++    for (UIOpenURLContext *context in connectionOptions.URLContexts) {
++        ios_receive_deep_link([[context.URL absoluteString] UTF8String]);
++    }
++    [appDelegate startGoRuntime];
++}
++- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {
++    for (UIOpenURLContext *context in URLContexts) {
++        ios_receive_deep_link([[context.URL absoluteString] UTF8String]);
++    }
++}
++// With a scene manifest UIKit sends foreground and background transitions to
++// the scene instead of the app delegate, so they are raised as the same
++// application events here.
++- (void)sceneDidBecomeActive:(UIScene *)scene {
++    if( hasListeners(EventApplicationDidBecomeActive) ) {
++        processApplicationEvent(EventApplicationDidBecomeActive, NULL);
++    }
++}
++- (void)sceneWillResignActive:(UIScene *)scene {
++    if( hasListeners(EventApplicationWillResignActive) ) {
++        processApplicationEvent(EventApplicationWillResignActive, NULL);
++    }
++}
++- (void)sceneWillEnterForeground:(UIScene *)scene {
++    if( hasListeners(EventApplicationWillEnterForeground) ) {
++        processApplicationEvent(EventApplicationWillEnterForeground, NULL);
++    }
++}
++- (void)sceneDidEnterBackground:(UIScene *)scene {
++    if( hasListeners(EventApplicationDidEnterBackground) ) {
++        processApplicationEvent(EventApplicationDidEnterBackground, NULL);
++    }
++}
++@end
