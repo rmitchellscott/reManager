@@ -7,14 +7,15 @@ import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
 interface TerminalWithCopyProps {
   output: string
   theme?: 'dark' | 'light'
+  onContentHeightChange?: (height: number) => void
 }
 
-export function TerminalWithCopy({ output, theme }: TerminalWithCopyProps) {
+export function TerminalWithCopy({ output, theme, onContentHeightChange }: TerminalWithCopyProps) {
   const { isCopied, copyToClipboard } = useCopyToClipboard()
 
   return (
     <div className="relative w-full h-full">
-      <Terminal output={output} theme={theme} />
+      <Terminal output={output} theme={theme} onContentHeightChange={onContentHeightChange} />
       <div className="absolute top-2 right-2">
         <Tooltip>
           <TooltipTrigger asChild>
