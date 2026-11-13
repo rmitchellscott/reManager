@@ -13,10 +13,10 @@
   type: archive
   url: https://proxy.golang.org/github.com/google/uuid/@v/v1.6.0.zip
 - dest: vendor/github.com/klauspost/compress
-  sha256: 4e5cef30576a158c16e824ebb9c1ded91d8331bf339655e95ebb19710050c39c
+  sha256: f85b4729a966a3d0313310482a11b585f0be445a20b2ea0c967937fe14c17acc
   strip-components: 3
   type: archive
-  url: https://proxy.golang.org/github.com/klauspost/compress/@v/v1.18.7.zip
+  url: https://proxy.golang.org/github.com/klauspost/compress/@v/v1.20.2.zip
 - dest: vendor/github.com/pdfcpu/pdfcpu
   sha256: fe381589d896220b5865fb46fc0e7d111456a4273c1ed07f225753c52e1d34ce
   strip-components: 3
