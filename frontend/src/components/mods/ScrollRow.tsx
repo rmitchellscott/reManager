@@ -71,8 +71,8 @@ export function ScrollRow({ title, children, onViewAll }: ScrollRowProps) {
           className={cn(
             'flex overflow-x-auto overscroll-x-none pb-1.5 scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [scroll-snap-type:x_mandatory] [&>*]:[scroll-snap-align:start]',
             '[--shelf-gap:10px]',
-            'gap-[var(--shelf-gap)] -ml-gutter-left -mr-gutter-right pl-gutter-left pr-gutter-right',
-            'scroll-pl-[calc(var(--spacing-gutter-left)+var(--spacing-gutter)+var(--shelf-gap))] scroll-pr-gutter-right',
+            'gap-[var(--shelf-gap)] -ml-bleed-left -mr-bleed-right pl-bleed-left pr-bleed-right',
+            'scroll-pl-[calc(var(--spacing-bleed-left)+var(--spacing-gutter)+var(--shelf-gap))] scroll-pr-bleed-right',
             fadeLeft && 'scroll-fade-left',
             fadeRight && 'scroll-fade-right',
           )}

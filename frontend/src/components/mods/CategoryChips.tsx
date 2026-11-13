@@ -161,7 +161,7 @@ export function CategoryChips({ categories, categoryCounts, totalCount, selected
           // overflow-x:auto forces overflow-y:auto, which clips the chips' touch overlay to the rail.
           '[--room:calc((var(--hit-target)_-_34px)/2)]',
           '-mt-[var(--room)] pt-[var(--room)] pb-[var(--room)] mb-[calc(24px_-_var(--room))] md:pb-0 md:mb-5',
-          '-ml-gutter-left -mr-gutter-right pl-gutter-left pr-gutter-right',
+          '-ml-bleed-left -mr-bleed-right pl-bleed-left pr-bleed-right',
           fadeLeft && 'scroll-fade-left',
           fadeRight && 'scroll-fade-right',
         )}
