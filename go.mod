@@ -2,12 +2,12 @@ module reManager
 
 go 1.26.3
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.18.7
+	github.com/klauspost/compress v1.20.2
 	github.com/pdfcpu/pdfcpu v0.15.0
 	github.com/pkg/sftp v1.13.10
 	github.com/rmitchellscott/remarkable-go v0.4.1
