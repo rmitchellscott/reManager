@@ -67,10 +67,14 @@ export function TerminalKeyBar({ ctrlArmed, onToggleCtrl }: TerminalKeyBarProps)
     if (active instanceof HTMLElement) active.blur()
   }
 
+  // A side inset in portrait is the iPhone Duo's closed display, where it
+  // reserves a column for the camera and status bar at the top. The row sits on
+  // the keyboard, well below them, so it takes the full width. In landscape the
+  // inset is a notch that can reach this row, so it stays inset there.
   return (
     <div
       data-touch-scroll
-      className="hidden shrink-0 touch-pan-x items-center gap-[4px] overflow-x-auto border-t bg-background px-[8px] py-[6px] touch:flex"
+      className="hidden shrink-0 touch-pan-x items-center gap-[4px] overflow-x-auto border-t bg-background px-[8px] py-[6px] touch:flex compact:portrait:-mr-[max(0px,calc(var(--safe-area-right)-12px))]"
     >
       <button
         type="button"

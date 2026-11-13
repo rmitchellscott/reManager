@@ -477,6 +477,27 @@ tasks:
           -c 'Add :CFBundleURLTypes:0:CFBundleURLSchemes array' \
           -c 'Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string remanager' \
           "$PLIST"
+        # Apps built with the iOS 27 SDK fail to launch without a scene manifest.
+        /usr/libexec/PlistBuddy -c 'Delete :UIApplicationSceneManifest' "$PLIST" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+          -c 'Add :UIApplicationSceneManifest dict' \
+          -c 'Add :UIApplicationSceneManifest:UIApplicationSupportsMultipleScenes bool false' \
+          -c 'Add :UIApplicationSceneManifest:UISceneConfigurations dict' \
+          -c 'Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication array' \
+          -c 'Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0 dict' \
+          -c 'Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneConfigurationName string Default\ Configuration' \
+          -c 'Add :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName string WailsSceneDelegate' \
+          "$PLIST"
+        # The iPhone Duo's outer display turns upside down, and other iPhones
+        # ignore upside-down portrait even when it is listed.
+        /usr/libexec/PlistBuddy -c 'Delete :UISupportedInterfaceOrientations' "$PLIST" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+          -c 'Add :UISupportedInterfaceOrientations array' \
+          -c 'Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait' \
+          -c 'Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationPortraitUpsideDown' \
+          -c 'Add :UISupportedInterfaceOrientations:2 string UIInterfaceOrientationLandscapeLeft' \
+          -c 'Add :UISupportedInterfaceOrientations:3 string UIInterfaceOrientationLandscapeRight' \
+          "$PLIST"
         # Each job the user starts is submitted as a continued processing task
         # under this wildcard, which keeps it running once the app is backgrounded.
         /usr/libexec/PlistBuddy -c 'Delete :BGTaskSchedulerPermittedIdentifiers' "$PLIST" 2>/dev/null || true
