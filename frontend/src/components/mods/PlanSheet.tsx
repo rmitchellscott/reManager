@@ -17,7 +17,7 @@ export function PlanSheet({ open, onOpenChange, title, children }: {
         hideClose
         className={narrow
           ? 'screen-edge flex h-[calc(100dvh-var(--safe-area-top)-8px)] flex-col gap-0 rounded-t-2xl p-0 max-md:pb-0 touch-auto'
-          : 'flex w-full flex-col gap-0 p-0 sm:max-w-lg'}
+          : 'screen-edge flex w-full flex-col gap-0 p-0 sm:max-w-lg'}
       >
         <div className={narrow ? 'shrink-0 pt-2 touch-none' : 'shrink-0 pt-3 border-b'}>
           {narrow && <div aria-hidden className="mx-auto h-1.5 w-9 rounded-full bg-border" />}
