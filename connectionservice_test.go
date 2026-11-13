@@ -57,6 +57,13 @@ func TestReconnectRetriesTransportFailures(t *testing.T) {
 	}
 }
 
+func TestVPNBlockedBindClassifiesAsVPN(t *testing.T) {
+	raw := "dial tcp 10.11.99.1:22: bind to local network: Binding socket to network 261 failed: EPERM (Operation not permitted)"
+	if ue := apperrors.Classify(errString(raw)); ue.Code != apperrors.ErrVPNBlocksLocal || ue.Retryable {
+		t.Errorf("Classify(%q) = %s retryable=%v, want %s not retryable", raw, ue.Code, ue.Retryable, apperrors.ErrVPNBlocksLocal)
+	}
+}
+
 func TestHandshakeWithASilentPeerTimesOut(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

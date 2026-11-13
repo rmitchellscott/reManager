@@ -17,6 +17,8 @@ const errorMessages = {
     "Your reMarkable appears to be offline, or the connection was interrupted.",
   ERR_DNS_FAILED:
     "Could not resolve hostname. Check the address, or use an IP address instead.",
+  ERR_VPN_BLOCKS_LOCAL:
+    "Could not reach your reMarkable because a VPN is on. Turn off the VPN, or exclude reManager in the VPN app's settings.",
   ERR_SHELL_RC_NOISY:
     "Your reMarkable's shell prints output on SSH, which breaks file transfers. Guard ~/.bashrc so it stays silent in non-interactive sessions.",
   ERR_KEY_NOT_FOUND: "SSH key file not found. Select a valid key file.",
@@ -48,6 +50,10 @@ const errorPatterns: Array<{ pattern: RegExp; message: string }> = [
   {
     pattern: /authentication failed|unable to authenticate/i,
     message: errorMessages.ERR_AUTH_FAILED,
+  },
+  {
+    pattern: /bind to local network.*EPERM/i,
+    message: errorMessages.ERR_VPN_BLOCKS_LOCAL,
   },
   {
     pattern: /connection refused/i,
