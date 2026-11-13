@@ -19,19 +19,27 @@ function keyDetail(key: ManagedKey): string {
   return 'Encrypted. reManager asks for the passphrase when it connects.'
 }
 
-export function SSHKeyManager({ keys, onKeysChange, canChooseFile }: {
-  keys: ManagedKey[]
-  onKeysChange: (keys: ManagedKey[]) => void
-  canChooseFile: boolean
-}) {
+// Owned by the caller so a typed key survives the caller swapping layouts, as Settings does when an
+// iPhone Duo folds or unfolds and the manager remounts.
+export function useSSHKeyDrafts() {
   const [importing, setImporting] = useState(false)
   const [name, setName] = useState('')
   const [privateKey, setPrivateKey] = useState('')
   const [passphrase, setPassphrase] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [keyToRemove, setKeyToRemove] = useState<string | null>(null)
   const [keyToRename, setKeyToRename] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
+  return { importing, setImporting, name, setName, privateKey, setPrivateKey, passphrase, setPassphrase, keyToRename, setKeyToRename, newName, setNewName }
+}
+
+export function SSHKeyManager({ keys, onKeysChange, canChooseFile, drafts }: {
+  keys: ManagedKey[]
+  onKeysChange: (keys: ManagedKey[]) => void
+  canChooseFile: boolean
+  drafts: ReturnType<typeof useSSHKeyDrafts>
+}) {
+  const { importing, setImporting, name, setName, privateKey, setPrivateKey, passphrase, setPassphrase, keyToRename, setKeyToRename, newName, setNewName } = drafts
+  const [saving, setSaving] = useState(false)
+  const [keyToRemove, setKeyToRemove] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
 
   useEffect(() => {
@@ -39,7 +47,7 @@ export function SSHKeyManager({ keys, onKeysChange, canChooseFile }: {
     setName('')
     setPrivateKey('')
     setPassphrase('')
-  }, [importing])
+  }, [importing, setName, setPrivateKey, setPassphrase])
 
   const refresh = async () => {
     onKeysChange(await ConnectionService.GetManagedKeys() ?? [])
