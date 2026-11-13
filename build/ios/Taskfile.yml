@@ -453,11 +453,15 @@ tasks:
         set_purpose NSMotionUsageDescription "reManager does not use motion data."
         set_purpose NSFaceIDUsageDescription "reManager does not use Face ID."
         # SSH and HTTPS use Go's own standard cryptography rather than Apple's,
-        # which is non-exempt for export. Declaring that in the plist makes
-        # App Store Connect demand an ITSEncryptionExportComplianceCode, which
-        # Apple only issues once documentation such as the French declaration
-        # is uploaded, so export compliance is answered per build instead.
+        # which is non-exempt for export. The code is the key value App Store
+        # Connect issued for the French declaration, and upload fails with
+        # error 90592 if the first key is set without it.
         /usr/libexec/PlistBuddy -c 'Delete :ITSAppUsesNonExemptEncryption' "$PLIST" 2>/dev/null || true
+        /usr/libexec/PlistBuddy -c 'Delete :ITSEncryptionExportComplianceCode' "$PLIST" 2>/dev/null || true
+        /usr/libexec/PlistBuddy \
+          -c 'Add :ITSAppUsesNonExemptEncryption bool true' \
+          -c 'Add :ITSEncryptionExportComplianceCode string f4bf37a5-5958-4189-ae99-25331c2d6eff' \
+          "$PLIST"
         LOCAL_NETWORK_REASON="reManager connects to your reMarkable over your local network or USB cable to install and manage software on it."
         /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string $LOCAL_NETWORK_REASON" "$PLIST" 2>/dev/null || \
           /usr/libexec/PlistBuddy -c "Set :NSLocalNetworkUsageDescription $LOCAL_NETWORK_REASON" "$PLIST"
