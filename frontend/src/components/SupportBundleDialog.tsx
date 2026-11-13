@@ -4,8 +4,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { SupportService } from '@bindings/reManager'
+import { SupportService, SystemService } from '@bindings/reManager'
 import { runOperation } from '@/lib/operations'
+
+// On mobile the save dialog or share sheet hands the file off, and the path
+// reManager knows is the private copy in its own storage, so it is not shown.
+const showsSavedPath = SystemService.GetPlatformCapabilities()
+  .then((capabilities) => capabilities.revealInFileManager)
+  .catch(() => false)
+
 interface SupportBundleDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -28,6 +35,11 @@ export function SupportBundleDialog({ open, onOpenChange, isConnected, savedDevi
   const [preview, setPreview] = useState<{ included: { heading: string; items: string[] }[]; excluded: string[] } | null>(null)
   const [selectedDeviceId, setSelectedDeviceId] = useState('')
   const [copied, setCopied] = useState(false)
+  const [savedPathVisible, setSavedPathVisible] = useState(false)
+
+  useEffect(() => {
+    showsSavedPath.then(setSavedPathVisible)
+  }, [])
 
   useEffect(() => {
     if (open) {
@@ -186,7 +198,7 @@ export function SupportBundleDialog({ open, onOpenChange, isConnected, savedDevi
           </div>
         )}
 
-        {stage === 'complete' && (
+        {stage === 'complete' && savedPathVisible && (
           <div className="text-sm">
             <p>Bundle saved to:</p>
             <p className="text-muted-foreground break-all">{completePath}</p>
