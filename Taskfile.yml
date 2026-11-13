@@ -126,10 +126,8 @@ tasks:
   screenshots:ios:
     summary: Captures the App Store iPhone and iPad screenshots on the simulator
     vars:
-      # The store builds use this Xcode, and an iOS 27 SDK build stops at launch
-      # on iOS 27 until the app adopts the UIScene life cycle.
-      DEVELOPER_DIR: '{{.DEVELOPER_DIR | default "/Applications/Xcode-26.6.app/Contents/Developer"}}'
-      DERIVED_DATA: build/ios/xcode/DerivedData-26
+      DEVELOPER_DIR: '{{.DEVELOPER_DIR | default "/Applications/Xcode.app/Contents/Developer"}}'
+      DERIVED_DATA: build/ios/xcode/DerivedData-27
     cmds:
       - DEVELOPER_DIR="{{.DEVELOPER_DIR}}" wails3 task ios:signed DERIVED_DATA={{.DERIVED_DATA}}
       - task: screenshots:run
