@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CaretDown, ClipboardText } from '@phosphor-icons/react'
+import { Clipboard } from '@wailsio/runtime'
 import { ShellService, SystemService } from '@bindings/reManager'
 const KEY_SEQUENCES: Record<string, string> = {
   '⎋': '\x1b',
@@ -53,13 +54,20 @@ export function TerminalKeyBar({ ctrlArmed, onToggleCtrl }: TerminalKeyBarProps)
     })
   }
 
+  // Android's WebView refuses navigator.clipboard.readText, so the native
+  // clipboard is the fallback, the same order useCopyToClipboard writes in.
   const paste = async () => {
+    let text = ''
     try {
-      const text = await navigator.clipboard.readText()
-      if (text) send(text)
-    } catch (err) {
-      console.error('Failed to read clipboard:', err)
+      text = await navigator.clipboard.readText()
+    } catch {
+      try {
+        text = await Clipboard.Text()
+      } catch (err) {
+        console.error('Failed to read clipboard:', err)
+      }
     }
+    if (text) send(text)
   }
 
   const dismissKeyboard = () => {
