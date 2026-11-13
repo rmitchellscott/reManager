@@ -120,6 +120,45 @@ func TestEndedReconnectLeavesTheNextOneRunning(t *testing.T) {
 	}
 }
 
+func TestWakingAReconnectSignalsOnlyTheRunningOne(t *testing.T) {
+	connection := newServices(&core{}).connection
+	if connection.wakeReconnect() {
+		t.Fatal("wakeReconnect reported a reconnect when none was running")
+	}
+
+	run := connection.beginReconnect()
+	if !connection.wakeReconnect() || !connection.wakeReconnect() {
+		t.Fatal("wakeReconnect did not report the running reconnect")
+	}
+	select {
+	case <-run.wake:
+	default:
+		t.Fatal("wakeReconnect did not signal the running reconnect")
+	}
+	select {
+	case <-run.wake:
+		t.Fatal("two wakes queued two restarts")
+	default:
+	}
+}
+
+func TestExhaustedReconnectIsTakenOnceAndClearedByTheNextRun(t *testing.T) {
+	connection := newServices(&core{}).connection
+	connection.reconnectExhausted = true
+	if !connection.takeExhaustedReconnect() {
+		t.Fatal("takeExhaustedReconnect missed an exhausted reconnect")
+	}
+	if connection.takeExhaustedReconnect() {
+		t.Fatal("one exhausted reconnect was taken twice")
+	}
+
+	connection.reconnectExhausted = true
+	connection.beginReconnect()
+	if connection.takeExhaustedReconnect() {
+		t.Error("a new reconnect left the previous run's exhaustion set")
+	}
+}
+
 func TestIsConnectionDeadError(t *testing.T) {
 	dead := []string{
 		"read tcp: wsarecv: A connection attempt failed because the connected party did not properly respond",

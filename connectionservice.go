@@ -46,9 +46,12 @@ type ConnectionService struct {
 	keepaliveStop chan struct{}
 	reconnectMu   sync.Mutex
 	reconnect     *reconnectRun
-	currentConn   *connTarget
-	liveClient    atomic.Pointer[ssh.Client]
-	lastMachineID string
+	// Set when an automatic reconnect used every attempt, so a return to the
+	// foreground can tell that failure from a rejected credential.
+	reconnectExhausted bool
+	currentConn        *connTarget
+	liveClient         atomic.Pointer[ssh.Client]
+	lastMachineID      string
 
 	agentConn net.Conn
 }
@@ -610,6 +613,9 @@ func reconnectTimeline(attemptIdx int, waiting bool) (elapsedMs, totalMs int64) 
 // One automatic reconnect at a time; stopReconnect ends it and wakes it from its backoff wait, so a run that was ended cannot touch the state of one that started after it.
 type reconnectRun struct {
 	stop chan struct{}
+	// Restarts the attempt count from the first attempt, skipping any backoff
+	// wait, because the attempts before it ran on a network that was blocked.
+	wake chan struct{}
 }
 
 func (s *ConnectionService) beginReconnect() *reconnectRun {
@@ -618,8 +624,30 @@ func (s *ConnectionService) beginReconnect() *reconnectRun {
 	if s.reconnect != nil {
 		return nil
 	}
-	s.reconnect = &reconnectRun{stop: make(chan struct{})}
+	s.reconnectExhausted = false
+	s.reconnect = &reconnectRun{stop: make(chan struct{}), wake: make(chan struct{}, 1)}
 	return s.reconnect
+}
+
+func (s *ConnectionService) wakeReconnect() bool {
+	s.reconnectMu.Lock()
+	defer s.reconnectMu.Unlock()
+	if s.reconnect == nil {
+		return false
+	}
+	select {
+	case s.reconnect.wake <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+func (s *ConnectionService) takeExhaustedReconnect() bool {
+	s.reconnectMu.Lock()
+	defer s.reconnectMu.Unlock()
+	exhausted := s.reconnectExhausted
+	s.reconnectExhausted = false
+	return exhausted
 }
 
 func (s *ConnectionService) endReconnect(run *reconnectRun) {
@@ -1747,8 +1775,16 @@ func (s *ConnectionService) attemptReconnect(target connTarget) {
 			select {
 			case <-time.After(reconnectBackoff[backoffIdx]):
 			case <-run.stop:
+			case <-run.wake:
+				attempt = -1
 			}
 			debug.Printf("[%s] Backoff complete\n", time.Now().Format("15:04:05.000"))
+		} else {
+			select {
+			case <-run.wake:
+				attempt = -1
+			default:
+			}
 		}
 	}
 
@@ -1756,6 +1792,9 @@ func (s *ConnectionService) attemptReconnect(target connTarget) {
 	if superseded() {
 		return
 	}
+	s.reconnectMu.Lock()
+	s.reconnectExhausted = true
+	s.reconnectMu.Unlock()
 	s.wails.Event.Emit(eventConnectionFailed, ConnectionFailure{
 		Reason:   "Could not reconnect after several attempts. Check your connection and try again.",
 		Code:     apperrors.ErrTimeout,
