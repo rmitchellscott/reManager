@@ -540,6 +540,9 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Install icon tools
+        run: brew install imagemagick librsvg
+
       - name: Prepare the Wails fork
         run: ./scripts/prepare-wails-fork.sh
 
