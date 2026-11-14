@@ -22,7 +22,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { FilesService, OperationsService } from '@bindings/reManager'
+import { FilesService, OperationsService, SystemService } from '@bindings/reManager'
+
+const canRevealInFileManager = SystemService.GetPlatformCapabilities()
+  .then((capabilities) => capabilities.revealInFileManager)
+  .catch(() => false)
+
 interface BackupRestoreDialogProps {
   mode: 'backup' | 'restore' | null
   isConnected: boolean
@@ -89,6 +94,7 @@ export function BackupRestoreDialog({ mode, isConnected, onClose }: BackupRestor
   const [throughput, setThroughput] = useState<number>(0)
   const [elapsedTime, setElapsedTime] = useState<number>(0)
   const [finalStats, setFinalStats] = useState<FinalStats>({})
+  const [revealInFileManager, setRevealInFileManager] = useState(false)
   const samplesRef = useRef<Array<{ time: number; bytes: number }>>([])
   const lastThroughputUpdateRef = useRef<number>(0)
   const progressRef = useRef<BackupProgress | null>(null)
@@ -211,6 +217,10 @@ export function BackupRestoreDialog({ mode, isConnected, onClose }: BackupRestor
     setError(handleError(failure, runMode === 'restore' ? 'Could not restore the backup.' : 'Could not create the backup.'))
     setErrorDetails(output.trim() || errorDetail(failure))
   }
+
+  useEffect(() => {
+    canRevealInFileManager.then(setRevealInFileManager)
+  }, [])
 
   useEffect(() => {
     if (mode === 'backup') {
@@ -386,7 +396,7 @@ export function BackupRestoreDialog({ mode, isConnected, onClose }: BackupRestor
                     )}
                   </div>
 
-                  {mode === 'backup' && finalStats.path && (
+                  {mode === 'backup' && revealInFileManager && finalStats.path && (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button

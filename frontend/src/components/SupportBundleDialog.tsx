@@ -4,8 +4,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { SupportService } from '@bindings/reManager'
+import { SupportService, SystemService } from '@bindings/reManager'
 import { runOperation } from '@/lib/operations'
+
+// On mobile the save dialog or share sheet hands the file off, and the path
+// reManager knows is the private copy in its own storage, so it is not shown.
+const showsSavedPath = SystemService.GetPlatformCapabilities()
+  .then((capabilities) => capabilities.revealInFileManager)
+  .catch(() => false)
+
 interface SupportBundleDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -25,9 +32,14 @@ export function SupportBundleDialog({ open, onOpenChange, isConnected, savedDevi
   const [uploadURL, setUploadURL] = useState('')
   const [uploadSavedOnDevice, setUploadSavedOnDevice] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
-  const [preview, setPreview] = useState<{ included: string[]; excluded: string[] } | null>(null)
+  const [preview, setPreview] = useState<{ included: { heading: string; items: string[] }[]; excluded: string[] } | null>(null)
   const [selectedDeviceId, setSelectedDeviceId] = useState('')
   const [copied, setCopied] = useState(false)
+  const [savedPathVisible, setSavedPathVisible] = useState(false)
+
+  useEffect(() => {
+    showsSavedPath.then(setSavedPathVisible)
+  }, [])
 
   useEffect(() => {
     if (open) {
@@ -38,7 +50,7 @@ export function SupportBundleDialog({ open, onOpenChange, isConnected, savedDevi
       setErrorMessage('')
       setCopied(false)
       setSelectedDeviceId(connectedDeviceId || '')
-      SupportService.GetSupportBundlePreview().then(p => setPreview(p ? { included: p.included ?? [], excluded: p.excluded ?? [] } : null))
+      SupportService.GetSupportBundlePreview().then(p => setPreview(p ? { included: (p.included ?? []).map(g => ({ heading: g.heading, items: g.items ?? [] })), excluded: p.excluded ?? [] } : null))
     }
   }, [open, connectedDeviceId])
 
@@ -145,11 +157,18 @@ export function SupportBundleDialog({ open, onOpenChange, isConnected, savedDevi
                   <ShieldCheck className="h-4 w-4 text-green-600" />
                   <span className="text-sm font-medium">Included</span>
                 </div>
-                <ul className="list-disc pl-4 space-y-1">
-                  {preview.included.map((item) => (
-                    <li key={item} className="text-xs text-muted-foreground">{item}</li>
+                <div className="space-y-3">
+                  {preview.included.map((group) => (
+                    <div key={group.heading}>
+                      <div className="text-xs font-medium mb-1">{group.heading}</div>
+                      <ul className="list-disc pl-4 space-y-1">
+                        {group.items.map((item) => (
+                          <li key={item} className="text-xs text-muted-foreground">{item}</li>
+                        ))}
+                      </ul>
+                    </div>
                   ))}
-                </ul>
+                </div>
               </div>
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
@@ -179,7 +198,7 @@ export function SupportBundleDialog({ open, onOpenChange, isConnected, savedDevi
           </div>
         )}
 
-        {stage === 'complete' && (
+        {stage === 'complete' && savedPathVisible && (
           <div className="text-sm">
             <p>Bundle saved to:</p>
             <p className="text-muted-foreground break-all">{completePath}</p>

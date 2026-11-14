@@ -11,7 +11,7 @@ info:
   description: "Manage mods on reMarkable tablets"
   copyright: "(c) 2026, rmitchellscott"
   comments: ""
-  version: "2.0.0"
+  version: "2.0.1"
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"
@@ -21,14 +21,14 @@ info:
 ios:
   bundleID: "io.scottlabs.reManager"
   displayName: "reManager"
-  version: "2.0.0"
+  version: "2.0.1"
   company: "rmitchellscott"
   minIOSVersion: "15.0"
 
 # Android release versioning. versionCode is the build number Google Play orders
 # uploads by: raise it for every upload, including a re-upload of the same version.
 android:
-  version: "2.0.0"
+  version: "2.0.1"
   versionCode: 8
 
 # Dev mode configuration

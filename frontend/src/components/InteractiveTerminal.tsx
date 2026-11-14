@@ -254,11 +254,13 @@ export function InteractiveTerminal({ isConnected, visible, onRunningChange, the
       {shellRunning ? (
         <div className="flex min-h-0 flex-1 flex-col compact:-mx-[12px] compact:-mb-[8px]">
           <div className="relative flex min-h-0 flex-1 flex-col">
+            {/* FitAddon measures the element xterm mounts in, padding included, so the padding sits on a wrapper or the last row is clipped. */}
             <div
-              ref={terminalRef}
-              className="min-h-[120px] flex-1 overflow-hidden rounded-[var(--radius)] p-3 compact:rounded-none"
+              className="flex min-h-[120px] flex-1 flex-col overflow-hidden rounded-[var(--radius)] p-3 compact:rounded-none"
               style={{ backgroundColor: isDark ? '#1a1a1a' : '#fafafa' }}
-            />
+            >
+              <div ref={terminalRef} className="min-h-0 flex-1 overflow-hidden" />
+            </div>
             <div className="absolute right-2 top-2 flex items-center gap-1">
               <Tooltip>
                 <TooltipTrigger asChild>

@@ -14,8 +14,6 @@ interface OutputDisclosureProps {
   awaitingOutput?: boolean
 }
 
-const LINE_HEIGHT_PX = 17
-const TERMINAL_PADDING_PX = 16
 // The copy button is 32px, 8px in from the top; a one-line box is shorter and cut it off.
 const COPY_BUTTON_CLEARANCE_PX = 48
 const FIT_SETTLE_MS = 250
@@ -47,29 +45,30 @@ export function OutputDisclosure({
     return () => onOpenChange?.(false)
   }, [showing, onOpenChange])
 
-  // xterm sizes from the container, so the box needs a pixel height. The fit waits for a second line and a short settle because a command's echo arrives alone, ahead of its output (about 350ms for launcherctl status).
-  const lineCount = output.replace(/\n$/, '').split('\n').length
-  const lineCountRef = useRef(lineCount)
+  // xterm sizes from the container, so the box needs a pixel height; the terminal measures it because a long line wraps to several rows on a narrow screen. The fit waits for a second line and a short settle because a command's echo arrives alone, ahead of its output (about 350ms for launcherctl status).
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null)
+  const measuredHeightRef = useRef(measuredHeight)
   useEffect(() => {
-    lineCountRef.current = lineCount
+    measuredHeightRef.current = measuredHeight
   })
-  const [fittedLineCount, setFittedLineCount] = useState<number | null>(null)
+  const [fittedHeight, setFittedHeight] = useState<number | null>(null)
   const outputShowing = showing && !!output
-  const pastFirstLine = lineCount > 1
+  const pastFirstLine = output.replace(/\n$/, '').includes('\n')
   useEffect(() => {
     if (!outputShowing) {
-      setFittedLineCount(null)
+      setMeasuredHeight(null)
+      setFittedHeight(null)
       return
     }
     if (!pastFirstLine) return
-    const settle = setTimeout(() => setFittedLineCount(lineCountRef.current), FIT_SETTLE_MS)
+    const settle = setTimeout(() => setFittedHeight(measuredHeightRef.current), FIT_SETTLE_MS)
     return () => clearTimeout(settle)
   }, [outputShowing, pastFirstLine])
-  const outgrewFit = fittedLineCount !== null && lineCount > fittedLineCount
+  const outgrewFit = fittedHeight !== null && measuredHeight !== null && measuredHeight > fittedHeight
 
   if (!output && !awaitingOutput) return null
 
-  const contentHeight = (fittedLineCount ?? lineCount) * LINE_HEIGHT_PX + TERMINAL_PADDING_PX
+  const contentHeight = fittedHeight ?? measuredHeight ?? 0
   const maxHeight = 'min(45vh, 360px)'
 
   const terminal = (
@@ -77,7 +76,7 @@ export function OutputDisclosure({
       className="rounded-[var(--radius)] overflow-hidden overscroll-y-contain"
       style={{ height: outgrewFit ? maxHeight : `min(45vh, 360px, ${Math.max(contentHeight, COPY_BUTTON_CLEARANCE_PX)}px)` }}
     >
-      <TerminalWithCopy output={output} theme={theme} />
+      <TerminalWithCopy output={output} theme={theme} onContentHeightChange={setMeasuredHeight} />
     </div>
   )
 

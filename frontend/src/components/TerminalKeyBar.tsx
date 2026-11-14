@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CaretDown, ClipboardText } from '@phosphor-icons/react'
+import { Clipboard } from '@wailsio/runtime'
 import { ShellService, SystemService } from '@bindings/reManager'
 const KEY_SEQUENCES: Record<string, string> = {
   '⎋': '\x1b',
@@ -53,13 +54,20 @@ export function TerminalKeyBar({ ctrlArmed, onToggleCtrl }: TerminalKeyBarProps)
     })
   }
 
+  // Android's WebView refuses navigator.clipboard.readText, so the native
+  // clipboard is the fallback, the same order useCopyToClipboard writes in.
   const paste = async () => {
+    let text = ''
     try {
-      const text = await navigator.clipboard.readText()
-      if (text) send(text)
-    } catch (err) {
-      console.error('Failed to read clipboard:', err)
+      text = await navigator.clipboard.readText()
+    } catch {
+      try {
+        text = await Clipboard.Text()
+      } catch (err) {
+        console.error('Failed to read clipboard:', err)
+      }
     }
+    if (text) send(text)
   }
 
   const dismissKeyboard = () => {
@@ -67,10 +75,14 @@ export function TerminalKeyBar({ ctrlArmed, onToggleCtrl }: TerminalKeyBarProps)
     if (active instanceof HTMLElement) active.blur()
   }
 
+  // A side inset in portrait is the iPhone Duo's closed display, where it
+  // reserves a column for the camera and status bar at the top. The row sits on
+  // the keyboard, well below them, so it takes the full width. In landscape the
+  // inset is a notch that can reach this row, so it stays inset there.
   return (
     <div
       data-touch-scroll
-      className="hidden shrink-0 touch-pan-x items-center gap-[4px] overflow-x-auto border-t bg-background px-[8px] py-[6px] touch:flex"
+      className="hidden shrink-0 touch-pan-x items-center gap-[4px] overflow-x-auto border-t bg-background px-[8px] py-[6px] touch:flex compact:portrait:-mr-[max(0px,calc(var(--safe-area-right)-12px))]"
     >
       <button
         type="button"

@@ -118,6 +118,7 @@ func main() {
 		services.system.receiveDeepLink(e.Context().URL())
 	})
 	listenForPlatformDeepLinks(wailsApp, services.system)
+	listenForForegroundReturn(wailsApp, services.connection)
 	registerDeepLinkScheme()
 
 	if err := wailsApp.Run(); err != nil {

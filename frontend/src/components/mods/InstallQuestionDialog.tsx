@@ -311,7 +311,7 @@ export function InstallQuestionDialog({
           : decisionStep(
             'xovi-extensions', 'Would you like to install tripletap?',
             { id: 'tt-yes', title: 'Yes, install tripletap', description: 'Triple-press the power button after every boot to start mods.' },
-            { id: 'tt-no', title: "No, I'll start mods from my computer", description: 'Open reManager and start them from the System tab after every boot, or start them over SSH.' },
+            { id: 'tt-no', title: "No, I'll start mods from reManager", description: 'Open reManager and start them from the System tab after every boot, or start them over SSH.' },
           )}
       </>
     )

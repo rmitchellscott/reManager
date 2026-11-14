@@ -423,9 +423,9 @@ export function ConnectPage({
     : authType === 'key' ? (!!selectedKey && selectedKey !== '__other__' && selectedKey !== '__manage__')
     : (!!editingDevice || !!password)
 
-  const canSubmit = editingDevice
+  const canSubmit = !!host.trim() && (editingDevice
     ? !!deviceName.trim() && credentialReady
-    : credentialReady
+    : credentialReady)
 
   const canLeaveForm = showAddForm && savedDevices.length > 0 && !connecting
   const swipeBack = useSwipeToDismiss({
@@ -832,6 +832,16 @@ export function ConnectPage({
               </Button>
             )}
           </div>
+
+          {savedDevices.length === 0 && (
+            <button
+              className="w-full text-center text-xs text-muted-foreground hover:text-foreground touch:hit-target"
+              onClick={() => setStep('browse')}
+              disabled={connecting}
+            >
+              Browse mods
+            </button>
+          )}
           </div>
           </div>
         </div>

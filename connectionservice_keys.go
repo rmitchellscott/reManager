@@ -34,8 +34,9 @@ type PlatformCapabilities struct {
 	KeyboardResizesView bool `json:"keyboardResizesView"`
 	// The docked iPad keyboard carries Tab, a dismiss key and a shortcut row
 	// with paste, which the terminal's key bar would otherwise repeat.
-	IPad          bool `json:"iPad"`
-	SupportUpload bool `json:"supportUpload"`
+	IPad                bool `json:"iPad"`
+	SupportUpload       bool `json:"supportUpload"`
+	RevealInFileManager bool `json:"revealInFileManager"`
 }
 
 func (s *SystemService) GetPlatformCapabilities() PlatformCapabilities {
@@ -47,6 +48,7 @@ func (s *SystemService) GetPlatformCapabilities() PlatformCapabilities {
 		KeyboardResizesView: runtime.GOOS == "android",
 		IPad:                platform.IsIPad(),
 		SupportUpload:       support.UploadAvailable(),
+		RevealInFileManager: !isMobile(),
 	}
 }
 

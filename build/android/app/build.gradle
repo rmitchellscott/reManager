@@ -19,7 +19,7 @@ android {
         // com.wails.app because it names the Java package the scaffolding classes
         // live in, and only the R and BuildConfig packages follow it.
         applicationId "io.scottlabs.reManager"
-        minSdk 21
+        minSdk 24
         targetSdk 36
         versionCode appVersionCode
         versionName appVersionName

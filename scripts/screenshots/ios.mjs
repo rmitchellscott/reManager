@@ -11,6 +11,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const run = promisify(execFile)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const simctl = async (...args) => (await run('xcrun', ['simctl', ...args])).stdout.trim()
+const agentDevice = (...args) => run(path.join(here, 'node_modules/.bin/agent-device'), [...args, '--json'])
 
 async function findSimulator(name) {
   const { devices } = JSON.parse(await simctl('list', 'devices', 'available', '-j'))
@@ -40,6 +41,29 @@ async function prepareSimulator(udid) {
   // charged draws a charging bolt; discharging at 100 does not.
   await simctl('status_bar', udid, 'override', '--time', '9:41', '--dataNetwork', 'wifi', '--wifiMode', 'active',
     '--wifiBars', '3', '--cellularMode', 'active', '--cellularBars', '4', '--batteryState', 'discharging', '--batteryLevel', '100')
+}
+
+// simctl has no hinge control. agent-device folds the iPhone Duo with a
+// simulator HID event, and it refuses while another agent-device session
+// holds the simulator.
+async function setPose(udid, pose) {
+  const session = ['--session', 'remanager-screenshots']
+  await agentDevice('open', bundleId, '--platform', 'ios', '--udid', udid, ...session)
+  try {
+    await agentDevice('fold', pose, ...session)
+  } finally {
+    await agentDevice('close', ...session).catch(() => {})
+  }
+}
+
+// The iPhone Duo has a framebuffer per panel, and simctl captures the outer
+// one unless a display is named.
+async function displayWithSize(udid, { width, height }) {
+  const ports = (await simctl('io', udid, 'enumerate')).split(/\n(?=Port:)/)
+  const port = ports.find(p => p.includes(`Default width: ${width}\n`) && p.includes(`Default height: ${height}\n`))
+  const uuid = port?.match(/UUID: (\S+)/)?.[1]
+  if (!uuid) throw new Error(`no ${width}x${height} display on ${udid}`)
+  return uuid
 }
 
 async function isPortrait(file) {
@@ -83,11 +107,17 @@ async function webviewContext(driver) {
 }
 
 // A freshly booted simulator can leave the first launch on a white screen
-// while the catalog fetch times out; a relaunch loads it.
+// while the catalog fetch times out; a relaunch loads it. Saved devices
+// survive an uninstall in the simulator keychain, and then the app opens on
+// the device list instead of the connect form.
+const connectScreenShown = () =>
+  document.getElementById('host') !== null ||
+  [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Add reMarkable')
+
 async function waitForConnectScreen(driver) {
   for (let attempt = 0; attempt < 3; attempt++) {
     for (let i = 0; i < 90; i++) {
-      if (await driver.execute(() => document.getElementById('host') !== null).catch(() => false)) return
+      if (await driver.execute(connectScreenShown).catch(() => false)) return
       await sleep(1000)
     }
     await driver.execute('mobile: terminateApp', { bundleId })
@@ -105,6 +135,8 @@ export async function runIos(target, shoot) {
   await simctl('uninstall', simulator.udid, bundleId)
   await simctl('install', simulator.udid,
     process.env.IOS_APP || path.join(repo, 'build/ios/xcode/DerivedData/Build/Products/Debug-iphonesimulator/reManager.app'))
+  if (target.pose) await setPose(simulator.udid, target.pose)
+  const display = target.display ? [`--display=${await displayWithSize(simulator.udid, target.display)}`] : []
 
   const appium = await startAppium()
   let driver
@@ -120,13 +152,17 @@ export async function runIos(target, shoot) {
         'appium:bundleId': bundleId,
         'appium:noReset': true,
         'appium:autoAcceptAlerts': true,
-        'appium:orientation': target.landscape ? 'LANDSCAPE' : 'PORTRAIT',
+        ...(target.presetPose ? {} : { 'appium:orientation': target.landscape ? 'LANDSCAPE' : 'PORTRAIT' }),
         'appium:newCommandTimeout': 600,
         'appium:wdaLaunchTimeout': 600_000,
       },
     })
     await driver.switchContext(await webviewContext(driver))
     await waitForConnectScreen(driver)
+    // On the open iPhone Duo, Appium and agent-device both report a rotation
+    // that never happens, so a person sets the pose in the Simulator first.
+    if (target.presetPose && !(await driver.execute(() => window.innerWidth > window.innerHeight)))
+      throw new Error(`set the ${target.device} to ${target.presetPose} in the Simulator first`)
 
     await driver.switchContext('NATIVE_APP')
     const webview = await driver.getElementRect((await driver.$('//XCUIElementTypeWebView')).elementId)
@@ -138,7 +174,7 @@ export async function runIos(target, shoot) {
       tap: (x, y) =>
         driver.execute('mobile: tap', { x: Math.round(webview.x + x * scale), y: Math.round(webview.y + y * scale) }),
       async screenshot(file) {
-        await simctl('io', simulator.udid, 'screenshot', '--type=png', file)
+        await simctl('io', simulator.udid, 'screenshot', '--type=png', ...display, file)
         // Some simctl versions save a landscape simulator in the device's
         // native portrait orientation, and others save it upright.
         if (target.landscape && (await isPortrait(file))) await run('sips', ['-r', '90', file])

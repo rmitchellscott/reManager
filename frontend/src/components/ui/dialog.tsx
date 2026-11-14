@@ -37,8 +37,8 @@ export function Dialog({ open, onOpenChange, children, closable = true, classNam
           className={cn(
             // pointer-events-none so the band beside a narrow panel still belongs
             // to the overlay, which is what closes the dialog.
-            "fixed left-1/2 top-1/2 z-[70] -translate-x-1/2 -translate-y-1/2 pointer-events-none outline-none",
-            "flex w-[calc(100vw-2rem)] justify-center",
+            "fixed left-[calc(50%+(var(--safe-area-left)-var(--safe-area-right))/2)] top-1/2 z-[70] -translate-x-1/2 -translate-y-1/2 pointer-events-none outline-none",
+            "flex w-[calc(100vw-2rem-var(--safe-area-left)-var(--safe-area-right))] justify-center",
             className,
           )}
           onInteractOutside={(e) => { if (!closable) e.preventDefault() }}

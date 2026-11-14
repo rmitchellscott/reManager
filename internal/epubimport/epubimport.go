@@ -3,7 +3,6 @@ package epubimport
 import (
 	"encoding/json"
 	"fmt"
-	"path"
 	"strconv"
 	"time"
 
@@ -87,22 +86,28 @@ func Upload(client *sftp.Client, epubData []byte, visibleName, parentID string) 
 	}
 
 	docID := uuid.NewString()
-	base := path.Join(pdfimport.XochitlPath, docID)
 
-	upload := pdfimport.NewDocumentUpload(client)
+	upload, err := pdfimport.NewDocumentUpload(client, docID)
+	if err != nil {
+		return "", err
+	}
 	for _, u := range []struct {
-		remote string
-		data   []byte
+		name string
+		data []byte
 	}{
-		{base + ".epub", epubData},
-		{base + ".content", contentData},
-		{base + ".pagedata", []byte("\n")},
-		{base + ".metadata", metadataData},
+		{docID + ".epub", epubData},
+		{docID + ".content", contentData},
+		{docID + ".pagedata", []byte("\n")},
+		{docID + ".metadata", metadataData},
 	} {
-		if err := upload.WriteFile(u.remote, u.data); err != nil {
+		if err := upload.WriteFile(u.name, u.data); err != nil {
 			upload.Discard()
 			return "", err
 		}
+	}
+	if err := upload.Publish(); err != nil {
+		upload.Discard()
+		return "", err
 	}
 
 	return docID, nil

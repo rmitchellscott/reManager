@@ -57,6 +57,13 @@ func TestReconnectRetriesTransportFailures(t *testing.T) {
 	}
 }
 
+func TestVPNBlockedBindClassifiesAsVPN(t *testing.T) {
+	raw := "dial tcp 10.11.99.1:22: bind to local network: Binding socket to network 261 failed: EPERM (Operation not permitted)"
+	if ue := apperrors.Classify(errString(raw)); ue.Code != apperrors.ErrVPNBlocksLocal || ue.Retryable {
+		t.Errorf("Classify(%q) = %s retryable=%v, want %s not retryable", raw, ue.Code, ue.Retryable, apperrors.ErrVPNBlocksLocal)
+	}
+}
+
 func TestHandshakeWithASilentPeerTimesOut(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -110,6 +117,45 @@ func TestEndedReconnectLeavesTheNextOneRunning(t *testing.T) {
 	}
 	if connection.reconnectCurrent(stale) {
 		t.Error("the stopped reconnect still counts as current")
+	}
+}
+
+func TestWakingAReconnectSignalsOnlyTheRunningOne(t *testing.T) {
+	connection := newServices(&core{}).connection
+	if connection.wakeReconnect() {
+		t.Fatal("wakeReconnect reported a reconnect when none was running")
+	}
+
+	run := connection.beginReconnect()
+	if !connection.wakeReconnect() || !connection.wakeReconnect() {
+		t.Fatal("wakeReconnect did not report the running reconnect")
+	}
+	select {
+	case <-run.wake:
+	default:
+		t.Fatal("wakeReconnect did not signal the running reconnect")
+	}
+	select {
+	case <-run.wake:
+		t.Fatal("two wakes queued two restarts")
+	default:
+	}
+}
+
+func TestExhaustedReconnectIsTakenOnceAndClearedByTheNextRun(t *testing.T) {
+	connection := newServices(&core{}).connection
+	connection.reconnectExhausted = true
+	if !connection.takeExhaustedReconnect() {
+		t.Fatal("takeExhaustedReconnect missed an exhausted reconnect")
+	}
+	if connection.takeExhaustedReconnect() {
+		t.Fatal("one exhausted reconnect was taken twice")
+	}
+
+	connection.reconnectExhausted = true
+	connection.beginReconnect()
+	if connection.takeExhaustedReconnect() {
+		t.Error("a new reconnect left the previous run's exhaustion set")
 	}
 }
 

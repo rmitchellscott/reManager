@@ -567,20 +567,23 @@ func TestSystemRebootReconnectsAfterSlowBoot(t *testing.T) {
 
 func TestSystemUserGuideInstallsAndRestartsWithMods(t *testing.T) {
 	requireDocker(t)
-	var manifest map[string]struct {
-		SHA256 string `json:"sha256"`
+	var manifest struct {
+		Guides []guideRevision `json:"guides"`
 	}
 	if err := fetchJSON(guideManifestURL, &manifest); err != nil {
 		t.Fatalf("guide manifest: %v", err)
 	}
-	var guideVersion string
-	for candidate := range manifest {
-		if guideVersion == "" || rmversion.Compare(candidate, guideVersion) > 0 {
-			guideVersion = candidate
+	var newestMinApp string
+	for _, revision := range manifest.Guides {
+		if newestMinApp == "" || rmversion.Compare(revision.MinApp, newestMinApp) > 0 {
+			newestMinApp = revision.MinApp
 		}
 	}
+	if newestMinApp == "" {
+		t.Fatal("the guide manifest has no revisions")
+	}
 	buildVersion := version
-	version = guideVersion
+	version = newestMinApp
 	t.Cleanup(func() { version = buildVersion })
 
 	tablet, app := modsTablet(t)

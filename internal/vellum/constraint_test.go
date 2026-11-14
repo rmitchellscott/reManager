@@ -288,6 +288,22 @@ func TestResolutionFailureIgnoresTransportErrors(t *testing.T) {
 	}
 }
 
+func TestIsMissingPackage(t *testing.T) {
+	missing := ResolutionFailure(fmt.Errorf(`ERROR: unable to select packages:
+  nextcloud-calendar (no such package):
+    required by: world[nextcloud-calendar]`))
+	if !IsMissingPackage(missing) {
+		t.Errorf("IsMissingPackage(%q) = false, want true", missing)
+	}
+
+	conflict := ResolutionFailure(fmt.Errorf(`ERROR: unable to select packages:
+  tripletap-1.1.0-r0:
+    breaks: launcherctl-3.1-r1[!tripletap]`))
+	if IsMissingPackage(conflict) {
+		t.Errorf("IsMissingPackage(%q) = true, want false", conflict)
+	}
+}
+
 func TestParseResolutionConflict(t *testing.T) {
 	message := `unable to select packages:
   tripletap-1.1.0-r0:

@@ -124,17 +124,15 @@ tasks:
         vars: {TARGETS: play}
 
   screenshots:ios:
-    summary: Captures the App Store iPhone and iPad screenshots on the simulator
+    summary: Captures the App Store iPhone, iPad and closed iPhone Duo screenshots on the simulator, or only the targets in TARGETS
     vars:
-      # The store builds use this Xcode, and an iOS 27 SDK build stops at launch
-      # on iOS 27 until the app adopts the UIScene life cycle.
-      DEVELOPER_DIR: '{{.DEVELOPER_DIR | default "/Applications/Xcode-26.6.app/Contents/Developer"}}'
-      DERIVED_DATA: build/ios/xcode/DerivedData-26
+      DEVELOPER_DIR: '{{.DEVELOPER_DIR | default "/Applications/Xcode.app/Contents/Developer"}}'
+      DERIVED_DATA: build/ios/xcode/DerivedData-27
     cmds:
       - DEVELOPER_DIR="{{.DEVELOPER_DIR}}" wails3 task ios:signed DERIVED_DATA={{.DERIVED_DATA}}
       - task: screenshots:run
         vars:
-          TARGETS: iphone ipad
+          TARGETS: '{{.TARGETS | default "iphone ipad duo-outer"}}'
           IOS_APP: '{{.ROOT_DIR}}/{{.DERIVED_DATA}}/Build/Products/Debug-iphonesimulator/{{.APP_NAME}}.app'
 
   screenshots:run:
@@ -143,5 +141,5 @@ tasks:
     cmds:
       - npm install --no-audit --no-fund --silent
       - npx playwright install webkit chromium
-      - '[ -d .appium/node_modules/appium-xcuitest-driver ] || APPIUM_HOME=.appium npx appium driver install xcuitest'
+      - '[ -d .appium/node_modules/appium-xcuitest-driver ] || APPIUM_HOME=.appium npx appium driver install xcuitest@12.22.8'
       - IOS_APP="{{.IOS_APP}}" node run.mjs {{.TARGETS}}

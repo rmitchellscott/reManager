@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -353,10 +354,20 @@ func (m *transferManager) run(job *transferJob) error {
 	}
 	client := m.files.getClient()
 	if client == nil {
-		return fmt.Errorf("not connected")
+		client = m.files.awaitReconnectedClient(job.ctx, job.connGen, nil)
+		if client == nil {
+			return fmt.Errorf("not connected")
+		}
 	}
 
 	sftpClient, err := sftp.NewClient(client)
+	if err != nil && isTransferConnectionDead(err) {
+		go m.files.triggerConnectionCheck()
+		if replacement := m.files.awaitReconnectedClient(job.ctx, job.connGen, client); replacement != nil {
+			client = replacement
+			sftpClient, err = sftp.NewClient(client)
+		}
+	}
 	if err != nil {
 		ue := apperrors.Classify(err)
 		return fmt.Errorf("%s", ue.Message)
@@ -367,6 +378,39 @@ func (m *transferManager) run(job *transferJob) error {
 		return m.runUpload(job, client, sftpClient)
 	}
 	return m.runDownload(job, sftpClient)
+}
+
+// Android destroys a backgrounded app's sockets, and a write on one fails with
+// ECONNABORTED, which isConnectionDeadError does not list.
+func isTransferConnectionDead(err error) bool {
+	return isConnectionDeadError(err) ||
+		strings.Contains(strings.ToLower(err.Error()), "software caused connection abort")
+}
+
+const reconnectedClientWait = 20 * time.Second
+
+// An automatic reconnect keeps the connection generation, so a changed
+// generation means the user disconnected or connected elsewhere.
+func (c *core) awaitReconnectedClient(ctx context.Context, gen uint64, dead *ssh.Client) *ssh.Client {
+	deadline := time.NewTimer(reconnectedClientWait)
+	defer deadline.Stop()
+	poll := time.NewTicker(250 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		if c.connGen.Load() != gen {
+			return nil
+		}
+		if client := c.getClient(); client != nil && client != dead {
+			return client
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-deadline.C:
+			return nil
+		case <-poll.C:
+		}
+	}
 }
 
 func (m *transferManager) runUpload(job *transferJob, client *ssh.Client, sftpClient *sftp.Client) error {
@@ -1027,7 +1071,7 @@ func (s *FilesService) UploadFilesFromPaths(localPaths []string, remotePath stri
 	if s.rejectDemoTransfer() {
 		return
 	}
-	if s.getClient() == nil {
+	if s.getClient() == nil && s.awaitReconnectedClient(context.Background(), s.connGen.Load(), nil) == nil {
 		s.wails.Event.Emit(eventFileBrowserError, FileBrowserError{
 			Message: "Not connected to your reMarkable.",
 			Code:    apperrors.ErrHostDown,

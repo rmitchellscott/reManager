@@ -38,6 +38,12 @@ func Classify(err error) *UserError {
 		return New(ErrKeyNotFound, "SSH key file not found. Select a valid key file.", err, false)
 	}
 
+	// Android's netd refuses to bind a socket to the USB or LAN network with EPERM
+	// when a VPN that does not allow bypass covers the app.
+	if strings.Contains(errStr, "bind to local network") && strings.Contains(errStr, "eperm") {
+		return New(ErrVPNBlocksLocal, "Could not reach your reMarkable because a VPN is on. Turn off the VPN, or exclude reManager in the VPN app's settings.", err, false)
+	}
+
 	if strings.Contains(errStr, "connection refused") ||
 		strings.Contains(errStr, "actively refused") {
 		return New(ErrConnectionRefused, "Could not connect to your reMarkable. Make sure it's on and SSH is enabled, or try restarting it.", err, true)

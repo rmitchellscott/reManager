@@ -3,7 +3,9 @@ package rmdocimport
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"net"
+	"os"
 	"path"
 	"testing"
 
@@ -89,5 +91,8 @@ func TestUploadCreatesEveryFolderWithoutDirectoryEntries(t *testing.T) {
 		if _, err := client.Stat(path.Join(pdfimport.XochitlPath, name)); err != nil {
 			t.Errorf("%s was not written: %v", name, err)
 		}
+	}
+	if _, err := client.Stat(pdfimport.ImportStagingPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("staging directory still exists: stat err = %v", err)
 	}
 }

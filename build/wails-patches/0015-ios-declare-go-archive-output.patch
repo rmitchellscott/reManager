@@ -1,0 +1,18 @@
+--- a/internal/commands/updatable_build_assets/ios/project.pbxproj.tmpl
++++ b/internal/commands/updatable_build_assets/ios/project.pbxproj.tmpl
+@@ -141,6 +141,7 @@
+ /* Begin PBXShellScriptBuildPhase section */
+ 		C0DEBEEF0000000000000055 /* Prebuild: Wails Go Archive */ = {
+ 			isa = PBXShellScriptBuildPhase;
++			alwaysOutOfDate = 1;
+ 			buildActionMask = 2147483647;
+ 			files = (
+ 			);
+@@ -152,6 +153,7 @@
+ 			outputFileListPaths = (
+ 			);
+ 			outputPaths = (
++				"$(PROJECT_DIR)/../../../bin/{{.ProductName}}.a",
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 			shellPath = /bin/sh;

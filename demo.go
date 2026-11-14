@@ -41,6 +41,15 @@ const (
 	demoCatalogWait = 20 * time.Second
 )
 
+// The plan shot in scripts/screenshots/shots.mjs stages the first two and shows the other three added as their dependencies, so the seed leaves all five uninstalled.
+var demoStorePlanPackages = map[string]bool{
+	"quicksettings-screenshot": true,
+	"rmstream":                 true,
+	"appload":                  true,
+	"framebuffer-spy":          true,
+	"rm-shot":                  true,
+}
+
 var errDemoUnavailable = errors.New("This needs a real reMarkable, so it isn't available in demo mode.")
 
 // Seeded from the real catalog, with a few pinned one real release behind so Updates and the upgrade path have something to apply.
@@ -76,7 +85,8 @@ func (s *PackagesService) seedDemoPackages() map[string]string {
 		if len(out) >= demoSeedCount {
 			break
 		}
-		if popularShelf[pkg.Name] || s.pullsInAny(pkg.Name, popularShelf) {
+		if popularShelf[pkg.Name] || s.pullsInAny(pkg.Name, popularShelf) ||
+			demoStorePlanPackages[pkg.Name] || s.pullsInAny(pkg.Name, demoStorePlanPackages) {
 			continue
 		}
 		out[pkg.Name] = pkg.Version

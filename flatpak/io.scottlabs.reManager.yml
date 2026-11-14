@@ -56,8 +56,8 @@ modules:
           - reManager.flatpak
           - reManager-gnome49.flatpak
       - type: archive
-        url: https://proxy.golang.org/github.com/wailsapp/wails/v3/@v/v3.0.0-beta.26.zip
-        sha256: 64010e5d1c0ddd05e17a07925bd620a263068669d3008cb422881d51e585de07
+        url: https://proxy.golang.org/github.com/wailsapp/wails/v3/@v/v3.0.0.zip
+        sha256: 820538a17da033e9efcbf71bdd0a2d5399d152babf97cc4bcbab09a11f668c03
         strip-components: 4
         dest: vendor/github.com/wailsapp/wails/v3
       - node-sources.json

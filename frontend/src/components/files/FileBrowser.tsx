@@ -265,7 +265,7 @@ export function FileBrowser({
     const handleFileDrop = (paths: EventData<'files:dropped'>) => {
       dragCounter = 0
       setIsDragging(false)
-      if (!isConnected || !paths || paths.length === 0 || pickMode) return
+      if (!isConnected || !paths || paths.length === 0) return
 
       const uploadFiles = () => {
         FilesService.UploadFilesFromPaths(paths, currentPath + '/')
@@ -296,7 +296,7 @@ export function FileBrowser({
       window.removeEventListener('drop', handleDrop)
       unsubFileDrop()
     }
-  }, [isVisible, isConnected, currentPath, suppressSystemFileWarnings, pickMode])
+  }, [isVisible, isConnected, currentPath, suppressSystemFileWarnings])
 
   const handleNavigate = (file: FileInfo) => {
     if (file.isDir) loadDirectory(file.path)
@@ -700,7 +700,7 @@ export function FileBrowser({
             </Button>
           </div>
         </div>
-      ) : !pickMode && (
+      ) : (
         <div className="flex flex-wrap items-center gap-[8px]">
           <Button
             variant="outline"
@@ -714,39 +714,50 @@ export function FileBrowser({
             <span className="max-md:hidden">Home</span>
           </Button>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className={barButton} disabled={loading}>
-                <UploadSimple className={`${barIcon} mr-1`} />
-                Upload
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem onSelect={handleUpload}>
-                <UploadSimple className="h-4 w-4" />
-                Upload files
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={handleUploadFolder}>
-                <FolderOpen className="h-4 w-4" />
-                Upload folder
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {pickMode ? (
+            <Button variant="outline" size="sm" className={barButton} onClick={handleUpload} disabled={loading}>
+              <UploadSimple className={`${barIcon} mr-1`} />
+              Upload
+            </Button>
+          ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className={barButton} disabled={loading}>
+                  <UploadSimple className={`${barIcon} mr-1`} />
+                  Upload
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onSelect={handleUpload}>
+                  <UploadSimple className="h-4 w-4" />
+                  Upload files
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={handleUploadFolder}>
+                  <FolderOpen className="h-4 w-4" />
+                  Upload folder
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
 
-          <Button variant="outline" size="sm" className={barButton} onClick={() => setNewFolderDialog(true)} disabled={loading}>
-            <FolderPlus className={`${barIcon} mr-1`} />
-            New folder
-          </Button>
+          {!pickMode && (
+            <Button variant="outline" size="sm" className={barButton} onClick={() => setNewFolderDialog(true)} disabled={loading}>
+              <FolderPlus className={`${barIcon} mr-1`} />
+              New folder
+            </Button>
+          )}
 
           <div className="hidden md:flex md:flex-wrap items-center gap-[8px]">
             <Button variant="outline" size="sm" className={barButton} onClick={() => setShowHidden(!showHidden)}>
               {showHidden ? <EyeSlash className={`${barIcon} mr-1`} /> : <Eye className={`${barIcon} mr-1`} />}
               {showHidden ? 'Hide hidden files' : 'Show hidden files'}
             </Button>
-            <Button variant="outline" size="sm" className={barButton} onClick={() => setSelecting(true)} disabled={loading}>
-              <CheckSquare className={`${barIcon} mr-1`} />
-              Select
-            </Button>
+            {!pickMode && (
+              <Button variant="outline" size="sm" className={barButton} onClick={() => setSelecting(true)} disabled={loading}>
+                <CheckSquare className={`${barIcon} mr-1`} />
+                Select
+              </Button>
+            )}
             <Button variant="outline" size="sm" className={`${barButton} w-[36px] px-0 max-md:w-[40px]`} onClick={() => loadDirectory(currentPath)} disabled={loading} aria-label="Refresh">
               <ArrowsClockwise className={`${barIcon} ${loading ? 'animate-spin' : ''}`} />
             </Button>
@@ -764,10 +775,12 @@ export function FileBrowser({
                   <ArrowsClockwise className="h-4 w-4" />
                   Refresh
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setSelecting(true)}>
-                  <CheckSquare className="h-4 w-4" />
-                  Select
-                </DropdownMenuItem>
+                {!pickMode && (
+                  <DropdownMenuItem onSelect={() => setSelecting(true)}>
+                    <CheckSquare className="h-4 w-4" />
+                    Select
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onSelect={() => setShowHidden(!showHidden)}>
                   {showHidden ? <EyeSlash className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   {showHidden ? 'Hide hidden files' : 'Show hidden files'}

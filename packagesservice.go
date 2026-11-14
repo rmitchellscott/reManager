@@ -154,6 +154,7 @@ type InstallSimulationResult struct {
 	Error              string                      `json:"error,omitempty"`
 	Conflicts          []vellum.QueueConflictEntry `json:"conflicts,omitempty"`
 	UnresolvedVirtuals []string                    `json:"unresolvedVirtuals,omitempty"`
+	Upgrades           map[string]UpgradeCandidate `json:"upgrades,omitempty"`
 }
 
 type UninstallSimulationResult struct {
@@ -541,6 +542,10 @@ func (s *PackagesService) GetUpgradeCandidates() (map[string]UpgradeCandidate, e
 			debug.Printf("[DEBUG] GetUpgradeCandidates APKINDEX: %s\n", msg)
 		}); err != nil {
 			return nil, fmt.Errorf("failed to refresh package index: %w", err)
+		}
+	} else if !proxyEnabled && !s.operationRunning() {
+		if err := vc.UpdateIndex(); err != nil {
+			debug.Printf("[DEBUG] GetUpgradeCandidates index refresh failed: %v\n", err)
 		}
 	}
 
@@ -972,8 +977,14 @@ func (s *PackagesService) SimulateInstall(packageNames []string, removals []stri
 	toSimulate := s.withPreferredProviders(packageNames, deviceType)
 
 	start := time.Now()
-	allPackages, err := vc.SimulateAddWithout(toSimulate, removals)
+	simulation, err := vc.SimulateAddWithout(toSimulate, removals)
 	debug.Printf("[DEBUG] SimulateAdd: %d package(s) in %v\n", len(toSimulate), time.Since(start))
+	// The catalog is fetched from the internet but apk solves against the tablet's cached index, so a mod released since the last refresh reads as missing.
+	if err != nil && vellum.IsMissingPackage(vellum.ResolutionFailure(err)) {
+		_, deviceArch := s.getConnectedDevice()
+		s.refreshDevicePackageIndex(vc, string(deviceArch))
+		simulation, err = vc.SimulateAddWithout(toSimulate, removals)
+	}
 	if err != nil {
 		debug.Printf("[DEBUG] SimulateAdd failed: %v, using packageNames only\n", err)
 		failure := vellum.ResolutionFailure(err)
@@ -996,11 +1007,18 @@ func (s *PackagesService) SimulateInstall(packageNames []string, removals []stri
 		return result, nil
 	}
 
-	if len(allPackages) == 0 {
+	if len(simulation.Packages) == 0 {
 		return &InstallSimulationResult{Packages: []string{}, Requested: packageNames}, nil
 	}
 
-	return &InstallSimulationResult{Packages: allPackages, Requested: packageNames}, nil
+	result := &InstallSimulationResult{Packages: simulation.Packages, Requested: packageNames}
+	if len(simulation.VersionChanges) > 0 {
+		result.Upgrades = make(map[string]UpgradeCandidate, len(simulation.VersionChanges))
+		for _, change := range simulation.VersionChanges {
+			result.Upgrades[change.Name] = UpgradeCandidate{From: change.From, To: change.To}
+		}
+	}
+	return result, nil
 }
 
 func (s *PackagesService) withPreferredProviders(packageNames []string, deviceType string) []string {

@@ -7,11 +7,13 @@ import '@xterm/xterm/css/xterm.css'
 interface TerminalProps {
   output: string
   theme?: 'dark' | 'light'
+  onContentHeightChange?: (height: number) => void
 }
 
 // xterm scrolls its own viewport a whole row at a time with no touch momentum, so instead the container scrolls natively over a spacer and the terminal stays pinned in view.
 // It stays one screen tall because every row is a DOM element: sized to thousands of lines, each write froze the page.
-export function Terminal({ output, theme }: TerminalProps) {
+export function Terminal({ output, theme, onContentHeightChange }: TerminalProps) {
+  const outerRef = useRef<HTMLDivElement>(null)
   const scrollerRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const spacerRef = useRef<HTMLDivElement>(null)
@@ -24,6 +26,10 @@ export function Terminal({ output, theme }: TerminalProps) {
   const followingOutputRef = useRef(true)
   const followScrollTopRef = useRef<number | null>(null)
   const isDark = theme === 'dark'
+  const onContentHeightChangeRef = useRef(onContentHeightChange)
+  useEffect(() => {
+    onContentHeightChangeRef.current = onContentHeightChange
+  })
 
   const rowHeight = () => {
     const term = xtermRef.current
@@ -88,13 +94,17 @@ export function Terminal({ output, theme }: TerminalProps) {
 
   const sizeSpacerToOutput = () => {
     const term = xtermRef.current
+    const outer = outerRef.current
+    const scroller = scrollerRef.current
     const host = hostRef.current
     const spacer = spacerRef.current
     const height = rowHeight()
-    if (!term || !host || !spacer || !(height > 0)) return
+    if (!term || !outer || !scroller || !host || !spacer || !(height > 0)) return
     const buffer = term.buffer.active
     const outputRows = buffer.baseY + buffer.cursorY + (buffer.cursorX > 0 ? 1 : 0)
     spacer.style.height = `${Math.max(0, outputRows * height - host.offsetHeight)}px`
+    const verticalPadding = outer.offsetHeight - scroller.clientHeight
+    onContentHeightChangeRef.current?.(Math.ceil(outputRows * height + verticalPadding))
   }
 
   const fitToContainer = () => {
@@ -191,6 +201,7 @@ export function Terminal({ output, theme }: TerminalProps) {
 
   return (
     <div
+      ref={outerRef}
       className="relative w-full h-full rounded-md overflow-hidden p-3"
       // The scrollbar takes its color from color-scheme, not the background, and the terminal's theme can differ from the app's.
       style={{ backgroundColor: isDark ? '#1a1a1a' : '#fafafa', colorScheme: isDark ? 'dark' : 'light' }}

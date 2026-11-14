@@ -1,6 +1,6 @@
 --- a/pkg/application/webview_window_ios.m
 +++ b/pkg/application/webview_window_ios.m
-@@ -274,6 +274,34 @@
+@@ -275,6 +275,34 @@
      // The page pads itself with env(safe-area-inset-*) instead, and the
      // floating tab bar depends on reaching the bottom edge.
      self.webView.frame = self.view.bounds;

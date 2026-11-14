@@ -21,6 +21,8 @@ export interface PlanSnapshot {
   install: string[]
   implied: string[]
   impliedRemove: string[]
+  // apk upgrades these inside the install phase, so they run with it but show under Upgrade.
+  impliedUpgrade: Map<string, UpgradeCandidate>
   sync?: { to: string; targets: Map<string, UpgradeCandidate> | null }
 }
 
@@ -113,6 +115,7 @@ interface PlanViewProps {
   uninstallQueue: Set<string>
   impliedPackages: Set<string>
   impliedRemovals: Set<string>
+  impliedUpgrades: Map<string, UpgradeCandidate>
   upgradeCandidates: Map<string, UpgradeCandidate> | null
   questions?: PlanQuestions
   // apk can refuse a plan without naming any package pair, leaving Apply blocked with nothing on screen to say why.
@@ -152,7 +155,7 @@ function GroupLabel({ children, count }: { children: React.ReactNode; count: num
 
 export function PlanView({
   packages, installedPackages, installQueue, upgradeQueue, uninstallQueue,
-  impliedPackages, impliedRemovals, upgradeCandidates, questions, resolutionFailure, onSelectPackage,
+  impliedPackages, impliedRemovals, impliedUpgrades, upgradeCandidates, questions, resolutionFailure, onSelectPackage,
   onRemoveFromInstall, onRemoveFromUpgrade, onRemoveFromUninstall,
   onClearAll, onApply, applyLabel, applyBusy, solving = false, applyBlocked, disabled,
   snapshot, progress, result, onFinishApply, onCloseApply, onRetryApply, onStopApply, stopRequested, output, terminalTheme,
@@ -168,6 +171,8 @@ export function PlanView({
 
   const sorted = (names: Iterable<string>) =>
     [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+
+  const impliedUpgrade = snapshot ? snapshot.impliedUpgrade : impliedUpgrades
 
   const sync = snapshot
     ? snapshot.sync ?? null
@@ -187,7 +192,9 @@ export function PlanView({
       label: sync ? `Update for OS ${sync.to}` : 'Upgrade',
       context: 'updates',
       accent: 'bg-[var(--info-surface)]',
-      names: snapshot ? snapshot.upgrade : osChange ? sorted(osChange.sync) : sorted(upgradeQueue),
+      names: snapshot
+        ? [...snapshot.upgrade, ...impliedUpgrade.keys()]
+        : osChange ? sorted(osChange.sync) : [...sorted(upgradeQueue), ...sorted(impliedUpgrade.keys())],
       onCancel: onRemoveFromUpgrade,
     },
     {
@@ -226,8 +233,8 @@ export function PlanView({
 
   const isImplied = (name: string) =>
     snapshot
-      ? snapshot.implied.includes(name) || snapshot.impliedRemove.includes(name)
-      : impliedPackages.has(name) || impliedRemovals.has(name)
+      ? snapshot.implied.includes(name) || snapshot.impliedRemove.includes(name) || snapshot.impliedUpgrade.has(name)
+      : impliedPackages.has(name) || impliedRemovals.has(name) || impliedUpgrades.has(name)
 
   const requested = active.flatMap(g => g.names).filter(n => !isImplied(n))
   const applied = requested.filter(n => progress.done.has(n)).length
@@ -383,6 +390,7 @@ export function PlanView({
             <div className={cn('rounded-[var(--radius)] border border-border', group.accent)}>
               {group.names.map(name => {
                 const syncTarget = syncGroup ? sync.targets?.get(name) : undefined
+                const pulledUpgrade = group.key === 'upgrade' ? impliedUpgrade.get(name) : undefined
                 const virtual = !snapshot && group.key === 'install' ? pickedVirtual(name) : undefined
                 const conflictNote = conflictNotes.get(name)
                 const waitingNote = !snapshot && group.key === 'install' && questions?.waiting.has(name)
@@ -410,8 +418,8 @@ export function PlanView({
                     conflicted={!!conflictNote}
                     muted={!!snapshot && rowState(name) === 'waiting'}
                     applied={!!result && rowState(name) === 'done'}
-                    installedVersion={syncTarget?.from || currentVersion(name)}
-                    targetVersion={syncGroup ? syncTarget?.to : upgradeCandidates?.get(name)?.to}
+                    installedVersion={pulledUpgrade?.from ?? (syncTarget?.from || currentVersion(name))}
+                    targetVersion={pulledUpgrade?.to ?? (syncGroup ? syncTarget?.to : upgradeCandidates?.get(name)?.to)}
                   />
                 )
               })}

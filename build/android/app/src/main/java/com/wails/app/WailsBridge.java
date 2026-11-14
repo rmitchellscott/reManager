@@ -1688,7 +1688,7 @@ public class WailsBridge {
                 if (failed) {
                     if (((FragmentActivity) activity).getLifecycle().getCurrentState()
                             .isAtLeast(Lifecycle.State.RESUMED)) {
-                        activity.stopService(new Intent(activity, WailsForegroundService.class));
+                        WailsForegroundService.stop(activity);
                     } else {
                         WailsForegroundService.finishFailed(title, text);
                     }
@@ -1706,7 +1706,7 @@ public class WailsBridge {
                 i.putExtra("title", title);
                 i.putExtra("text", text);
                 i.putExtra("percent", percent);
-                ContextCompat.startForegroundService(activity, i);
+                WailsForegroundService.start(activity, i);
                 emitEvent("android:foregroundService", "{\"running\":true}");
             } catch (Exception e) {
                 Log.e(TAG, "startForegroundService failed", e);
@@ -1729,7 +1729,7 @@ public class WailsBridge {
     public void stopForegroundService() {
         mainHandler.post(() -> {
             try {
-                activity.stopService(new Intent(activity, WailsForegroundService.class));
+                WailsForegroundService.stop(activity);
                 emitEvent("android:foregroundService", "{\"running\":false}");
             } catch (Exception e) {
                 Log.e(TAG, "stopForegroundService failed", e);

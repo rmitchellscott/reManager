@@ -28,7 +28,11 @@ func dialTablet(ctx context.Context, addr string, timeout time.Duration) (net.Co
 		return link.DialContext(ctx, addr)
 	}
 	d := net.Dialer{Timeout: timeout, Control: bindToLocalNetwork}
-	return d.DialContext(ctx, "tcp", addr)
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	return withQuickAck(conn), nil
 }
 
 var usbEthernet struct {

@@ -29,6 +29,8 @@ func NewRecordServer(upstream []string, cassette *Cassette) (*Server, error) {
 	}
 	base := []string{
 		"-o", "BatchMode=yes",
+		// ssh warnings such as "Permanently added ... to the list of known hosts" go to stderr, which the session relays and the shell noise probe rejects.
+		"-o", "LogLevel=ERROR",
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPath=" + controlDir + "/%C",
 		"-o", "ControlPersist=30",
@@ -64,7 +66,7 @@ type outageWatcher struct {
 }
 
 func (w *outageWatcher) ssh(options []string, remote ...string) *exec.Cmd {
-	args := append([]string{"-o", "BatchMode=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none"}, options...)
+	args := append([]string{"-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "-o", "ControlMaster=no", "-o", "ControlPath=none"}, options...)
 	cmd := exec.Command("ssh", append(append(args, w.upstream...), remote...)...)
 	cmd.Env = append(os.Environ(), "HOME="+w.home)
 	return cmd

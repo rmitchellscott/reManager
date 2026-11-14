@@ -9,6 +9,7 @@ const (
 	ErrNetworkUnreachable ErrorCode = "ERR_NETWORK_UNREACHABLE"
 	ErrHostDown           ErrorCode = "ERR_HOST_DOWN"
 	ErrDNSFailed          ErrorCode = "ERR_DNS_FAILED"
+	ErrVPNBlocksLocal     ErrorCode = "ERR_VPN_BLOCKS_LOCAL"
 	ErrShellRCNoisy       ErrorCode = "ERR_SHELL_RC_NOISY"
 
 	ErrKeyNotFound    ErrorCode = "ERR_KEY_NOT_FOUND"

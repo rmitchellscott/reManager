@@ -1,6 +1,6 @@
 // Captures store and guide screenshots in demo mode.
 //
-//   node run.mjs [target...]   targets: iphone ipad play microsoft flathub mac readme-light readme-dark guide
+//   node run.mjs [target...]   targets: iphone ipad duo-outer duo-inner play microsoft flathub mac readme-light readme-dark guide
 //                              (default: all)
 //   OUT=<dir> node run.mjs ... writes to <dir>/<target> instead of the repo
 import { mkdir } from 'node:fs/promises'

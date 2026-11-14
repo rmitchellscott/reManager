@@ -111,3 +111,56 @@ func TestIsProtectedFromDelete(t *testing.T) {
 		}
 	}
 }
+
+var testGuideRevisions = []guideRevision{
+	{Revision: 4, MinApp: "2.0.0", SHA256: "launch", Epub: "4.epub"},
+	{Revision: 5, MinApp: "2.1.0", SHA256: "two-one", Epub: "5.epub"},
+	{Revision: 6, MinApp: "2.0.0", SHA256: "backport", Epub: "6.epub"},
+	{Revision: 7, MinApp: "2.2.0", SHA256: "future", Epub: "7.epub"},
+}
+
+func TestGuideTargetIsTheHighestRankedRevisionTheAppMeets(t *testing.T) {
+	cases := []struct {
+		appVersion string
+		want       int
+	}{
+		{"1.9.0", 0},
+		{"2.0.1", 6},
+		{"2.1.0", 5},
+		{"2.1.3", 5},
+		{"2.2.0", 7},
+	}
+	for _, c := range cases {
+		t.Run(c.appVersion, func(t *testing.T) {
+			got := 0
+			if target, ok := guideTarget(testGuideRevisions, c.appVersion); ok {
+				got = target.Revision
+			}
+			if got != c.want {
+				t.Errorf("target revision = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestGuideOutOfDateNeverDowngrades(t *testing.T) {
+	backport, _ := guideTarget(testGuideRevisions, "2.0.1")
+	cases := []struct {
+		name      string
+		installed string
+		want      bool
+	}{
+		{"older revision", "launch", true},
+		{"1.x copy", "legacy", true},
+		{"the target", "backport", false},
+		{"a revision for a newer app", "two-one", false},
+		{"unknown copy", "edited", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := guideOutOfDate(testGuideRevisions, backport, c.installed); got != c.want {
+				t.Errorf("out of date = %t, want %t", got, c.want)
+			}
+		})
+	}
+}

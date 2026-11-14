@@ -130,28 +130,28 @@ func Upload(client *sftp.Client, zipData []byte, visibleName string) (string, er
 	nowMs := strconv.FormatInt(time.Now().UnixMilli(), 10)
 
 	createdDirs := map[string]bool{}
-	upload := pdfimport.NewDocumentUpload(client)
+	upload, err := pdfimport.NewDocumentUpload(client, newUUID)
+	if err != nil {
+		return "", err
+	}
 	uploaded := false
 	defer func() {
 		if !uploaded {
 			upload.Discard()
 		}
 	}()
-	var metadataPath string
-	var metadataData []byte
 
 	for _, f := range zr.File {
 		newName := strings.Replace(f.Name, origUUID, newUUID, 1)
-		remotePath := path.Join(pdfimport.XochitlPath, newName)
 
 		if f.FileInfo().IsDir() {
-			if err := upload.MkdirAll(remotePath); err != nil {
-				return "", fmt.Errorf("failed to create directory %s: %w", remotePath, err)
+			if err := upload.MkdirAll(newName); err != nil {
+				return "", fmt.Errorf("failed to create directory %s: %w", newName, err)
 			}
 			continue
 		}
 
-		if dir := path.Dir(remotePath); strings.Contains(newName, "/") && !createdDirs[dir] {
+		if dir := path.Dir(newName); strings.Contains(newName, "/") && !createdDirs[dir] {
 			if err := upload.MkdirAll(dir); err != nil {
 				return "", fmt.Errorf("failed to create directory %s: %w", dir, err)
 			}
@@ -172,19 +172,15 @@ func Upload(client *sftp.Client, zipData []byte, visibleName string) (string, er
 					data = updated
 				}
 			}
-			metadataPath, metadataData = remotePath, data
-			continue
 		}
 
-		if err := upload.WriteFile(remotePath, data); err != nil {
+		if err := upload.WriteFile(newName, data); err != nil {
 			return "", err
 		}
 	}
 
-	if metadataPath != "" {
-		if err := upload.WriteFile(metadataPath, metadataData); err != nil {
-			return "", err
-		}
+	if err := upload.Publish(); err != nil {
+		return "", err
 	}
 	uploaded = true
 	return newUUID, nil
