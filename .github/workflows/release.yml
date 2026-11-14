@@ -641,6 +641,7 @@ jobs:
         run: go install ./cmd/wails3
 
       - name: Import distribution certificate
+        id: distribution-certificate
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
@@ -650,6 +651,7 @@ jobs:
         uses: apple-actions/import-codesign-certs@v3
         with:
           create-keychain: false
+          keychain-password: ${{ steps.distribution-certificate.outputs.keychain-password }}
           p12-file-base64: ${{ secrets.APPLE_MAC_INSTALLER_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.APPLE_MAC_INSTALLER_CERTIFICATE_PASSWORD }}
 
