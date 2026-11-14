@@ -418,6 +418,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set support URL and version
+        env:
+          SUPPORT_URL: ${{ secrets.REMANAGER_SUPPORT_URL }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if [ "$VERSION" = 0.0.0 ]; then APP_VERSION=$TAG; else APP_VERSION=v$VERSION; fi
+          sed -i "s|-X main.version=\$(git describe --tags --always)|-X reManager/internal/support.supportURL=$SUPPORT_URL -X main.version=$APP_VERSION|" flatpak/io.scottlabs.reManager.yml
+          grep -q 'support.supportURL=' flatpak/io.scottlabs.reManager.yml
+
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
@@ -435,6 +445,16 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set support URL and version
+        env:
+          SUPPORT_URL: ${{ secrets.REMANAGER_SUPPORT_URL }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if [ "$VERSION" = 0.0.0 ]; then APP_VERSION=$TAG; else APP_VERSION=v$VERSION; fi
+          sed -i "s|-X main.version=\$(git describe --tags --always)|-X reManager/internal/support.supportURL=$SUPPORT_URL -X main.version=$APP_VERSION|" flatpak/io.scottlabs.reManager.yml
+          grep -q 'support.supportURL=' flatpak/io.scottlabs.reManager.yml
 
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
