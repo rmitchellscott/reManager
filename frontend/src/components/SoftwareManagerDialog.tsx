@@ -194,16 +194,12 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
 
   const isLegacy = installMode === 'legacy'
 
-  const installSectionDescription = () => {
-    if (!systemInfo) return 'Download and install to the standby partition.'
-    if (systemInfo.updatePending || installNeedsReboot) {
-      return `An update to Partition ${systemInfo.fallback.label} is waiting to finish. Reboot to complete it before installing another version.`
-    }
-    if (bootSwitchPending) {
-      return `Partition ${systemInfo.fallback.label} is set to boot next. Reboot before installing another version, or select Partition ${systemInfo.active.label} to switch back.`
-    }
-    return 'Download and install to the standby partition.'
-  }
+  const rebootRequiredReason = !systemInfo ? null
+    : systemInfo.updatePending || installNeedsReboot
+      ? `Reboot to finish the update on Partition ${systemInfo.fallback.label} before installing another version.`
+      : bootSwitchPending
+        ? `Partition ${systemInfo.fallback.label} boots next. Reboot first, or select Partition ${systemInfo.active.label} to switch back.`
+        : null
 
   const selectedVersionCompat = selectedVersion ? compatCache[selectedVersion] : null
   const selectedVersionHasIncompat = selectedVersionCompat ? (selectedVersionCompat.incompatible ?? []).length > 0 : false
@@ -487,7 +483,7 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                 <div className="flex flex-col gap-2.5">
                   <div>
                     <div className="text-sm font-medium">Install a version</div>
-                    <div className={`text-xs ${needsReboot ? 'text-foreground' : 'text-muted-foreground'}`}>{installSectionDescription()}</div>
+                    <div className="text-xs text-muted-foreground">Download and install to the standby partition.</div>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Select value={selectedVersion} onValueChange={setSelectedVersion} disabled={needsReboot || versionsFailed || versionsLoading || installRunning}>
@@ -519,6 +515,12 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                       Install
                     </Button>
                   </div>
+                  {rebootRequiredReason && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <WarningCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span>{rebootRequiredReason}</span>
+                    </div>
+                  )}
                   {isLegacy && (
                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                       <WarningCircle className="h-3.5 w-3.5 shrink-0" />
