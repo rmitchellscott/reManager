@@ -194,6 +194,17 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
 
   const isLegacy = installMode === 'legacy'
 
+  const installSectionDescription = () => {
+    if (!systemInfo) return 'Download and install to the standby partition.'
+    if (systemInfo.updatePending || installNeedsReboot) {
+      return `An update to Partition ${systemInfo.fallback.label} is waiting to finish. Reboot to complete it before installing another version.`
+    }
+    if (bootSwitchPending) {
+      return `Partition ${systemInfo.fallback.label} is set to boot next. Reboot before installing another version, or select Partition ${systemInfo.active.label} to switch back.`
+    }
+    return 'Download and install to the standby partition.'
+  }
+
   const selectedVersionCompat = selectedVersion ? compatCache[selectedVersion] : null
   const selectedVersionHasIncompat = selectedVersionCompat ? (selectedVersionCompat.incompatible ?? []).length > 0 : false
 
@@ -476,14 +487,14 @@ export function SoftwareManagerDialog({ open, onOpenChange, isConnected, vellumI
                 <div className="flex flex-col gap-2.5">
                   <div>
                     <div className="text-sm font-medium">Install a version</div>
-                    <div className="text-xs text-muted-foreground">Download and install to the standby partition.</div>
+                    <div className={`text-xs ${needsReboot ? 'text-foreground' : 'text-muted-foreground'}`}>{installSectionDescription()}</div>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <Select value={selectedVersion} onValueChange={setSelectedVersion} disabled={needsReboot || versionsFailed || versionsLoading || installRunning}>
                       <SelectTrigger className="w-full sm:flex-1 h-9 touch:hit-target">
                         <div className="flex min-w-0 items-center gap-2">
                           {versionsLoading && <CircleNotch className="h-3.5 w-3.5 animate-spin shrink-0 text-muted-foreground" />}
-                          <SelectValue className="truncate" placeholder={needsReboot ? "Reboot to install a version" : versionsLoading ? "Loading versions…" : versionsFailed ? "Could not load versions" : "Choose a version…"}>{selectedVersion || undefined}</SelectValue>
+                          <SelectValue className="truncate" placeholder={versionsLoading ? "Loading versions…" : versionsFailed ? "Could not load versions" : "Choose a version…"}>{selectedVersion || undefined}</SelectValue>
                         </div>
                       </SelectTrigger>
                       <SelectContent>
